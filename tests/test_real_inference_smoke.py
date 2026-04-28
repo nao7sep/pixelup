@@ -7,8 +7,6 @@ import pytest
 from PIL import Image
 
 from pixelup.config import RuntimeDirs
-from pixelup.errors import PixelupError
-from pixelup.inference import _ensure_inference_stack
 from pixelup.models import model_file
 from pixelup.paths import OutputFormat
 from pixelup.upscale import UpscaleOptions, run_upscale
@@ -21,11 +19,6 @@ def test_real_esrgan_small_image_smoke(tmp_path: Path) -> None:
     models_env = os.environ.get("PIXELUP_REAL_INFERENCE_MODELS_DIR")
     if not models_env:
         pytest.skip("set PIXELUP_REAL_INFERENCE_MODELS_DIR to a directory with model weights")
-
-    try:
-        _ensure_inference_stack()
-    except PixelupError as exc:
-        pytest.skip(str(exc))
 
     model = "realesr-general-x4v3"
     models_dir = Path(models_env).expanduser().resolve()

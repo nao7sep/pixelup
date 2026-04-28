@@ -21,26 +21,18 @@ worker pools. Run one process per image and let the caller handle batching.
 - SIGINT/SIGTERM cleanup for in-flight temp output files
 - Model download, check, verify, remove, and directory commands
 - Cross-process model download locks under `<models-dir>/.locks/`
-- Optional pinned inference stack for Real-ESRGAN/GFPGAN execution
+- Pinned Real-ESRGAN/GFPGAN inference stack bundled with the CLI
 
 ## Installation
-
-Install the CLI for validation, dry runs, model management, and image encoding:
 
 ```console
 pip install -e .
 ```
 
-Install the optional inference stack when you want to run Real-ESRGAN:
-
-```console
-pip install -e '.[inference]'
-```
-
 With uv:
 
 ```console
-uv sync --extra inference
+uv sync
 ```
 
 For development:
@@ -49,10 +41,10 @@ For development:
 uv sync --extra dev
 ```
 
-The heavy inference packages are pinned exactly. The current direct pins are
-already current according to `uv tree --outdated`; only transitive packages were
-reported as outdated, so no dependency pin changes were made just to force those
-transitive updates.
+The Real-ESRGAN inference stack (`torch`, `torchvision`, `realesrgan`,
+`basicsr-fixed`, `gfpgan`, `opencv-python`, `numpy`) is pinned exactly and
+installed as part of the base package, so a single install yields a fully
+working upscaler.
 
 ## Quick Start
 
@@ -257,10 +249,8 @@ model files or old temp directories for you.
 
 ## Inference Stack
 
-The base install can validate inputs, resolve outputs, manage models, and encode
-images. Actual Real-ESRGAN inference requires the `inference` extra.
-
-The extra currently pins:
+PixelUp installs the Real-ESRGAN inference stack as part of the base package.
+The pinned versions are:
 
 ```text
 numpy==2.4.4
@@ -272,13 +262,10 @@ basicsr-fixed==1.4.2
 gfpgan==1.3.8
 ```
 
-`basicsr-fixed` is the primary compatibility fix for the removed
-`torchvision.transforms.functional_tensor` module. PixelUp also installs a
-runtime fallback alias before importing Real-ESRGAN/GFPGAN, because upstream
-dependency metadata can still pull `basicsr`.
-
-If the optional stack is missing or does not match these pins, non-dry-run
-upscales fail early with `internal_error` and dependency details.
+`basicsr-fixed` is the compatibility fix for the removed
+`torchvision.transforms.functional_tensor` module that upstream `basicsr` 1.4.2
+imports. PixelUp depends on the fork directly and does not patch
+`torchvision` at runtime.
 
 ## Color And Metadata
 
@@ -361,7 +348,7 @@ the opt-in real inference smoke test:
 ```console
 PIXELUP_RUN_REAL_INFERENCE=1 \
 PIXELUP_REAL_INFERENCE_MODELS_DIR=/path/to/models \
-uv run --extra dev --extra inference pytest -q tests/test_real_inference_smoke.py
+uv run --extra dev pytest -q tests/test_real_inference_smoke.py
 ```
 
 That directory must contain `realesr-general-x4v3.pth`.

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib.metadata as importlib_metadata
-import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,27 +12,6 @@ from pixelup.imaging import register_image_plugins
 from pixelup.models import model_file
 
 ProgressCallback = Callable[[str], None]
-
-_INFERENCE_DEPS_HINT = (
-    "Install the PixelUp inference stack with 'pip install -e .[inference]' or "
-    "'uv sync --extra inference'."
-)
-
-PINNED_INFERENCE_REQUIREMENTS: Mapping[str, str] = {
-    "numpy": "2.4.4",
-    "torch": "2.11.0",
-    "torchvision": "0.26.0",
-    "opencv-python": "4.13.0.92",
-    "realesrgan": "0.3.0",
-    "basicsr-fixed": "1.4.2",
-    "gfpgan": "1.3.8",
-}
-
-_BASE_INFERENCE_REQUIREMENTS: Mapping[str, str] = {
-    package: version
-    for package, version in PINNED_INFERENCE_REQUIREMENTS.items()
-    if package != "gfpgan"
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,26 +38,6 @@ class ModelArchitectureSpec:
     params: Mapping[str, int | str]
 
 
-@dataclass(frozen=True, slots=True)
-class InferenceDependencyStatus:
-    package: str
-    required: str
-    installed: str | None
-    ok: bool
-    reason: str | None = None
-
-    def to_payload(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "package": self.package,
-            "required": self.required,
-            "installed": self.installed,
-            "ok": self.ok,
-        }
-        if self.reason is not None:
-            payload["reason"] = self.reason
-        return payload
-
-
 def model_architecture_spec(model: str, *, requested_scale: int = 4) -> ModelArchitectureSpec:
     match model:
         case "RealESRGAN_x4plus" | "RealESRNet_x4plus":
@@ -95,19 +52,6 @@ def model_architecture_spec(model: str, *, requested_scale: int = 4) -> ModelArc
             return _srvgg_spec(scale=4, num_conv=32)
         case _:
             return _rrdb_spec(scale=requested_scale, num_block=23)
-
-
-def inference_dependency_status(
-    *,
-    include_face_enhance: bool = True,
-) -> list[InferenceDependencyStatus]:
-    requirements = dict(_BASE_INFERENCE_REQUIREMENTS)
-    if include_face_enhance:
-        requirements["gfpgan"] = PINNED_INFERENCE_REQUIREMENTS["gfpgan"]
-    return [
-        _dependency_status(package, required)
-        for package, required in requirements.items()
-    ]
 
 
 def run_inference(
@@ -145,7 +89,6 @@ def _run_inference(
     on_progress: ProgressCallback | None = None,
 ) -> Any:
     _emit(on_progress, "load_model")
-    _ensure_inference_stack()
     torch = _import_torch()
     image = _read_input_image(config.input_path)
     device = _torch_device(torch, config.device, config.gpu_id)
@@ -191,7 +134,6 @@ def _srvgg_spec(*, scale: int, num_conv: int) -> ModelArchitectureSpec:
 
 def _create_upsampler(config: InferenceConfig, *, torch_device: Any) -> Any:
     try:
-        _install_torchvision_functional_tensor_fallback()
         from realesrgan import RealESRGANer
     except ImportError as exc:
         raise _missing_inference_dependency("realesrgan", exc) from exc
@@ -223,7 +165,6 @@ def _create_upsampler(config: InferenceConfig, *, torch_device: Any) -> Any:
 def _build_network(spec: ModelArchitectureSpec) -> Any:
     if spec.kind == "rrdb":
         try:
-            _install_torchvision_functional_tensor_fallback()
             from basicsr.archs.rrdbnet_arch import RRDBNet
         except ImportError as exc:
             raise _missing_inference_dependency("basicsr-fixed", exc) from exc
@@ -243,13 +184,11 @@ def _build_network(spec: ModelArchitectureSpec) -> Any:
 
 def _run_face_enhance(config: InferenceConfig, upsampler: Any, image: Any) -> Any:
     try:
-        _install_torchvision_functional_tensor_fallback()
         from gfpgan import GFPGANer
     except ImportError as exc:
         raise PixelupError(
             ErrorCode.FACE_ENHANCE_UNAVAILABLE,
             "GFPGAN is not installed.",
-            hint=_INFERENCE_DEPS_HINT,
         ) from exc
 
     face_enhancer = GFPGANer(
@@ -357,66 +296,12 @@ def _import_numpy() -> Any:
     return np
 
 
-def _ensure_inference_stack() -> None:
-    invalid = [
-        status
-        for status in inference_dependency_status(include_face_enhance=False)
-        if not status.ok
-    ]
-    if not invalid:
-        return
-    raise PixelupError(
-        ErrorCode.INTERNAL_ERROR,
-        "Inference stack is not installed or does not match PixelUp's pinned versions.",
-        hint=_INFERENCE_DEPS_HINT,
-        details={"dependencies": [status.to_payload() for status in invalid]},
-    )
-
-
-def _dependency_status(package: str, required: str) -> InferenceDependencyStatus:
-    try:
-        installed = importlib_metadata.version(package)
-    except importlib_metadata.PackageNotFoundError:
-        return InferenceDependencyStatus(
-            package=package,
-            required=required,
-            installed=None,
-            ok=False,
-            reason="missing",
-        )
-    if installed != required:
-        return InferenceDependencyStatus(
-            package=package,
-            required=required,
-            installed=installed,
-            ok=False,
-            reason="version_mismatch",
-        )
-    return InferenceDependencyStatus(
-        package=package,
-        required=required,
-        installed=installed,
-        ok=True,
-    )
-
-
 def _missing_inference_dependency(package: str, exc: ImportError) -> PixelupError:
     return PixelupError(
         ErrorCode.INTERNAL_ERROR,
         f"Inference dependency '{package}' is not installed.",
-        hint=_INFERENCE_DEPS_HINT,
         details={"dependency": package, "reason": str(exc)},
     )
-
-
-def _install_torchvision_functional_tensor_fallback() -> None:
-    if "torchvision.transforms.functional_tensor" in sys.modules:
-        return
-    try:
-        from torchvision.transforms import functional
-    except ImportError:
-        return
-    sys.modules["torchvision.transforms.functional_tensor"] = functional
 
 
 def _is_out_of_memory(exc: RuntimeError) -> bool:
