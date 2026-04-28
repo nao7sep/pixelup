@@ -3,7 +3,7 @@
 PixelUp is a Python CLI for upscaling one image file to one output file with
 Real-ESRGAN.
 
-This repository is currently at **phase 6** of the blueprint implementation:
+This repository is currently at **phase 7** of the blueprint implementation:
 
 - package metadata and `pixelup` console entry point
 - Typer-based CLI surface for the root command and `models` namespace
@@ -21,15 +21,11 @@ This repository is currently at **phase 6** of the blueprint implementation:
 - output encoding for png, jpg, and webp
 - temp-file output writes followed by `os.replace`
 - signal-aware cleanup for in-flight output temp files
-- ICC conversion for sRGB plus Display-P3/Adobe RGB when platform profiles are available
+- ICC conversion for sRGB plus generated Display-P3/Adobe RGB profiles
 - EXIF/XMP preservation unless `--strip-metadata` is set
 - pinned optional inference extra for the heavy ML stack
 - pinned inference-stack preflight diagnostics before model execution
 - opt-in real small-image inference smoke coverage
-
-Known external follow-up:
-
-- bundled cross-platform ICC profile resources for machines without ColorSync/system profiles
 
 ## Installation
 

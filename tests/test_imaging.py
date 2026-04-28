@@ -1,7 +1,8 @@
+from io import BytesIO
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageCms
 
 from pixelup.errors import PixelupError
 from pixelup.imaging import SourceMetadata, _profile_bytes, save_output_image
@@ -70,11 +71,14 @@ def test_save_output_image_can_embed_srgb_profile(tmp_path: Path) -> None:
         assert saved.info["icc_profile"]
 
 
-def test_save_output_image_can_embed_p3_profile_when_available(tmp_path: Path) -> None:
-    try:
-        _profile_bytes("p3")
-    except PixelupError:
-        pytest.skip("Display-P3 profile is not available on this system.")
+def test_target_profiles_are_available_without_system_lookup() -> None:
+    for name in ("srgb", "p3", "adobergb"):
+        profile = ImageCms.ImageCmsProfile(BytesIO(_profile_bytes(name)))
+
+        assert ImageCms.getProfileDescription(profile)
+
+
+def test_save_output_image_can_embed_p3_profile(tmp_path: Path) -> None:
     output = tmp_path / "out.png"
 
     save_output_image(

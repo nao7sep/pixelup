@@ -10,6 +10,7 @@ from uuid import uuid4
 from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageError
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
 from pixelup.paths import OutputFormat
 from pixelup.signals import check_cancelled, temp_file_guard
 
@@ -257,38 +258,21 @@ def _source_profile_bytes(source_metadata: SourceMetadata | None) -> bytes:
 
 
 def _profile_bytes(name: str) -> bytes:
-    if name == "srgb":
-        return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
-    for path in _profile_paths(name):
-        if path.is_file():
-            try:
-                return ImageCms.ImageCmsProfile(str(path)).tobytes()
-            except (OSError, ImageCms.PyCMSError):
-                continue
+    try:
+        return generated_profile_bytes(name)
+    except ValueError as exc:
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT,
+            "--target-profile must be one of 'srgb', 'p3', or 'adobergb'.",
+        ) from exc
+    except (OSError, ImageCms.PyCMSError) as exc:
+        raise PixelupError(
+            ErrorCode.INTERNAL_ERROR,
+            "Target ICC profile is not available.",
+            details={"target_profile": name, "reason": str(exc)},
+        ) from exc
     raise PixelupError(
         ErrorCode.INTERNAL_ERROR,
         "Target ICC profile is not available.",
         details={"target_profile": name},
-    )
-
-
-def _profile_paths(name: str) -> tuple[Path, ...]:
-    if name == "p3":
-        return (
-            Path("/System/Library/ColorSync/Profiles/Display P3.icc"),
-            Path("/System/Library/ColorSync/Profiles/DCI(P3) RGB.icc"),
-            Path("/Library/ColorSync/Profiles/Display P3.icc"),
-            Path("/usr/share/color/icc/DisplayP3.icc"),
-            Path("/usr/share/color/icc/colord/DisplayP3.icc"),
-        )
-    if name == "adobergb":
-        return (
-            Path("/System/Library/ColorSync/Profiles/AdobeRGB1998.icc"),
-            Path("/Library/ColorSync/Profiles/AdobeRGB1998.icc"),
-            Path("/usr/share/color/icc/AdobeRGB1998.icc"),
-            Path("/usr/share/color/icc/colord/AdobeRGB1998.icc"),
-        )
-    raise PixelupError(
-        ErrorCode.INVALID_ARGUMENT,
-        "--target-profile must be one of 'srgb', 'p3', or 'adobergb'.",
     )
