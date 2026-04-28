@@ -3,7 +3,7 @@
 PixelUp is a Python CLI for upscaling one image file to one output file with
 Real-ESRGAN.
 
-This repository is currently at **phase 5** of the blueprint implementation:
+This repository is currently at **phase 6** of the blueprint implementation:
 
 - package metadata and `pixelup` console entry point
 - Typer-based CLI surface for the root command and `models` namespace
@@ -24,10 +24,11 @@ This repository is currently at **phase 5** of the blueprint implementation:
 - ICC conversion for sRGB plus Display-P3/Adobe RGB when platform profiles are available
 - EXIF/XMP preservation unless `--strip-metadata` is set
 - pinned optional inference extra for the heavy ML stack
+- pinned inference-stack preflight diagnostics before model execution
+- opt-in real small-image inference smoke coverage
 
-Still pending for later phases:
+Known external follow-up:
 
-- real small-image inference verification in an environment with the ML stack installed
 - bundled cross-platform ICC profile resources for machines without ColorSync/system profiles
 
 ## Installation
@@ -69,5 +70,17 @@ pixelup --version --report single
 ```
 
 The non-dry-run upscale path now calls the inference bridge. If the optional ML
-packages are not installed, it returns `internal_error` with the missing
-dependency in `details`.
+packages are not installed or do not match the pinned versions, it returns
+`internal_error` with dependency details.
+
+## Real inference smoke test
+
+The regular test suite does not download ML packages or model weights. To verify
+the real inference path after installing the optional stack and downloading the
+general v3 model:
+
+```console
+PIXELUP_RUN_REAL_INFERENCE=1 \
+PIXELUP_REAL_INFERENCE_MODELS_DIR=/path/to/models \
+uv run --extra dev --extra inference pytest -q tests/test_real_inference_smoke.py
+```

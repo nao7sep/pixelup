@@ -5,9 +5,12 @@ import tomllib
 from pathlib import Path
 from types import ModuleType
 
+from pixelup import inference as inference_module
 from pixelup.inference import (
     _INFERENCE_DEPS_HINT,
+    PINNED_INFERENCE_REQUIREMENTS,
     _install_torchvision_functional_tensor_fallback,
+    inference_dependency_status,
 )
 
 
@@ -16,13 +19,8 @@ def test_inference_extra_pins_heavy_runtime_dependencies() -> None:
     inference = pyproject["project"]["optional-dependencies"]["inference"]
 
     assert inference == [
-        "numpy==2.4.4",
-        "torch==2.11.0",
-        "torchvision==0.26.0",
-        "opencv-python==4.13.0.92",
-        "realesrgan==0.3.0",
-        "basicsr-fixed==1.4.2",
-        "gfpgan==1.3.8",
+        f"{package}=={version}"
+        for package, version in PINNED_INFERENCE_REQUIREMENTS.items()
     ]
 
 
@@ -45,3 +43,32 @@ def test_torchvision_functional_tensor_fallback(monkeypatch) -> None:
     _install_torchvision_functional_tensor_fallback()
 
     assert sys.modules["torchvision.transforms.functional_tensor"] is functional
+
+
+def test_inference_dependency_status_reports_missing_and_mismatch(monkeypatch) -> None:
+    versions = {
+        "numpy": "2.4.4",
+        "torch": "2.11.0",
+        "torchvision": "0.26.0",
+        "opencv-python": "4.13.0.92",
+        "realesrgan": "0.3.0",
+        "basicsr-fixed": "1.4.1",
+    }
+
+    def fake_version(package: str) -> str:
+        if package not in versions:
+            raise inference_module.importlib_metadata.PackageNotFoundError(package)
+        return versions[package]
+
+    monkeypatch.setattr(inference_module.importlib_metadata, "version", fake_version)
+
+    statuses = {
+        status.package: status
+        for status in inference_dependency_status(include_face_enhance=True)
+    }
+
+    assert statuses["numpy"].ok is True
+    assert statuses["basicsr-fixed"].ok is False
+    assert statuses["basicsr-fixed"].reason == "version_mismatch"
+    assert statuses["gfpgan"].ok is False
+    assert statuses["gfpgan"].reason == "missing"
