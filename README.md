@@ -48,22 +48,19 @@ working upscaler.
 
 ## Quick Start
 
-Validate an upscale plan without running inference:
-
-```console
-pixelup input.png output.png --dry-run --models-dir ./models
-```
-
-Dry-run validates the same preconditions as a real upscale, including required
-model presence, but never downloads missing models even when `--auto-download`
-is supplied. In machine-readable report modes, a valid dry-run returns the
-normal success plan fields plus `device`, `dry_run`, `models_dir`, `temp_dir`,
-`message`, and `models_present`.
-
 Download a small general model:
 
 ```console
 pixelup models download realesr-general-x4v3 --models-dir ./models
+```
+
+Validate an upscale plan without running inference:
+
+```console
+pixelup input.png output.png \
+  --model realesr-general-x4v3 \
+  --dry-run \
+  --models-dir ./models
 ```
 
 Run an upscale:
@@ -79,6 +76,83 @@ Use stream mode from an application:
 
 ```console
 pixelup input.png output.png --report stream
+```
+
+## Subprocess Contract
+
+PixelUp is safe to call from scripts and applications as a one-image,
+one-output subprocess. Use `--report single` when the caller only needs the
+final result, or `--report stream` when the caller needs live progress.
+In machine-readable modes, expected successes and failures are JSON on stdout;
+use the process exit code for coarse control flow and the JSON `code` field for
+specific failure handling. `stream` mode ends with a final `result` event whose
+payload matches the `single` success or failure shape.
+
+Recommended caller flow:
+
+```console
+pixelup models check realesr-general-x4v3 \
+  --download-missing \
+  --models-dir ./models \
+  --report single
+
+pixelup input.png output.png \
+  --model realesr-general-x4v3 \
+  --dry-run \
+  --models-dir ./models \
+  --report single
+
+pixelup input.png output.png \
+  --model realesr-general-x4v3 \
+  --models-dir ./models \
+  --report stream
+```
+
+Dry-run validates the same preconditions as a real upscale at the moment it is
+called: input readability, output path validity, output overwrite rules, model
+presence, option values, and forced device availability. Dry-run never performs
+inference and never downloads models, even when `--auto-download` is supplied.
+If a required model is missing, dry-run fails with `model_not_found`; callers
+that want setup to happen automatically should run `models check
+--download-missing` before dry-run or before the real upscale.
+
+In `single` report mode, a successful dry-run writes one JSON object to stdout:
+
+```json
+{
+  "ok": true,
+  "input": "/abs/path/input.png",
+  "output": "/abs/path/output.png",
+  "model": "realesr-general-x4v3",
+  "scale": 4,
+  "input_size": [800, 600],
+  "output_size": [3200, 2400],
+  "format": "png",
+  "device": "mps",
+  "dry_run": true,
+  "models_dir": "/abs/path/models",
+  "temp_dir": "/abs/path/temp",
+  "message": "Dry run plan is valid.",
+  "models_present": {
+    "realesr-general-x4v3": true
+  }
+}
+```
+
+On a real successful upscale, `single` report mode writes:
+
+```json
+{
+  "ok": true,
+  "input": "/abs/path/input.png",
+  "output": "/abs/path/output.png",
+  "model": "realesr-general-x4v3",
+  "scale": 4,
+  "input_size": [800, 600],
+  "output_size": [3200, 2400],
+  "format": "png",
+  "ms": 4200
+}
 ```
 
 ## Core Usage
