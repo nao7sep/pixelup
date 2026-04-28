@@ -11,6 +11,17 @@ from pixelup.cli import _version_command, main, models_check, models_remove
 from pixelup.reporting import ReportMode
 
 
+def test_main_registers_image_plugins_before_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli_module, "register_image_plugins", lambda: calls.append("plugins"))
+    monkeypatch.setattr(cli_module, "_version_command", lambda args: calls.append("version"))
+
+    main(["--version"])
+
+    assert calls == ["plugins", "version"]
+
+
 def test_models_remove_all_removes_unlisted_companion_model(
     tmp_path: Path,
     capsys,

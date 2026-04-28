@@ -54,6 +54,12 @@ Validate an upscale plan without running inference:
 pixelup input.png output.png --dry-run --models-dir ./models
 ```
 
+Dry-run validates the same preconditions as a real upscale, including required
+model presence, but never downloads missing models even when `--auto-download`
+is supplied. In machine-readable report modes, a valid dry-run returns the
+normal success plan fields plus `device`, `dry_run`, `models_dir`, `temp_dir`,
+`message`, and `models_present`.
+
 Download a small general model:
 
 ```console
@@ -230,6 +236,13 @@ pixelup models remove realesr-general-x4v3 --models-dir ./models
 pixelup models remove --all --models-dir ./models
 pixelup models dir --report single
 ```
+
+`models check --download-missing` may be run without model names; in that case
+it downloads every missing public known model.
+
+`models verify` validates present recognized model files by expected size and,
+when available, checksum. It fails fast on the first corrupt model and reports
+that mismatch as `model_corrupt`.
 
 `models remove --all` removes all recognized model files, including the hidden
 denoise companion model. Unknown files in the models directory are left alone.

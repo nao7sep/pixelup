@@ -12,6 +12,7 @@ from rich.table import Table
 from pixelup import __version__
 from pixelup.config import ensure_models_dir, resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError, exit_code_for
+from pixelup.imaging import register_image_plugins
 from pixelup.models import (
     all_model_names,
     download_models,
@@ -60,6 +61,7 @@ root_app.add_typer(models_app, name="models")
 
 
 def main(argv: list[str] | None = None) -> None:
+    register_image_plugins()
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "--version":
         try:
