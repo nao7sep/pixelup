@@ -20,6 +20,7 @@ from pixelup.models import (
 )
 from pixelup.paths import OutputFormat
 from pixelup.reporting import Reporter, ReportMode
+from pixelup.signals import CANCELLED_EXIT_CODE, OperationCancelled, cancellation_context
 from pixelup.upscale import UpscaleOptions, run_upscale
 
 HELP_OPTIONS = {"help_option_names": ["--help", "-h"]}
@@ -91,33 +92,37 @@ def upscale(
                 ErrorCode.INVALID_ARGUMENT,
                 "--quiet and --verbose are mutually exclusive.",
             )
-        runtime_dirs = resolve_runtime_dirs(models_dir=models_dir, temp_dir=temp_dir)
-        options = UpscaleOptions(
-            input_path=input_path,
-            output_arg=output,
-            model=model,
-            scale=scale,
-            tile=tile,
-            tile_pad=tile_pad,
-            pre_pad=pre_pad,
-            fp32=fp32,
-            face_enhance=face_enhance,
-            denoise_strength=denoise_strength,
-            alpha_mode=alpha_mode,
-            gpu_id=gpu_id,
-            device=device,
-            output_format=output_format,
-            quality=quality,
-            background=background,
-            strip_metadata=strip_metadata,
-            target_profile=target_profile,
-            overwrite=overwrite,
-            auto_download=auto_download,
-            download_timeout=download_timeout,
-            lock_timeout=lock_timeout,
-            dry_run=dry_run,
-        )
-        reporter.result(run_upscale(options, runtime_dirs, **_run_callbacks(reporter)))
+        with cancellation_context():
+            runtime_dirs = resolve_runtime_dirs(models_dir=models_dir, temp_dir=temp_dir)
+            options = UpscaleOptions(
+                input_path=input_path,
+                output_arg=output,
+                model=model,
+                scale=scale,
+                tile=tile,
+                tile_pad=tile_pad,
+                pre_pad=pre_pad,
+                fp32=fp32,
+                face_enhance=face_enhance,
+                denoise_strength=denoise_strength,
+                alpha_mode=alpha_mode,
+                gpu_id=gpu_id,
+                device=device,
+                output_format=output_format,
+                quality=quality,
+                background=background,
+                strip_metadata=strip_metadata,
+                target_profile=target_profile,
+                overwrite=overwrite,
+                auto_download=auto_download,
+                download_timeout=download_timeout,
+                lock_timeout=lock_timeout,
+                dry_run=dry_run,
+            )
+            reporter.result(run_upscale(options, runtime_dirs, **_run_callbacks(reporter)))
+    except OperationCancelled as exc:
+        reporter.error(exc)
+        raise typer.Exit(CANCELLED_EXIT_CODE) from exc
     except PixelupError as exc:
         reporter.error(exc)
         raise typer.Exit(exit_code_for(exc.code)) from exc

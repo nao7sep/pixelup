@@ -7,16 +7,18 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from PIL import Image, ImageCms, ImageColor, UnidentifiedImageError
+from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageError
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.paths import OutputFormat
+from pixelup.signals import check_cancelled, temp_file_guard
 
 
 @dataclass(frozen=True, slots=True)
 class SourceMetadata:
     icc_profile: bytes | None = None
     exif: bytes | None = None
+    xmp: bytes | None = None
 
 
 def register_image_plugins() -> None:
@@ -81,11 +83,13 @@ def load_source_metadata(path: Path) -> SourceMetadata:
         with Image.open(path) as image:
             icc_profile = image.info.get("icc_profile")
             exif = image.info.get("exif")
+            xmp = image.info.get("xmp")
     except (OSError, UnidentifiedImageError):
         return SourceMetadata()
     return SourceMetadata(
         icc_profile=icc_profile if isinstance(icc_profile, bytes) else None,
         exif=exif if isinstance(exif, bytes) else None,
+        xmp=xmp if isinstance(xmp, bytes) else None,
     )
 
 
@@ -109,14 +113,7 @@ def save_output_image(
             "Could not create the temp directory.",
             details={"path": str(temp_dir), "reason": str(exc)},
         ) from exc
-    if target_profile not in {None, "srgb"}:
-        raise PixelupError(
-            ErrorCode.INTERNAL_ERROR,
-            "Display-P3 and Adobe RGB output profiles are not implemented in this phase.",
-            hint="Use --target-profile srgb or omit --target-profile.",
-            details={"target_profile": target_profile},
-        )
-
+    check_cancelled()
     encoded = _prepare_image_for_save(
         image,
         output_format=output_format,
@@ -134,8 +131,10 @@ def save_output_image(
     )
     temp_path = _temp_output_path(temp_dir, output_format)
     try:
-        encoded.save(temp_path, **save_kwargs)
-        os.replace(temp_path, output_path)
+        with temp_file_guard(temp_path):
+            encoded.save(temp_path, **save_kwargs)
+            check_cancelled()
+            os.replace(temp_path, output_path)
     except PixelupError:
         temp_path.unlink(missing_ok=True)
         raise
@@ -163,9 +162,12 @@ def _prepare_image_for_save(
         prepared = _flatten_alpha(prepared, background)
     elif prepared.mode not in {"RGB", "RGBA"}:
         prepared = prepared.convert("RGBA" if "A" in prepared.getbands() else "RGB")
-    needs_srgb = strip_metadata or target_profile == "srgb"
-    if needs_srgb and source_metadata and source_metadata.icc_profile:
-        prepared = _convert_to_srgb(prepared, source_metadata.icc_profile)
+    if target_profile is not None:
+        source_profile = _source_profile_bytes(source_metadata)
+        prepared = _convert_profile(prepared, source_profile, _profile_bytes(target_profile))
+    elif strip_metadata and source_metadata and source_metadata.icc_profile:
+        prepared = _convert_profile(prepared, source_metadata.icc_profile, _profile_bytes("srgb"))
+        prepared.info.pop("icc_profile", None)
     return prepared
 
 
@@ -186,16 +188,20 @@ def _flatten_alpha(image: Image.Image, background: str) -> Image.Image:
     return canvas.convert("RGB")
 
 
-def _convert_to_srgb(image: Image.Image, icc_profile: bytes) -> Image.Image:
+def _convert_profile(
+    image: Image.Image,
+    source_profile: bytes,
+    target_profile: bytes,
+) -> Image.Image:
     try:
-        source_profile = ImageCms.ImageCmsProfile(BytesIO(icc_profile))
-        target_profile = ImageCms.createProfile("sRGB")
+        source = ImageCms.ImageCmsProfile(BytesIO(source_profile))
+        target = ImageCms.ImageCmsProfile(BytesIO(target_profile))
         mode = "RGBA" if image.mode == "RGBA" else "RGB"
-        return ImageCms.profileToProfile(image.convert(mode), source_profile, target_profile)
+        return ImageCms.profileToProfile(image.convert(mode), source, target)
     except (OSError, ImageCms.PyCMSError) as exc:
         raise PixelupError(
             ErrorCode.INTERNAL_ERROR,
-            "Could not convert the source ICC profile to sRGB.",
+            "Could not convert the image color profile.",
             details={"reason": str(exc)},
         ) from exc
 
@@ -214,19 +220,75 @@ def _save_kwargs(
         kwargs = {"format": "WEBP", "quality": quality}
     else:
         kwargs = {"format": "PNG"}
+    if target_profile is not None:
+        kwargs["icc_profile"] = _profile_bytes(target_profile)
+    elif not strip_metadata:
+        if source_metadata and source_metadata.icc_profile:
+            kwargs["icc_profile"] = source_metadata.icc_profile
+        else:
+            kwargs["icc_profile"] = _profile_bytes("srgb")
     if strip_metadata:
         return kwargs
-    if target_profile == "srgb":
-        kwargs["icc_profile"] = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
-        return kwargs
-    if source_metadata and source_metadata.icc_profile:
-        kwargs["icc_profile"] = source_metadata.icc_profile
-    exif_formats = {OutputFormat.JPG, OutputFormat.WEBP}
+    exif_formats = {OutputFormat.JPG, OutputFormat.PNG, OutputFormat.WEBP}
     if source_metadata and source_metadata.exif and output_format in exif_formats:
         kwargs["exif"] = source_metadata.exif
+    if source_metadata and source_metadata.xmp:
+        if output_format == OutputFormat.PNG:
+            pnginfo = PngImagePlugin.PngInfo()
+            pnginfo.add_itxt(
+                "XML:com.adobe.xmp",
+                source_metadata.xmp.decode("utf-8", errors="replace"),
+            )
+            kwargs["pnginfo"] = pnginfo
+        elif output_format in {OutputFormat.JPG, OutputFormat.WEBP}:
+            kwargs["xmp"] = source_metadata.xmp
     return kwargs
 
 
 def _temp_output_path(temp_dir: Path, output_format: OutputFormat) -> Path:
     extension = "jpg" if output_format == OutputFormat.JPG else output_format.value
     return temp_dir / f"pixelup-{os.getpid()}-{uuid4().hex}.{extension}"
+
+
+def _source_profile_bytes(source_metadata: SourceMetadata | None) -> bytes:
+    if source_metadata and source_metadata.icc_profile:
+        return source_metadata.icc_profile
+    return _profile_bytes("srgb")
+
+
+def _profile_bytes(name: str) -> bytes:
+    if name == "srgb":
+        return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    for path in _profile_paths(name):
+        if path.is_file():
+            try:
+                return ImageCms.ImageCmsProfile(str(path)).tobytes()
+            except (OSError, ImageCms.PyCMSError):
+                continue
+    raise PixelupError(
+        ErrorCode.INTERNAL_ERROR,
+        "Target ICC profile is not available.",
+        details={"target_profile": name},
+    )
+
+
+def _profile_paths(name: str) -> tuple[Path, ...]:
+    if name == "p3":
+        return (
+            Path("/System/Library/ColorSync/Profiles/Display P3.icc"),
+            Path("/System/Library/ColorSync/Profiles/DCI(P3) RGB.icc"),
+            Path("/Library/ColorSync/Profiles/Display P3.icc"),
+            Path("/usr/share/color/icc/DisplayP3.icc"),
+            Path("/usr/share/color/icc/colord/DisplayP3.icc"),
+        )
+    if name == "adobergb":
+        return (
+            Path("/System/Library/ColorSync/Profiles/AdobeRGB1998.icc"),
+            Path("/Library/ColorSync/Profiles/AdobeRGB1998.icc"),
+            Path("/usr/share/color/icc/AdobeRGB1998.icc"),
+            Path("/usr/share/color/icc/colord/AdobeRGB1998.icc"),
+        )
+    raise PixelupError(
+        ErrorCode.INVALID_ARGUMENT,
+        "--target-profile must be one of 'srgb', 'p3', or 'adobergb'.",
+    )
