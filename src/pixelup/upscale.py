@@ -197,13 +197,6 @@ def run_upscale(
                 on_download=on_download,
                 on_waiting=on_waiting,
             )
-    else:
-        for name in required_model_names(options):
-            require_model_present(
-                runtime_dirs.models_dir,
-                name,
-                auto_download_disabled=True,
-            )
 
     output_array = run_inference(
         InferenceConfig(
