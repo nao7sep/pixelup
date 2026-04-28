@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 import math
+import sys
 import warnings
 from collections.abc import Callable, Mapping
 from contextlib import redirect_stderr, redirect_stdout
@@ -145,6 +147,7 @@ def _create_upsampler(
     torch_device: Any,
     on_tile: TileCallback | None = None,
 ) -> Any:
+    _install_torchvision_functional_tensor_compat()
     try:
         from realesrgan import RealESRGANer
     except ImportError as exc:
@@ -226,6 +229,7 @@ def _tile_reporting_upsampler_class(base: type) -> type:
 
 
 def _build_network(spec: ModelArchitectureSpec) -> Any:
+    _install_torchvision_functional_tensor_compat()
     if spec.kind == "rrdb":
         try:
             from basicsr.archs.rrdbnet_arch import RRDBNet
@@ -252,10 +256,10 @@ def _run_face_enhance(
     *,
     torch_device: Any,
 ) -> Any:
+    _install_torchvision_functional_tensor_compat()
     try:
         import gfpgan.utils as gfpgan_utils
         from facexlib.utils.face_restoration_helper import FaceRestoreHelper
-
         from gfpgan import GFPGANer
     except ImportError as exc:
         raise PixelupError(
@@ -389,6 +393,18 @@ def _missing_inference_dependency(package: str, exc: ImportError) -> PixelupErro
         f"Inference dependency '{package}' is not installed.",
         details={"dependency": package, "reason": str(exc)},
     )
+
+
+def _install_torchvision_functional_tensor_compat() -> None:
+    module_name = "torchvision.transforms.functional_tensor"
+    if module_name in sys.modules:
+        return
+    try:
+        sys.modules[module_name] = importlib.import_module(
+            "torchvision.transforms._functional_tensor"
+        )
+    except ImportError:
+        return
 
 
 def _is_out_of_memory(exc: RuntimeError) -> bool:

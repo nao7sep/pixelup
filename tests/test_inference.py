@@ -147,6 +147,17 @@ def test_build_network_rejects_unknown_architecture() -> None:
     assert excinfo.value.details == {"kind": "custom"}
 
 
+def test_torchvision_functional_tensor_compat_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixelup.inference import _install_torchvision_functional_tensor_compat
+
+    monkeypatch.delitem(sys.modules, "torchvision.transforms.functional_tensor", raising=False)
+
+    _install_torchvision_functional_tensor_compat()
+
+    assert "torchvision.transforms.functional_tensor" in sys.modules
+    assert hasattr(sys.modules["torchvision.transforms.functional_tensor"], "rgb_to_grayscale")
+
+
 def test_face_enhance_uses_models_dir_for_helper_models_and_suppresses_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -113,3 +113,37 @@ def test_main_version_invalid_report_exits_without_traceback(capsys) -> None:
     assert excinfo.value.code == 2
     assert output["code"] == "invalid_argument"
     assert captured.err == ""
+
+
+def test_show_completion_accepts_explicit_shell(capsys) -> None:
+    main(["--show-completion", "zsh"])
+
+    captured = capsys.readouterr()
+    assert "#compdef pixelup" in captured.out
+    assert "_PIXELUP_COMPLETE=complete_zsh" in captured.out
+    assert captured.err == ""
+
+
+def test_show_completion_uses_shell_env(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setenv("SHELL", "/bin/bash")
+
+    main(["--show-completion"])
+
+    captured = capsys.readouterr()
+    assert "complete -o default -F _pixelup_completion pixelup" in captured.out
+    assert captured.err == ""
+
+
+def test_install_completion_accepts_explicit_shell(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    main(["--install-completion", "zsh"])
+
+    captured = capsys.readouterr()
+    assert "zsh completion installed" in captured.out
+    assert (tmp_path / ".zfunc" / "_pixelup").is_file()
+    assert (tmp_path / ".zshrc").is_file()

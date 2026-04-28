@@ -166,9 +166,14 @@ pixelup models remove MODEL... [--all] [OPTIONS]
 pixelup models verify [OPTIONS]
 pixelup models dir [OPTIONS]
 pixelup --version [--report auto|human|single|stream]
+pixelup --show-completion [bash|zsh|fish|powershell|pwsh]
+pixelup --install-completion [bash|zsh|fish|powershell|pwsh]
 ```
 
 Only `-h` is available as a short option, as an alias for `--help`.
+
+Completion commands accept an explicit shell name. If omitted, PixelUp falls
+back to the `SHELL` environment variable.
 
 ## Important Options
 
@@ -372,8 +377,10 @@ gfpgan==1.3.8
 
 `basicsr-fixed` is the compatibility fix for the removed
 `torchvision.transforms.functional_tensor` module that upstream `basicsr` 1.4.2
-imports. PixelUp depends on the fork directly and does not patch
-`torchvision` at runtime.
+imports. `realesrgan` also declares upstream `basicsr`, so PixelUp installs a
+runtime import alias for `torchvision.transforms.functional_tensor` before
+loading Real-ESRGAN/BasicSR. This keeps clean non-editable installs compatible
+even if the upstream `basicsr` package wins the top-level package collision.
 
 ## Color And Metadata
 

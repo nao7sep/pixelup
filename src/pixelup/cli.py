@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import sys
 from enum import StrEnum
 from pathlib import Path
@@ -26,6 +27,7 @@ from pixelup.signals import CANCELLED_EXIT_CODE, OperationCancelled, cancellatio
 from pixelup.upscale import UpscaleOptions, run_upscale
 
 HELP_OPTIONS = {"help_option_names": ["--help", "-h"]}
+COMPLETION_SHELLS = {"bash", "zsh", "fish", "powershell", "pwsh"}
 
 
 class AlphaMode(StrEnum):
@@ -69,6 +71,9 @@ def main(argv: list[str] | None = None) -> None:
         except typer.Exit as exc:
             raise SystemExit(exc.exit_code) from None
         return
+    if args and args[0] in {"--show-completion", "--install-completion"}:
+        _completion_command(args[0], args[1:])
+        return
     if not args or args[0] in {"--help", "-h", "--install-completion", "--show-completion"}:
         root_app(args=args, prog_name="pixelup")
         return
@@ -76,6 +81,50 @@ def main(argv: list[str] | None = None) -> None:
         models_app(args=args[1:], prog_name="pixelup models")
         return
     upscale_app(args=args, prog_name="pixelup")
+
+
+def _completion_command(command: str, args: list[str]) -> None:
+    if len(args) > 1:
+        typer.echo(f"{command} accepts at most one shell name.", err=True)
+        raise SystemExit(2)
+    shell = args[0].lower() if args else _completion_shell_from_env()
+    if shell is None:
+        typer.echo(
+            "Shell could not be detected. Pass bash, zsh, fish, powershell, or pwsh.",
+            err=True,
+        )
+        raise SystemExit(1)
+    if shell not in COMPLETION_SHELLS:
+        typer.echo(f"Shell {shell} is not supported.", err=True)
+        raise SystemExit(1)
+    if command == "--show-completion":
+        from typer.completion import get_completion_script
+
+        typer.echo(
+            get_completion_script(
+                prog_name="pixelup",
+                complete_var="_PIXELUP_COMPLETE",
+                shell=shell,
+            )
+        )
+        return
+
+    from typer._completion_shared import install
+
+    installed_shell, path = install(
+        shell=shell,
+        prog_name="pixelup",
+        complete_var="_PIXELUP_COMPLETE",
+    )
+    typer.secho(f"{installed_shell} completion installed in {path}", fg="green")
+    typer.echo("Completion will take effect once you restart the terminal")
+
+
+def _completion_shell_from_env() -> str | None:
+    shell = Path(os.environ.get("SHELL", "")).name.lower()
+    if shell in COMPLETION_SHELLS:
+        return shell
+    return None
 
 
 @upscale_app.command(help="Upscale one image file to one output file.")
