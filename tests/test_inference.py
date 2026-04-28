@@ -55,7 +55,7 @@ def test_build_network_uses_srvgg_architecture(monkeypatch) -> None:
     assert result.kwargs["num_conv"] == 32
 
 
-def test_tile_reporting_upsampler_emits_per_tile_callback() -> None:
+def test_tile_reporting_upsampler_emits_per_tile_callback(capsys) -> None:
     from pixelup.inference import _tile_reporting_upsampler_class
 
     class _FakeImg:
@@ -74,6 +74,7 @@ def test_tile_reporting_upsampler_emits_per_tile_callback() -> None:
             for _ in range(tiles_x * tiles_y):
                 self.model("tile")
                 self.calls += 1
+                print("upstream tile progress")
 
     cls = _tile_reporting_upsampler_class(_FakeBase)
     upsampler = cls()
@@ -84,6 +85,7 @@ def test_tile_reporting_upsampler_emits_per_tile_callback() -> None:
 
     assert events == [(1, 2), (2, 2)]
     assert upsampler.calls == 2
+    assert capsys.readouterr().out == ""
 
 
 def test_tile_reporting_upsampler_falls_back_when_shape_unexpected() -> None:

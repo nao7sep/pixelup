@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
+from contextlib import redirect_stdout
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -214,7 +216,8 @@ def _tile_reporting_upsampler_class(base: type) -> type:
 
             self.model = wrapped_model
             try:
-                return super().tile_process()
+                with redirect_stdout(StringIO()):
+                    return super().tile_process()
             finally:
                 self.model = original_model
 
