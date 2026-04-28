@@ -7,7 +7,13 @@ from pathlib import Path
 from pixelup.config import RuntimeDirs
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import read_image_size
-from pixelup.models import require_model_present
+from pixelup.models import (
+    DownloadCallback,
+    WaitingCallback,
+    download_model,
+    known_model,
+    require_model_present,
+)
 from pixelup.paths import (
     OutputContext,
     OutputFormat,
@@ -39,6 +45,8 @@ class UpscaleOptions:
     target_profile: str | None
     overwrite: bool
     auto_download: bool
+    download_timeout: int
+    lock_timeout: int
     dry_run: bool
 
 
@@ -72,7 +80,12 @@ class UpscalePlan:
         }
 
 
-def build_plan(options: UpscaleOptions, runtime_dirs: RuntimeDirs) -> UpscalePlan:
+def build_plan(
+    options: UpscaleOptions,
+    runtime_dirs: RuntimeDirs,
+    *,
+    check_model: bool = True,
+) -> UpscalePlan:
     validate_options(options)
     input_path = options.input_path.expanduser().resolve()
     if not input_path.exists():
@@ -104,7 +117,9 @@ def build_plan(options: UpscaleOptions, runtime_dirs: RuntimeDirs) -> UpscalePla
     )
     output_path = resolve_output_path(context)
     validate_output_path(output_path, overwrite=options.overwrite)
-    require_model_present(runtime_dirs.models_dir, options.model)
+    if check_model:
+        for name in required_model_names(options):
+            require_model_present(runtime_dirs.models_dir, name)
     device = resolve_device(options.device, options.gpu_id)
     return UpscalePlan(
         input_path=input_path,
@@ -120,12 +135,38 @@ def build_plan(options: UpscaleOptions, runtime_dirs: RuntimeDirs) -> UpscalePla
     )
 
 
-def run_upscale(options: UpscaleOptions, runtime_dirs: RuntimeDirs) -> dict[str, object]:
-    plan = build_plan(options, runtime_dirs)
+def run_upscale(
+    options: UpscaleOptions,
+    runtime_dirs: RuntimeDirs,
+    *,
+    on_download: DownloadCallback | None = None,
+    on_waiting: WaitingCallback | None = None,
+) -> dict[str, object]:
+    plan = build_plan(
+        options,
+        runtime_dirs,
+        check_model=options.dry_run or not options.auto_download,
+    )
     if options.dry_run:
         payload = plan.to_payload()
         payload["message"] = "Dry run plan is valid."
         return payload
+    if options.auto_download:
+        for name in required_model_names(options):
+            if known_model(name) is None:
+                require_model_present(runtime_dirs.models_dir, name)
+                continue
+            download_model(
+                runtime_dirs.models_dir,
+                name,
+                download_timeout=options.download_timeout,
+                lock_timeout=options.lock_timeout,
+                on_download=on_download,
+                on_waiting=on_waiting,
+            )
+    else:
+        for name in required_model_names(options):
+            require_model_present(runtime_dirs.models_dir, name)
     raise PixelupError(
         ErrorCode.INTERNAL_ERROR,
         "Real-ESRGAN inference is not implemented in this phase.",
@@ -170,6 +211,19 @@ def validate_options(options: UpscaleOptions) -> None:
             ErrorCode.INVALID_ARGUMENT,
             "--device must be one of 'auto', 'mps', 'cuda', or 'cpu'.",
         )
+    if options.download_timeout <= 0:
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--download-timeout must be positive.")
+    if options.lock_timeout < 0:
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--lock-timeout must be 0 or greater.")
+
+
+def required_model_names(options: UpscaleOptions) -> list[str]:
+    names = [options.model]
+    if options.model == "realesr-general-x4v3" and options.denoise_strength != 1.0:
+        names.append("realesr-general-wdn-x4v3")
+    if options.face_enhance:
+        names.append("GFPGANv1.4")
+    return names
 
 
 def validate_output_path(path: Path, *, overwrite: bool) -> None:
@@ -213,4 +267,3 @@ def resolve_device(device: str, gpu_id: int | None) -> str:
 
 def _is_apple_silicon() -> bool:
     return os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
-

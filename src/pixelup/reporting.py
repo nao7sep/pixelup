@@ -69,6 +69,30 @@ class Reporter:
             payload = {"event": "result", **payload}
         self.success(payload)
 
+    def waiting(self, *, reason: str, model: str, seconds_waited: float) -> None:
+        if self.mode == ReportMode.STREAM:
+            self._json_line(
+                {
+                    "event": "waiting",
+                    "reason": reason,
+                    "model": model,
+                    "seconds_waited": round(seconds_waited, 3),
+                }
+            )
+        elif self.mode == ReportMode.HUMAN and not self.quiet:
+            self.console.print(f"Waiting for model download lock: {model}")
+
+    def download(self, *, model: str, bytes_done: int, bytes_total: int | None) -> None:
+        if self.mode == ReportMode.STREAM:
+            self._json_line(
+                {
+                    "event": "download",
+                    "model": model,
+                    "bytes_done": bytes_done,
+                    "bytes_total": bytes_total,
+                }
+            )
+
     def _json_line(self, payload: dict[str, Any]) -> None:
         self.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
         self.stdout.write("\n")
@@ -80,4 +104,3 @@ def resolve_report_mode(mode: ReportMode, *, stdout: TextIO | None = None) -> Re
         return mode
     stream = stdout or sys.stdout
     return ReportMode.HUMAN if stream.isatty() else ReportMode.SINGLE
-

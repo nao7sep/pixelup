@@ -36,6 +36,8 @@ def options(
         target_profile=None,
         overwrite=False,
         auto_download=False,
+        download_timeout=600,
+        lock_timeout=600,
         dry_run=True,
     )
 
@@ -47,15 +49,18 @@ def test_build_plan_validates_input_output_and_model(tmp_path: Path) -> None:
     temp_dir = tmp_path / "temp"
     models_dir.mkdir()
     temp_dir.mkdir()
-    (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
+    (models_dir / "custom-model.pth").write_bytes(b"weights")
     Image.new("RGB", (3, 2), "white").save(input_path)
 
-    plan = build_plan(options(input_path, str(output_path)), RuntimeDirs(models_dir, temp_dir))
+    plan = build_plan(
+        options(input_path, str(output_path), model="custom-model"),
+        RuntimeDirs(models_dir, temp_dir),
+    )
 
     assert plan.input_size == (3, 2)
     assert plan.output_size == (12, 8)
     assert plan.output_path == output_path
-    assert plan.model == "RealESRGAN_x4plus"
+    assert plan.model == "custom-model"
 
 
 def test_build_plan_rejects_missing_model(tmp_path: Path) -> None:

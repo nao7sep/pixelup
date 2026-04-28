@@ -11,7 +11,13 @@ from rich.table import Table
 from pixelup import __version__
 from pixelup.config import ensure_models_dir, resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError, exit_code_for
-from pixelup.models import KNOWN_MODELS, list_model_records, model_file, verify_present_models
+from pixelup.models import (
+    KNOWN_MODELS,
+    download_models,
+    list_model_records,
+    model_file,
+    verify_present_models,
+)
 from pixelup.paths import OutputFormat
 from pixelup.reporting import Reporter, ReportMode
 from pixelup.upscale import UpscaleOptions, run_upscale
@@ -78,7 +84,6 @@ def upscale(
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
-    del download_timeout, lock_timeout
     reporter = Reporter(report, quiet=quiet)
     try:
         if quiet and verbose:
@@ -108,9 +113,11 @@ def upscale(
             target_profile=target_profile,
             overwrite=overwrite,
             auto_download=auto_download,
+            download_timeout=download_timeout,
+            lock_timeout=lock_timeout,
             dry_run=dry_run,
         )
-        reporter.result(run_upscale(options, runtime_dirs))
+        reporter.result(run_upscale(options, runtime_dirs, **_download_callbacks(reporter)))
     except PixelupError as exc:
         reporter.error(exc)
         raise typer.Exit(exit_code_for(exc.code)) from exc
@@ -143,15 +150,25 @@ def models_check(
     models_dir: Annotated[Path | None, typer.Option("--models-dir")] = None,
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
+    download_timeout: Annotated[int, typer.Option("--download-timeout")] = 600,
+    lock_timeout: Annotated[int, typer.Option("--lock-timeout")] = 600,
 ) -> None:
     del verbose
     reporter = Reporter(report, quiet=quiet)
     try:
         if download_missing:
-            raise PixelupError(
-                ErrorCode.MODEL_DOWNLOAD_FAILED,
-                "Model download is not implemented in this phase.",
+            requested = models or [info.name for info in KNOWN_MODELS]
+            runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
+            download_models(
+                runtime_dirs.models_dir,
+                requested,
+                download_timeout=download_timeout,
+                lock_timeout=lock_timeout,
+                **_download_callbacks(reporter),
             )
+            records = list_model_records(runtime_dirs.models_dir, requested)
+            _emit_models_records(reporter, runtime_dirs.models_dir, records)
+            return
         runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
         ensure_models_dir(runtime_dirs.models_dir)
         records = list_model_records(runtime_dirs.models_dir, models)
@@ -171,14 +188,29 @@ def models_download(
     download_timeout: Annotated[int, typer.Option("--download-timeout")] = 600,
     lock_timeout: Annotated[int, typer.Option("--lock-timeout")] = 600,
 ) -> None:
-    del models, models_dir, verbose, download_timeout, lock_timeout
+    del verbose
     reporter = Reporter(report, quiet=quiet)
-    error = PixelupError(
-        ErrorCode.MODEL_DOWNLOAD_FAILED,
-        "Model download is not implemented in this phase.",
-    )
-    reporter.error(error)
-    raise typer.Exit(exit_code_for(error.code))
+    try:
+        if not models:
+            raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Specify at least one model.")
+        runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
+        results = download_models(
+            runtime_dirs.models_dir,
+            models,
+            download_timeout=download_timeout,
+            lock_timeout=lock_timeout,
+            **_download_callbacks(reporter),
+        )
+        reporter.result(
+            {
+                "ok": True,
+                "models_dir": str(runtime_dirs.models_dir),
+                "models": results,
+            }
+        )
+    except PixelupError as exc:
+        reporter.error(exc)
+        raise typer.Exit(exit_code_for(exc.code)) from exc
 
 
 @models_app.command("remove")
@@ -275,6 +307,21 @@ def _emit_models_records(
         reporter.table(table)
         return
     reporter.result({"models_dir": str(models_dir), "models": records})
+
+
+def _download_callbacks(reporter: Reporter) -> dict[str, object]:
+    return {
+        "on_download": lambda model, done, total: reporter.download(
+            model=model,
+            bytes_done=done,
+            bytes_total=total,
+        ),
+        "on_waiting": lambda model, waited: reporter.waiting(
+            reason="model_download_in_progress",
+            model=model,
+            seconds_waited=waited,
+        ),
+    }
 
 
 def _version_command(args: list[str]) -> None:
