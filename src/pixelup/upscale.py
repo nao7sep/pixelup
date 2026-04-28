@@ -134,11 +134,7 @@ def build_plan(
     validate_output_path(output_path, overwrite=options.overwrite)
     if check_model:
         for name in required_model_names(options):
-            require_model_present(
-                runtime_dirs.models_dir,
-                name,
-                auto_download_disabled=not options.auto_download,
-            )
+            require_model_present(runtime_dirs.models_dir, name)
     device = resolve_device(options.device, options.gpu_id)
     return UpscalePlan(
         input_path=input_path,
@@ -169,7 +165,7 @@ def run_upscale(
     plan = build_plan(
         options,
         runtime_dirs,
-        check_model=not options.auto_download,
+        check_model=options.dry_run or not options.auto_download,
     )
     for warning in plan_warnings(options, plan):
         if on_warning:
@@ -359,12 +355,33 @@ def validate_output_path(path: Path, *, overwrite: bool) -> None:
 
 
 def resolve_device(device: str, gpu_id: int | None) -> str:
-    if device != "auto":
-        return device
+    if device == "cpu":
+        return "cpu"
     import torch
 
-    if torch.backends.mps.is_available():
+    mps_available = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+    if device == "auto":
+        if mps_available:
+            return "mps"
+        if gpu_id is not None and torch.cuda.is_available():
+            return "cuda"
+        return "cpu"
+    if device == "mps":
+        if not mps_available:
+            raise PixelupError(ErrorCode.INVALID_ARGUMENT, "MPS is not available.")
         return "mps"
-    if gpu_id is not None and torch.cuda.is_available():
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            raise PixelupError(ErrorCode.INVALID_ARGUMENT, "CUDA is not available.")
+        device_count = torch.cuda.device_count()
+        if gpu_id is not None and gpu_id >= device_count:
+            raise PixelupError(
+                ErrorCode.INVALID_ARGUMENT,
+                "CUDA GPU index is not available.",
+                details={"gpu_id": gpu_id, "device_count": device_count},
+            )
         return "cuda"
-    return "cpu"
+    raise PixelupError(
+        ErrorCode.INVALID_ARGUMENT,
+        "--device must be one of 'auto', 'mps', 'cuda', or 'cpu'.",
+    )

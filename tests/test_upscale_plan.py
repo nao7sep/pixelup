@@ -18,6 +18,7 @@ def options(
     tile: int = 0,
     scale: int = 4,
     output_format: OutputFormat | None = OutputFormat.PNG,
+    auto_download: bool = False,
 ) -> UpscaleOptions:
     return UpscaleOptions(
         input_path=input_path,
@@ -39,7 +40,7 @@ def options(
         strip_metadata=False,
         target_profile=None,
         overwrite=False,
-        auto_download=False,
+        auto_download=auto_download,
         download_timeout=600,
         lock_timeout=600,
         dry_run=dry_run,
@@ -151,7 +152,7 @@ def test_run_upscale_calls_inference_and_writes_output(
     assert ("progress", "encode") in events
 
 
-def test_dry_run_with_auto_download_reports_missing_models(tmp_path: Path) -> None:
+def test_dry_run_with_auto_download_errors_on_missing_model(tmp_path: Path) -> None:
     from pixelup.upscale import run_upscale
 
     input_path = tmp_path / "input.png"
@@ -161,38 +162,18 @@ def test_dry_run_with_auto_download_reports_missing_models(tmp_path: Path) -> No
     temp_dir.mkdir()
     Image.new("RGB", (1, 1), "white").save(input_path)
 
-    result = run_upscale(
-        UpscaleOptions(
-            input_path=input_path,
-            output_arg=str(tmp_path / "output.png"),
-            model="RealESRGAN_x4plus",
-            scale=4,
-            tile=0,
-            tile_pad=10,
-            pre_pad=0,
-            fp32=False,
-            face_enhance=False,
-            denoise_strength=1.0,
-            alpha_mode="realesrgan",
-            gpu_id=None,
-            device="cpu",
-            output_format=OutputFormat.PNG,
-            quality=95,
-            background="white",
-            strip_metadata=False,
-            target_profile=None,
-            overwrite=False,
-            auto_download=True,
-            download_timeout=600,
-            lock_timeout=600,
-            dry_run=True,
-        ),
-        RuntimeDirs(models_dir, temp_dir),
-    )
+    with pytest.raises(PixelupError) as excinfo:
+        run_upscale(
+            options(
+                input_path,
+                str(tmp_path / "output.png"),
+                dry_run=True,
+                auto_download=True,
+            ),
+            RuntimeDirs(models_dir, temp_dir),
+        )
 
-    assert result["ok"] is True
-    assert result["dry_run"] is True
-    assert result["models_present"] == {"RealESRGAN_x4plus": False}
+    assert excinfo.value.code == "model_not_found"
 
 
 def test_dry_run_without_auto_download_errors_on_missing_known_model(tmp_path: Path) -> None:
@@ -211,7 +192,7 @@ def test_dry_run_without_auto_download_errors_on_missing_known_model(tmp_path: P
             RuntimeDirs(models_dir, temp_dir),
         )
 
-    assert excinfo.value.code == "auto_download_disabled"
+    assert excinfo.value.code == "model_not_found"
 
 
 def test_dry_run_without_auto_download_errors_on_missing_unknown_model(tmp_path: Path) -> None:
@@ -337,3 +318,38 @@ def test_auto_device_detection_uses_torch(monkeypatch: pytest.MonkeyPatch) -> No
     fake_torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True))
     assert resolve_device("auto", None) == "mps"
     assert resolve_device("auto", 0) == "mps"
+
+
+def test_forced_device_validation_uses_torch_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    from pixelup.upscale import resolve_device
+
+    fake_torch = ModuleType("torch")
+    fake_torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False))
+    fake_torch.cuda = SimpleNamespace(
+        is_available=lambda: False,
+        device_count=lambda: 0,
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    with pytest.raises(PixelupError) as excinfo:
+        resolve_device("mps", None)
+    assert excinfo.value.code == "invalid_argument"
+
+    with pytest.raises(PixelupError) as excinfo:
+        resolve_device("cuda", None)
+    assert excinfo.value.code == "invalid_argument"
+
+    fake_torch.cuda = SimpleNamespace(
+        is_available=lambda: True,
+        device_count=lambda: 1,
+    )
+    assert resolve_device("cuda", 0) == "cuda"
+
+    with pytest.raises(PixelupError) as excinfo:
+        resolve_device("cuda", 2)
+    assert excinfo.value.code == "invalid_argument"

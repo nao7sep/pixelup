@@ -160,22 +160,9 @@ def list_model_records(models_dir: Path, names: list[str] | None = None) -> list
 def require_model_present(
     models_dir: Path,
     name: str,
-    *,
-    auto_download_disabled: bool = False,
 ) -> Path:
     path = model_file(models_dir, name)
     if not path.is_file():
-        info = known_model(name)
-        if auto_download_disabled and info is not None and info.url is not None:
-            raise PixelupError(
-                ErrorCode.AUTO_DOWNLOAD_DISABLED,
-                f"Model '{name}' is not present and --auto-download is disabled.",
-                hint=(
-                    "Pass --auto-download, run 'pixelup models download MODEL', "
-                    "or place the .pth file there."
-                ),
-                details={"model": name, "models_dir": str(models_dir), "path": str(path)},
-            )
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
             f"Model '{name}' is not present in the models directory.",

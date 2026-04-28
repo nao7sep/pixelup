@@ -184,21 +184,16 @@ def models_check(
     reporter = Reporter(report, quiet=quiet)
     try:
         if download_missing:
-            if not models:
-                raise PixelupError(
-                    ErrorCode.INVALID_ARGUMENT,
-                    "Specify at least one model with --download-missing.",
-                    hint="Pass model names explicitly to avoid bulk downloads.",
-                )
+            target_models = list(models or all_model_names())
             runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
             download_models(
                 runtime_dirs.models_dir,
-                models,
+                target_models,
                 download_timeout=download_timeout,
                 lock_timeout=lock_timeout,
                 **_download_callbacks(reporter),
             )
-            records = list_model_records(runtime_dirs.models_dir, models)
+            records = list_model_records(runtime_dirs.models_dir, target_models)
             _emit_models_records(reporter, runtime_dirs.models_dir, records)
             return
         runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)

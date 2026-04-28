@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 import typer
 
-from pixelup.cli import _version_command, main, models_remove
+from pixelup import cli as cli_module
+from pixelup.cli import _version_command, main, models_check, models_remove
 from pixelup.reporting import ReportMode
 
 
@@ -32,6 +33,45 @@ def test_models_remove_all_removes_unlisted_companion_model(
     assert output["removed"] == ["realesr-general-x4v3", "realesr-general-wdn-x4v3"]
     assert not public_model.exists()
     assert not companion_model.exists()
+
+
+def test_models_check_download_missing_without_names_targets_all_public_models(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_download_models(
+        models_dir: Path,
+        names: list[str],
+        **_kwargs: object,
+    ) -> list[dict[str, object]]:
+        calls["download_names"] = names
+        return []
+
+    def fake_list_model_records(
+        models_dir: Path,
+        names: list[str] | None = None,
+    ) -> list[dict[str, object]]:
+        calls["record_names"] = names
+        return []
+
+    monkeypatch.setattr(cli_module, "download_models", fake_download_models)
+    monkeypatch.setattr(cli_module, "list_model_records", fake_list_model_records)
+
+    models_check(
+        models=None,
+        download_missing=True,
+        report=ReportMode.SINGLE,
+        models_dir=tmp_path / "models",
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    expected = cli_module.all_model_names()
+    assert calls["download_names"] == expected
+    assert calls["record_names"] == expected
+    assert output == {"models_dir": str((tmp_path / "models").resolve()), "models": []}
 
 
 def test_version_stream_report_is_single_result_without_event(capsys) -> None:
