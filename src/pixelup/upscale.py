@@ -36,6 +36,7 @@ from pixelup.paths import (
 StartCallback = Callable[["UpscalePlan", int], None]
 ProgressCallback = Callable[[str], None]
 WarningCallback = Callable[[str], None]
+TileCallback = Callable[[int, int], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +160,7 @@ def run_upscale(
     on_start: StartCallback | None = None,
     on_progress: ProgressCallback | None = None,
     on_warning: WarningCallback | None = None,
+    on_tile: TileCallback | None = None,
 ) -> dict[str, object]:
     started = time.perf_counter()
     plan = build_plan(
@@ -213,6 +215,7 @@ def run_upscale(
             device=plan.device,
         ),
         on_progress=on_progress,
+        on_tile=on_tile,
     )
     if on_progress:
         on_progress("encode")

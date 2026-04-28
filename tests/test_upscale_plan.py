@@ -126,8 +126,8 @@ def test_run_upscale_calls_inference_and_writes_output(
     Image.new("RGB", (2, 2), "white").save(input_path)
     events: list[tuple[str, object]] = []
 
-    def fake_run_inference(*args: object, on_progress: object = None) -> object:
-        assert on_progress is not None
+    def fake_run_inference(*args: object, **kwargs: object) -> object:
+        assert kwargs.get("on_progress") is not None
         return object()
 
     monkeypatch.setattr(upscale_module, "run_inference", fake_run_inference)

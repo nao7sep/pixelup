@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from pixelup.imaging import register_image_plugins
 from pixelup.models import model_file
 
 ProgressCallback = Callable[[str], None]
+TileCallback = Callable[[int, int], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +60,10 @@ def run_inference(
     config: InferenceConfig,
     *,
     on_progress: ProgressCallback | None = None,
+    on_tile: TileCallback | None = None,
 ) -> Any:
     try:
-        return _run_inference(config, on_progress=on_progress)
+        return _run_inference(config, on_progress=on_progress, on_tile=on_tile)
     except PixelupError:
         raise
     except RuntimeError as exc:
@@ -87,12 +90,13 @@ def _run_inference(
     config: InferenceConfig,
     *,
     on_progress: ProgressCallback | None = None,
+    on_tile: TileCallback | None = None,
 ) -> Any:
     _emit(on_progress, "load_model")
     torch = _import_torch()
     image = _read_input_image(config.input_path)
     device = _torch_device(torch, config.device, config.gpu_id)
-    upsampler = _create_upsampler(config, torch_device=device)
+    upsampler = _create_upsampler(config, torch_device=device, on_tile=on_tile)
 
     _emit(on_progress, "upscale")
     if config.face_enhance:
@@ -132,7 +136,12 @@ def _srvgg_spec(*, scale: int, num_conv: int) -> ModelArchitectureSpec:
     )
 
 
-def _create_upsampler(config: InferenceConfig, *, torch_device: Any) -> Any:
+def _create_upsampler(
+    config: InferenceConfig,
+    *,
+    torch_device: Any,
+    on_tile: TileCallback | None = None,
+) -> Any:
     try:
         from realesrgan import RealESRGANer
     except ImportError as exc:
@@ -148,7 +157,10 @@ def _create_upsampler(config: InferenceConfig, *, torch_device: Any) -> Any:
         dni_weight = [config.denoise_strength, 1 - config.denoise_strength]
 
     spec = model_architecture_spec(config.model, requested_scale=config.scale)
-    return RealESRGANer(
+    cls = _tile_reporting_upsampler_class(RealESRGANer) if (
+        config.tile > 0 and on_tile is not None
+    ) else RealESRGANer
+    upsampler = cls(
         scale=spec.netscale,
         model_path=model_paths,
         dni_weight=dni_weight,
@@ -160,6 +172,53 @@ def _create_upsampler(config: InferenceConfig, *, torch_device: Any) -> Any:
         device=torch_device,
         gpu_id=config.gpu_id if config.device == "cuda" else None,
     )
+    if cls is not RealESRGANer:
+        upsampler._pixelup_on_tile = on_tile  # type: ignore[attr-defined]
+    return upsampler
+
+
+def _tile_reporting_upsampler_class(base: type) -> type:
+    # Subclass of realesrgan.RealESRGANer that emits a per-tile callback.
+    #
+    # Pinned against realesrgan==0.3.0. The override delegates to the upstream
+    # tile_process and only assumes:
+    #   - self.img.shape is (batch, channel, height, width)
+    #   - self.tile_size is the tile edge length
+    #   - the upstream loop calls self.model(input_tile) exactly once per tile
+    # If a future release breaks any of these, the override silently falls back
+    # to plain super().tile_process() and emits no per-tile events. The actual
+    # upscale always proceeds. Callback exceptions are swallowed.
+    class _TileReportingUpsampler(base):  # type: ignore[misc, valid-type]
+        def tile_process(self) -> Any:
+            callback: TileCallback | None = getattr(self, "_pixelup_on_tile", None)
+            if callback is None:
+                return super().tile_process()
+            try:
+                _, _, height, width = self.img.shape
+                tile_size = self.tile_size
+                total = math.ceil(width / tile_size) * math.ceil(height / tile_size)
+            except Exception:
+                return super().tile_process()
+
+            original_model = self.model
+            counter = [0]
+
+            def wrapped_model(*args: Any, **kwargs: Any) -> Any:
+                result = original_model(*args, **kwargs)
+                counter[0] += 1
+                try:
+                    callback(counter[0], total)
+                except Exception:
+                    pass
+                return result
+
+            self.model = wrapped_model
+            try:
+                return super().tile_process()
+            finally:
+                self.model = original_model
+
+    return _TileReportingUpsampler
 
 
 def _build_network(spec: ModelArchitectureSpec) -> Any:

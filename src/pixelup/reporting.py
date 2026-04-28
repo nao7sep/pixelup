@@ -111,11 +111,23 @@ class Reporter:
                 f"Model: {model} ({scale}x), tiles: {tiles}"
             )
 
-    def progress(self, *, phase: str) -> None:
+    def progress(
+        self,
+        *,
+        phase: str,
+        tile: int | None = None,
+        tiles: int | None = None,
+    ) -> None:
         if self.mode == ReportMode.STREAM:
-            self._json_line({"event": "progress", "phase": phase})
+            event: dict[str, Any] = {"event": "progress", "phase": phase}
+            if phase == "upscale" and tile is not None and tiles is not None:
+                event["tile"] = tile
+                event["tiles"] = tiles
+            self._json_line(event)
         elif self.mode == ReportMode.HUMAN and not self.quiet:
             label = phase.replace("_", " ")
+            if tile is not None and tiles is not None:
+                label = f"{label} (tile {tile}/{tiles})"
             if self.verbose:
                 now = time.perf_counter()
                 elapsed_ms = round((now - self._last_progress_time) * 1000)

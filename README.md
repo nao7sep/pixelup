@@ -193,6 +193,13 @@ The final stream line is always a `result` object. Instant commands such as
 `models dir` and `--version` intentionally produce the same single JSON object
 in `single` and `stream` modes.
 
+When `--tile` is greater than zero, PixelUp emits a best-effort `progress`
+event with `phase: "upscale"` and `tile`/`tiles` fields after each tile
+completes. This relies on the internal tile loop of the pinned `realesrgan`
+release; if a future version diverges, PixelUp silently falls back to a single
+per-phase `progress` event without affecting output correctness. With
+`--tile 0` (no tiling) only the per-phase `progress` event is emitted.
+
 ## Models
 
 Known public model names:

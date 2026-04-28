@@ -363,6 +363,9 @@ def _run_callbacks(reporter: Reporter) -> dict[str, object]:
             tiles=tiles,
         ),
         "on_progress": lambda phase: reporter.progress(phase=phase),
+        "on_tile": lambda tile, tiles: reporter.progress(
+            phase="upscale", tile=tile, tiles=tiles
+        ),
         "on_warning": reporter.warning,
     }
 
