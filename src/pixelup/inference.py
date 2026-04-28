@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,8 +15,8 @@ from pixelup.models import model_file
 ProgressCallback = Callable[[str], None]
 
 _INFERENCE_DEPS_HINT = (
-    "Install the PixelUp inference stack: torch, torchvision, realesrgan, "
-    "basicsr-fixed, opencv-python, and gfpgan when using --face-enhance."
+    "Install the PixelUp inference stack with 'pip install -e .[inference]' or "
+    "'uv sync --extra inference'."
 )
 
 
@@ -139,6 +140,7 @@ def _srvgg_spec(*, scale: int, num_conv: int) -> ModelArchitectureSpec:
 
 def _create_upsampler(config: InferenceConfig, *, torch_device: Any) -> Any:
     try:
+        _install_torchvision_functional_tensor_fallback()
         from realesrgan import RealESRGANer
     except ImportError as exc:
         raise _missing_inference_dependency("realesrgan", exc) from exc
@@ -170,6 +172,7 @@ def _create_upsampler(config: InferenceConfig, *, torch_device: Any) -> Any:
 def _build_network(spec: ModelArchitectureSpec) -> Any:
     if spec.kind == "rrdb":
         try:
+            _install_torchvision_functional_tensor_fallback()
             from basicsr.archs.rrdbnet_arch import RRDBNet
         except ImportError as exc:
             raise _missing_inference_dependency("basicsr-fixed", exc) from exc
@@ -179,7 +182,7 @@ def _build_network(spec: ModelArchitectureSpec) -> Any:
             from realesrgan.archs.srvgg_arch import SRVGGNetCompact
         except ImportError as exc:
             raise _missing_inference_dependency("realesrgan", exc) from exc
-        return SRVGGNetCompact(**spec.params)
+    return SRVGGNetCompact(**spec.params)
     raise PixelupError(
         ErrorCode.INTERNAL_ERROR,
         "Unsupported Real-ESRGAN model architecture.",
@@ -189,6 +192,7 @@ def _build_network(spec: ModelArchitectureSpec) -> Any:
 
 def _run_face_enhance(config: InferenceConfig, upsampler: Any, image: Any) -> Any:
     try:
+        _install_torchvision_functional_tensor_fallback()
         from gfpgan import GFPGANer
     except ImportError as exc:
         raise PixelupError(
@@ -309,6 +313,16 @@ def _missing_inference_dependency(package: str, exc: ImportError) -> PixelupErro
         hint=_INFERENCE_DEPS_HINT,
         details={"dependency": package, "reason": str(exc)},
     )
+
+
+def _install_torchvision_functional_tensor_fallback() -> None:
+    if "torchvision.transforms.functional_tensor" in sys.modules:
+        return
+    try:
+        from torchvision.transforms import functional
+    except ImportError:
+        return
+    sys.modules["torchvision.transforms.functional_tensor"] = functional
 
 
 def _is_out_of_memory(exc: RuntimeError) -> bool:

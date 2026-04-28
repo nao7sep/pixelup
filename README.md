@@ -3,7 +3,7 @@
 PixelUp is a Python CLI for upscaling one image file to one output file with
 Real-ESRGAN.
 
-This repository is currently at **phase 4** of the blueprint implementation:
+This repository is currently at **phase 5** of the blueprint implementation:
 
 - package metadata and `pixelup` console entry point
 - Typer-based CLI surface for the root command and `models` namespace
@@ -23,12 +23,39 @@ This repository is currently at **phase 4** of the blueprint implementation:
 - signal-aware cleanup for in-flight output temp files
 - ICC conversion for sRGB plus Display-P3/Adobe RGB when platform profiles are available
 - EXIF/XMP preservation unless `--strip-metadata` is set
+- pinned optional inference extra for the heavy ML stack
 
 Still pending for later phases:
 
-- pinned packaging for the heavy inference stack (`torch`, `torchvision`, `realesrgan`,
-  `basicsr-fixed`, `gfpgan`, and OpenCV)
+- real small-image inference verification in an environment with the ML stack installed
 - bundled cross-platform ICC profile resources for machines without ColorSync/system profiles
+
+## Installation
+
+For CLI validation, dry runs, model management, and image encoding:
+
+```console
+pip install -e .
+```
+
+For actual Real-ESRGAN/GFPGAN inference:
+
+```console
+pip install -e '.[inference]'
+```
+
+With uv:
+
+```console
+uv sync --extra inference
+```
+
+The `inference` extra pins `torch`, `torchvision`, `realesrgan`, `basicsr-fixed`,
+`gfpgan`, `opencv-python`, and `numpy` to exact versions. `basicsr-fixed` is kept
+as the primary BasicSR fork for the `torchvision.transforms.functional_tensor`
+compatibility issue; PixelUp also installs a runtime fallback alias before
+importing Real-ESRGAN/GFPGAN to handle environments where upstream dependency
+metadata pulls `basicsr`.
 
 ## Usage
 
