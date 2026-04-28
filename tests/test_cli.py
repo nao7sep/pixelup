@@ -28,10 +28,17 @@ def test_models_remove_all_removes_unlisted_companion_model(
 ) -> None:
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    public_model = models_dir / "realesr-general-x4v3.pth"
-    companion_model = models_dir / "realesr-general-wdn-x4v3.pth"
-    public_model.write_bytes(b"weights")
-    companion_model.write_bytes(b"weights")
+    files = {
+        "realesr-general-x4v3": models_dir / "realesr-general-x4v3.pth",
+        "realesr-general-wdn-x4v3": models_dir / "realesr-general-wdn-x4v3.pth",
+        "GFPGANv1.4": models_dir / "GFPGANv1.4.pth",
+        "facexlib-detection-retinaface-resnet50": models_dir / "detection_Resnet50_Final.pth",
+        "facexlib-parsing-parsenet": models_dir / "parsing_parsenet.pth",
+    }
+    unknown_file = models_dir / "custom.pth"
+    for path in files.values():
+        path.write_bytes(b"weights")
+    unknown_file.write_bytes(b"weights")
 
     models_remove(
         models=None,
@@ -41,9 +48,9 @@ def test_models_remove_all_removes_unlisted_companion_model(
     )
 
     output = json.loads(capsys.readouterr().out)
-    assert output["removed"] == ["realesr-general-x4v3", "realesr-general-wdn-x4v3"]
-    assert not public_model.exists()
-    assert not companion_model.exists()
+    assert output["removed"] == list(files)
+    assert all(not path.exists() for path in files.values())
+    assert unknown_file.is_file()
 
 
 def test_models_check_download_missing_without_names_targets_all_public_models(

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from filelock import FileLock
 
 from pixelup.errors import PixelupError
 from pixelup.models import (
@@ -59,14 +60,26 @@ def test_verify_model_file_rejects_wrong_size(tmp_path: Path) -> None:
     assert excinfo.value.code == "model_corrupt"
 
 
-def test_verify_present_models_includes_unlisted_companion_models(tmp_path: Path) -> None:
-    (tmp_path / "realesr-general-wdn-x4v3.pth").write_bytes(b"small")
+@pytest.mark.parametrize(
+    ("filename", "expected_name"),
+    [
+        ("realesr-general-wdn-x4v3.pth", "realesr-general-wdn-x4v3"),
+        ("detection_Resnet50_Final.pth", "facexlib-detection-retinaface-resnet50"),
+        ("parsing_parsenet.pth", "facexlib-parsing-parsenet"),
+    ],
+)
+def test_verify_present_models_includes_unlisted_companion_models(
+    tmp_path: Path,
+    filename: str,
+    expected_name: str,
+) -> None:
+    (tmp_path / filename).write_bytes(b"small")
 
     with pytest.raises(PixelupError) as excinfo:
         verify_present_models(tmp_path)
 
     assert excinfo.value.code == "model_corrupt"
-    assert excinfo.value.details["model"]["name"] == "realesr-general-wdn-x4v3"
+    assert excinfo.value.details["model"]["name"] == expected_name
 
 
 def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -> None:
@@ -119,3 +132,32 @@ def test_download_model_info_skips_valid_existing_file(tmp_path: Path) -> None:
 
     assert result["status"] == "present"
     assert target.read_bytes() == b"existing"
+
+
+def test_download_model_info_lock_timeout_leaves_existing_state(tmp_path: Path) -> None:
+    source = tmp_path / "source.pth"
+    source.write_bytes(b"downloaded weights")
+    models_dir = tmp_path / "models"
+    locks_dir = models_dir / ".locks"
+    locks_dir.mkdir(parents=True)
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        source.resolve().as_uri(),
+        expected_size=source.stat().st_size,
+    )
+
+    lock = FileLock(str(locks_dir / "local-model.lock"))
+    with lock.acquire(timeout=1):
+        with pytest.raises(PixelupError) as excinfo:
+            download_model_info(
+                models_dir,
+                info,
+                download_timeout=10,
+                lock_timeout=0,
+            )
+
+    assert excinfo.value.code == "model_download_failed"
+    assert excinfo.value.details == {"model": "local-model", "lock_timeout": 0}
+    assert not (models_dir / "local-model.pth").exists()
