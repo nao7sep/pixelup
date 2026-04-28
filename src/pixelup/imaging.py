@@ -270,8 +270,3 @@ def _profile_bytes(name: str) -> bytes:
             "Target ICC profile is not available.",
             details={"target_profile": name, "reason": str(exc)},
         ) from exc
-    raise PixelupError(
-        ErrorCode.INTERNAL_ERROR,
-        "Target ICC profile is not available.",
-        details={"target_profile": name},
-    )

@@ -13,7 +13,6 @@ from pixelup import __version__
 from pixelup.config import ensure_models_dir, resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError, exit_code_for
 from pixelup.models import (
-    KNOWN_MODELS,
     all_model_names,
     download_models,
     list_model_records,
@@ -185,16 +184,21 @@ def models_check(
     reporter = Reporter(report, quiet=quiet)
     try:
         if download_missing:
-            requested = models or [info.name for info in KNOWN_MODELS]
+            if not models:
+                raise PixelupError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    "Specify at least one model with --download-missing.",
+                    hint="Pass model names explicitly to avoid bulk downloads.",
+                )
             runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
             download_models(
                 runtime_dirs.models_dir,
-                requested,
+                models,
                 download_timeout=download_timeout,
                 lock_timeout=lock_timeout,
                 **_download_callbacks(reporter),
             )
-            records = list_model_records(runtime_dirs.models_dir, requested)
+            records = list_model_records(runtime_dirs.models_dir, models)
             _emit_models_records(reporter, runtime_dirs.models_dir, records)
             return
         runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
@@ -257,7 +261,7 @@ def models_remove(
             raise PixelupError(
                 ErrorCode.INVALID_ARGUMENT,
                 "Specify at least one model or use --all.",
-        )
+            )
         runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
         names = all_model_names(include_unlisted=True) if all_models else list(models or [])
         removed: list[str] = []
@@ -430,7 +434,7 @@ def _version_error(
     )
     reporter = Reporter(report, quiet=quiet)
     reporter.error(error)
-    raise typer.Exit(exit_code_for(error.code)) from cause or error
+    raise typer.Exit(exit_code_for(error.code)) from cause
 
 
 def _metadata_version(package: str) -> str:

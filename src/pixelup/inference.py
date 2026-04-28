@@ -271,7 +271,7 @@ def _read_input_image(path: Path) -> Any:
     register_image_plugins()
     try:
         with Image.open(path) as image:
-            if image.mode not in {"RGB", "RGBA", "L"}:
+            if image.mode not in {"RGB", "RGBA"}:
                 image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
             array = np.array(image)
     except UnidentifiedImageError as exc:
@@ -293,8 +293,6 @@ def _read_input_image(path: Path) -> Any:
             details={"input": str(path), "reason": str(exc)},
         ) from exc
 
-    if getattr(array, "ndim", 0) == 2:
-        return array
     channels = array.shape[2]
     if channels == 3:
         return array[:, :, ::-1].copy()

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import os
-import platform
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -135,7 +134,11 @@ def build_plan(
     validate_output_path(output_path, overwrite=options.overwrite)
     if check_model:
         for name in required_model_names(options):
-            require_model_present(runtime_dirs.models_dir, name)
+            require_model_present(
+                runtime_dirs.models_dir,
+                name,
+                auto_download_disabled=not options.auto_download,
+            )
     device = resolve_device(options.device, options.gpu_id)
     return UpscalePlan(
         input_path=input_path,
@@ -196,7 +199,11 @@ def run_upscale(
             )
     else:
         for name in required_model_names(options):
-            require_model_present(runtime_dirs.models_dir, name)
+            require_model_present(
+                runtime_dirs.models_dir,
+                name,
+                auto_download_disabled=True,
+            )
 
     output_array = run_inference(
         InferenceConfig(
@@ -361,12 +368,10 @@ def validate_output_path(path: Path, *, overwrite: bool) -> None:
 def resolve_device(device: str, gpu_id: int | None) -> str:
     if device != "auto":
         return device
-    if _is_apple_silicon():
+    import torch
+
+    if torch.backends.mps.is_available():
         return "mps"
-    if gpu_id is not None:
+    if gpu_id is not None and torch.cuda.is_available():
         return "cuda"
     return "cpu"
-
-
-def _is_apple_silicon() -> bool:
-    return platform.system() == "Darwin" and platform.machine() == "arm64"

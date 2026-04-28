@@ -92,7 +92,7 @@ def test_build_plan_directory_output_defaults_to_png(tmp_path: Path) -> None:
     assert plan.output_path == output_dir / "input__custom-model_4x__12px.png"
 
 
-def test_build_plan_rejects_missing_model(tmp_path: Path) -> None:
+def test_build_plan_rejects_missing_unknown_model(tmp_path: Path) -> None:
     input_path = tmp_path / "input.png"
     Image.new("RGB", (1, 1), "white").save(input_path)
     models_dir = tmp_path / "models"
@@ -102,7 +102,7 @@ def test_build_plan_rejects_missing_model(tmp_path: Path) -> None:
 
     with pytest.raises(PixelupError) as excinfo:
         build_plan(
-            options(input_path, str(tmp_path / "output.png")),
+            options(input_path, str(tmp_path / "output.png"), model="custom-model"),
             RuntimeDirs(models_dir, temp_dir),
         )
 
@@ -195,7 +195,7 @@ def test_dry_run_with_auto_download_reports_missing_models(tmp_path: Path) -> No
     assert result["models_present"] == {"RealESRGAN_x4plus": False}
 
 
-def test_dry_run_without_auto_download_errors_on_missing_model(tmp_path: Path) -> None:
+def test_dry_run_without_auto_download_errors_on_missing_known_model(tmp_path: Path) -> None:
     from pixelup.upscale import run_upscale
 
     input_path = tmp_path / "input.png"
@@ -208,6 +208,25 @@ def test_dry_run_without_auto_download_errors_on_missing_model(tmp_path: Path) -
     with pytest.raises(PixelupError) as excinfo:
         run_upscale(
             options(input_path, str(tmp_path / "output.png"), dry_run=True),
+            RuntimeDirs(models_dir, temp_dir),
+        )
+
+    assert excinfo.value.code == "auto_download_disabled"
+
+
+def test_dry_run_without_auto_download_errors_on_missing_unknown_model(tmp_path: Path) -> None:
+    from pixelup.upscale import run_upscale
+
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    Image.new("RGB", (1, 1), "white").save(input_path)
+
+    with pytest.raises(PixelupError) as excinfo:
+        run_upscale(
+            options(input_path, str(tmp_path / "output.png"), model="custom-model", dry_run=True),
             RuntimeDirs(models_dir, temp_dir),
         )
 
@@ -277,7 +296,7 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
     (models_dir / "RealESRGAN_x2plus.pth").write_bytes(b"weights")
     Image.new("RGB", (1, 1), "white").save(input_path)
     warnings: list[str] = []
-    monkeypatch.setattr(upscale_module, "require_model_present", lambda *args: None)
+    monkeypatch.setattr(upscale_module, "require_model_present", lambda *args, **kwargs: None)
 
     run_upscale(
         options(
@@ -297,16 +316,24 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
     ]
 
 
-def test_auto_device_detection_is_portable(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pixelup import upscale as upscale_module
+def test_auto_device_detection_uses_torch(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from types import ModuleType, SimpleNamespace
+
     from pixelup.upscale import resolve_device
 
-    monkeypatch.setattr(upscale_module.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(upscale_module.platform, "machine", lambda: "AMD64")
+    fake_torch = ModuleType("torch")
+    fake_torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False))
+    fake_torch.cuda = SimpleNamespace(is_available=lambda: False)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
     assert resolve_device("auto", None) == "cpu"
+    assert resolve_device("auto", 0) == "cpu"
 
-    monkeypatch.setattr(upscale_module.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(upscale_module.platform, "machine", lambda: "arm64")
+    fake_torch.cuda = SimpleNamespace(is_available=lambda: True)
+    assert resolve_device("auto", None) == "cpu"
+    assert resolve_device("auto", 0) == "cuda"
 
+    fake_torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True))
     assert resolve_device("auto", None) == "mps"
+    assert resolve_device("auto", 0) == "mps"

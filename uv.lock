@@ -1378,11 +1378,18 @@ name = "pixelup"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "basicsr-fixed" },
     { name = "filelock" },
+    { name = "gfpgan" },
+    { name = "numpy" },
+    { name = "opencv-python" },
     { name = "pillow" },
     { name = "pillow-heif" },
     { name = "platformdirs" },
+    { name = "realesrgan" },
     { name = "rich" },
+    { name = "torch" },
+    { name = "torchvision" },
     { name = "typer" },
 ]
 
@@ -1391,35 +1398,26 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
-inference = [
-    { name = "basicsr-fixed" },
-    { name = "gfpgan" },
-    { name = "numpy" },
-    { name = "opencv-python" },
-    { name = "realesrgan" },
-    { name = "torch" },
-    { name = "torchvision" },
-]
 
 [package.metadata]
 requires-dist = [
-    { name = "basicsr-fixed", marker = "extra == 'inference'", specifier = "==1.4.2" },
+    { name = "basicsr-fixed", specifier = "==1.4.2" },
     { name = "filelock", specifier = "==3.29.0" },
-    { name = "gfpgan", marker = "extra == 'inference'", specifier = "==1.3.8" },
-    { name = "numpy", marker = "extra == 'inference'", specifier = "==2.4.4" },
-    { name = "opencv-python", marker = "extra == 'inference'", specifier = "==4.13.0.92" },
+    { name = "gfpgan", specifier = "==1.3.8" },
+    { name = "numpy", specifier = "==2.4.4" },
+    { name = "opencv-python", specifier = "==4.13.0.92" },
     { name = "pillow", specifier = "==12.2.0" },
     { name = "pillow-heif", specifier = "==1.3.0" },
     { name = "platformdirs", specifier = "==4.9.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.0.3" },
-    { name = "realesrgan", marker = "extra == 'inference'", specifier = "==0.3.0" },
+    { name = "realesrgan", specifier = "==0.3.0" },
     { name = "rich", specifier = "==15.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.12" },
-    { name = "torch", marker = "extra == 'inference'", specifier = "==2.11.0" },
-    { name = "torchvision", marker = "extra == 'inference'", specifier = "==0.26.0" },
+    { name = "torch", specifier = "==2.11.0" },
+    { name = "torchvision", specifier = "==0.26.0" },
     { name = "typer", specifier = "==0.25.0" },
 ]
-provides-extras = ["inference", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "platformdirs"
