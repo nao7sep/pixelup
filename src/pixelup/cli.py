@@ -117,7 +117,7 @@ def upscale(
             lock_timeout=lock_timeout,
             dry_run=dry_run,
         )
-        reporter.result(run_upscale(options, runtime_dirs, **_download_callbacks(reporter)))
+        reporter.result(run_upscale(options, runtime_dirs, **_run_callbacks(reporter)))
     except PixelupError as exc:
         reporter.error(exc)
         raise typer.Exit(exit_code_for(exc.code)) from exc
@@ -321,6 +321,20 @@ def _download_callbacks(reporter: Reporter) -> dict[str, object]:
             model=model,
             seconds_waited=waited,
         ),
+    }
+
+
+def _run_callbacks(reporter: Reporter) -> dict[str, object]:
+    return {
+        **_download_callbacks(reporter),
+        "on_start": lambda plan, tiles: reporter.start(
+            input_path=str(plan.input_path),
+            output_path=str(plan.output_path),
+            model=plan.model,
+            scale=plan.scale,
+            tiles=tiles,
+        ),
+        "on_progress": lambda phase: reporter.progress(phase=phase),
     }
 
 

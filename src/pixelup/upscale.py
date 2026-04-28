@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import math
 import os
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from pixelup.config import RuntimeDirs
 from pixelup.errors import ErrorCode, PixelupError
-from pixelup.imaging import read_image_size
+from pixelup.imaging import (
+    image_from_bgr_array,
+    load_source_metadata,
+    read_image_size,
+    save_output_image,
+)
+from pixelup.inference import InferenceConfig, run_inference
 from pixelup.models import (
     DownloadCallback,
     WaitingCallback,
@@ -21,6 +30,9 @@ from pixelup.paths import (
     infer_output_format,
     resolve_output_path,
 )
+
+StartCallback = Callable[["UpscalePlan", int], None]
+ProgressCallback = Callable[[str], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +153,10 @@ def run_upscale(
     *,
     on_download: DownloadCallback | None = None,
     on_waiting: WaitingCallback | None = None,
+    on_start: StartCallback | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> dict[str, object]:
+    started = time.perf_counter()
     plan = build_plan(
         options,
         runtime_dirs,
@@ -151,6 +166,8 @@ def run_upscale(
         payload = plan.to_payload()
         payload["message"] = "Dry run plan is valid."
         return payload
+    if on_start:
+        on_start(plan, count_tiles(plan.input_size, options.tile))
     if options.auto_download:
         for name in required_model_names(options):
             if known_model(name) is None:
@@ -167,11 +184,49 @@ def run_upscale(
     else:
         for name in required_model_names(options):
             require_model_present(runtime_dirs.models_dir, name)
-    raise PixelupError(
-        ErrorCode.INTERNAL_ERROR,
-        "Real-ESRGAN inference is not implemented in this phase.",
-        hint="Use --dry-run in phase 1, or continue with the next implementation phase.",
+
+    output_array = run_inference(
+        InferenceConfig(
+            input_path=plan.input_path,
+            models_dir=runtime_dirs.models_dir,
+            model=options.model,
+            scale=options.scale,
+            tile=options.tile,
+            tile_pad=options.tile_pad,
+            pre_pad=options.pre_pad,
+            fp32=options.fp32,
+            face_enhance=options.face_enhance,
+            denoise_strength=options.denoise_strength,
+            alpha_mode=options.alpha_mode,
+            gpu_id=options.gpu_id,
+            device=plan.device,
+        ),
+        on_progress=on_progress,
     )
+    if on_progress:
+        on_progress("encode")
+    output_size = save_output_image(
+        image_from_bgr_array(output_array),
+        output_path=plan.output_path,
+        output_format=plan.output_format,
+        quality=options.quality,
+        background=options.background,
+        temp_dir=runtime_dirs.temp_dir,
+        source_metadata=load_source_metadata(plan.input_path),
+        strip_metadata=options.strip_metadata,
+        target_profile=options.target_profile,
+    )
+    return {
+        "ok": True,
+        "input": str(plan.input_path),
+        "output": str(plan.output_path),
+        "model": plan.model,
+        "scale": plan.scale,
+        "input_size": list(plan.input_size),
+        "output_size": list(output_size),
+        "format": plan.output_format.value,
+        "ms": round((time.perf_counter() - started) * 1000),
+    }
 
 
 def validate_options(options: UpscaleOptions) -> None:
@@ -224,6 +279,13 @@ def required_model_names(options: UpscaleOptions) -> list[str]:
     if options.face_enhance:
         names.append("GFPGANv1.4")
     return names
+
+
+def count_tiles(input_size: tuple[int, int], tile: int) -> int:
+    if tile <= 0:
+        return 1
+    width, height = input_size
+    return max(1, math.ceil(width / tile) * math.ceil(height / tile))
 
 
 def validate_output_path(path: Path, *, overwrite: bool) -> None:

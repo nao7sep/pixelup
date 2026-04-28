@@ -69,6 +69,33 @@ class Reporter:
             payload = {"event": "result", **payload}
         self.success(payload)
 
+    def start(
+        self,
+        *,
+        input_path: str,
+        output_path: str,
+        model: str,
+        scale: int,
+        tiles: int,
+    ) -> None:
+        if self.mode == ReportMode.STREAM:
+            self._json_line(
+                {
+                    "event": "start",
+                    "input": input_path,
+                    "output": output_path,
+                    "model": model,
+                    "scale": scale,
+                    "tiles": tiles,
+                }
+            )
+
+    def progress(self, *, phase: str) -> None:
+        if self.mode == ReportMode.STREAM:
+            self._json_line({"event": "progress", "phase": phase})
+        elif self.mode == ReportMode.HUMAN and not self.quiet:
+            self.console.print(f"{phase.replace('_', ' ')}...")
+
     def waiting(self, *, reason: str, model: str, seconds_waited: float) -> None:
         if self.mode == ReportMode.STREAM:
             self._json_line(

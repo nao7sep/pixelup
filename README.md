@@ -3,7 +3,7 @@
 PixelUp is a Python CLI for upscaling one image file to one output file with
 Real-ESRGAN.
 
-This repository is currently at **phase 2** of the blueprint implementation:
+This repository is currently at **phase 3** of the blueprint implementation:
 
 - package metadata and `pixelup` console entry point
 - Typer-based CLI surface for the root command and `models` namespace
@@ -16,12 +16,17 @@ This repository is currently at **phase 2** of the blueprint implementation:
 - per-model download locks under `<models-dir>/.locks/`
 - model download, check, remove, and verify command behavior
 - stream-mode `waiting` and `download` events for model setup
+- lazy Real-ESRGAN/GFPGAN inference bridge for environments with the ML stack installed
+- stream-mode `start` and phase `progress` events for upscale runs
+- output encoding for png, jpg, and webp
+- temp-file output writes followed by `os.replace`
 
 Still pending for later phases:
 
-- Real-ESRGAN and GFPGAN inference
-- ICC conversion, metadata handling, and final image encoding
-- atomic temp-file writes and signal cleanup
+- pinned packaging for the heavy inference stack (`torch`, `torchvision`, `realesrgan`,
+  `basicsr-fixed`, `gfpgan`, and OpenCV)
+- full ICC conversion and metadata handling for Display-P3 and Adobe RGB outputs
+- signal cleanup for in-flight temp files
 
 ## Usage
 
@@ -34,6 +39,6 @@ pixelup models dir --report single
 pixelup --version --report single
 ```
 
-The non-dry-run upscale path intentionally returns `internal_error` until the
-inference phase is implemented, after any requested `--auto-download` setup has
-completed.
+The non-dry-run upscale path now calls the inference bridge. If the optional ML
+packages are not installed, it returns `internal_error` with the missing
+dependency in `details`.
