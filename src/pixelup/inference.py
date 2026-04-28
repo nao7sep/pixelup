@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Callable, Mapping
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -103,7 +104,7 @@ def _run_inference(
     _emit(on_progress, "upscale")
     if config.face_enhance:
         _emit(on_progress, "face_enhance")
-        return _run_face_enhance(config, upsampler, image)
+        return _run_face_enhance(config, upsampler, image, torch_device=device)
     output, _ = upsampler.enhance(image, outscale=config.scale, alpha_upsampler=config.alpha_mode)
     return output
 
@@ -244,8 +245,17 @@ def _build_network(spec: ModelArchitectureSpec) -> Any:
     )
 
 
-def _run_face_enhance(config: InferenceConfig, upsampler: Any, image: Any) -> Any:
+def _run_face_enhance(
+    config: InferenceConfig,
+    upsampler: Any,
+    image: Any,
+    *,
+    torch_device: Any,
+) -> Any:
     try:
+        import gfpgan.utils as gfpgan_utils
+        from facexlib.utils.face_restoration_helper import FaceRestoreHelper
+
         from gfpgan import GFPGANer
     except ImportError as exc:
         raise PixelupError(
@@ -253,19 +263,36 @@ def _run_face_enhance(config: InferenceConfig, upsampler: Any, image: Any) -> An
             "GFPGAN is not installed.",
         ) from exc
 
-    face_enhancer = GFPGANer(
-        model_path=str(model_file(config.models_dir, "GFPGANv1.4")),
-        upscale=config.scale,
-        arch="clean",
-        channel_multiplier=2,
-        bg_upsampler=upsampler,
-    )
-    _, _, output = face_enhancer.enhance(
-        image,
-        has_aligned=False,
-        only_center_face=False,
-        paste_back=True,
-    )
+    class _PixelupFaceRestoreHelper(FaceRestoreHelper):  # type: ignore[misc, valid-type]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs["model_rootpath"] = str(config.models_dir)
+            super().__init__(*args, **kwargs)
+
+    original_helper = gfpgan_utils.FaceRestoreHelper
+    gfpgan_utils.FaceRestoreHelper = _PixelupFaceRestoreHelper
+    try:
+        with (
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+            warnings.catch_warnings(),
+        ):
+            warnings.simplefilter("ignore")
+            face_enhancer = GFPGANer(
+                model_path=str(model_file(config.models_dir, "GFPGANv1.4")),
+                upscale=config.scale,
+                arch="clean",
+                channel_multiplier=2,
+                bg_upsampler=upsampler,
+                device=torch_device,
+            )
+            _, _, output = face_enhancer.enhance(
+                image,
+                has_aligned=False,
+                only_center_face=False,
+                paste_back=True,
+            )
+    finally:
+        gfpgan_utils.FaceRestoreHelper = original_helper
     return output
 
 

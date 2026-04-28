@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -144,3 +145,75 @@ def test_build_network_rejects_unknown_architecture() -> None:
 
     assert excinfo.value.code == "internal_error"
     assert excinfo.value.details == {"kind": "custom"}
+
+
+def test_face_enhance_uses_models_dir_for_helper_models_and_suppresses_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from pixelup.inference import InferenceConfig, _run_face_enhance
+
+    helper_roots: list[str] = []
+    devices: list[object] = []
+
+    class FakeFaceRestoreHelper:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            helper_roots.append(str(kwargs["model_rootpath"]))
+            print("helper stdout leak")
+
+    class FakeGFPGANer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            import gfpgan.utils as gfpgan_utils
+
+            devices.append(kwargs["device"])
+            gfpgan_utils.FaceRestoreHelper(model_rootpath="gfpgan/weights")
+            print("init stdout leak")
+
+        def enhance(self, *args: object, **kwargs: object) -> tuple[None, None, str]:
+            print("enhance stdout leak")
+            return None, None, "enhanced"
+
+    gfpgan_module = ModuleType("gfpgan")
+    gfpgan_utils_module = ModuleType("gfpgan.utils")
+    facexlib_module = ModuleType("facexlib")
+    facexlib_utils_module = ModuleType("facexlib.utils")
+    face_helper_module = ModuleType("facexlib.utils.face_restoration_helper")
+    gfpgan_module.GFPGANer = FakeGFPGANer
+    gfpgan_module.utils = gfpgan_utils_module
+    gfpgan_utils_module.FaceRestoreHelper = FakeFaceRestoreHelper
+    face_helper_module.FaceRestoreHelper = FakeFaceRestoreHelper
+
+    monkeypatch.setitem(sys.modules, "gfpgan", gfpgan_module)
+    monkeypatch.setitem(sys.modules, "gfpgan.utils", gfpgan_utils_module)
+    monkeypatch.setitem(sys.modules, "facexlib", facexlib_module)
+    monkeypatch.setitem(sys.modules, "facexlib.utils", facexlib_utils_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "facexlib.utils.face_restoration_helper",
+        face_helper_module,
+    )
+
+    config = InferenceConfig(
+        input_path=tmp_path / "input.png",
+        models_dir=tmp_path / "models",
+        model="realesr-general-x4v3",
+        scale=4,
+        tile=0,
+        tile_pad=10,
+        pre_pad=0,
+        fp32=False,
+        face_enhance=True,
+        denoise_strength=1.0,
+        alpha_mode="realesrgan",
+        gpu_id=None,
+        device="cpu",
+    )
+
+    result = _run_face_enhance(config, object(), object(), torch_device="pixelup-device")
+
+    assert result == "enhanced"
+    assert helper_roots == [str(tmp_path / "models")]
+    assert devices == ["pixelup-device"]
+    assert gfpgan_utils_module.FaceRestoreHelper is FakeFaceRestoreHelper
+    assert capsys.readouterr().out == ""

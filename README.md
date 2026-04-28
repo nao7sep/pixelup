@@ -294,9 +294,22 @@ realesr-general-x4v3
 GFPGANv1.4
 ```
 
-The denoise companion model `realesr-general-wdn-x4v3` is recognized but hidden
-from the default list. It is used when `--model realesr-general-x4v3` and
+Hidden companion models are recognized but omitted from the default list:
+
+```text
+realesr-general-wdn-x4v3
+facexlib-detection-retinaface-resnet50
+facexlib-parsing-parsenet
+```
+
+`realesr-general-wdn-x4v3` is used when `--model realesr-general-x4v3` and
 `--denoise-strength` is not `1.0`.
+
+`--face-enhance` requires `GFPGANv1.4` plus the two hidden facexlib helper
+models. PixelUp stores all three in the active models directory and validates
+them as part of dry-run and real upscale planning. A real run with
+`--face-enhance --auto-download` downloads all missing face-enhancement weights;
+dry-run never downloads them.
 
 Model commands:
 
@@ -318,8 +331,9 @@ it downloads every missing public known model.
 when available, checksum. It fails fast on the first corrupt model and reports
 that mismatch as `model_corrupt`.
 
-`models remove --all` removes all recognized model files, including the hidden
-denoise companion model. Unknown files in the models directory are left alone.
+`models remove --all` removes all recognized model files, including hidden
+denoise and face-enhancement helper models. Unknown files in the models
+directory are left alone.
 
 ## Runtime Directories
 

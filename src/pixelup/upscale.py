@@ -287,7 +287,13 @@ def required_model_names(options: UpscaleOptions) -> list[str]:
     if options.model == "realesr-general-x4v3" and options.denoise_strength != 1.0:
         names.append("realesr-general-wdn-x4v3")
     if options.face_enhance:
-        names.append("GFPGANv1.4")
+        names.extend(
+            [
+                "GFPGANv1.4",
+                "facexlib-detection-retinaface-resnet50",
+                "facexlib-parsing-parsenet",
+            ]
+        )
     return names
 
 

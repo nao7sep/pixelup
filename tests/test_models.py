@@ -24,6 +24,8 @@ def test_model_short_aliases() -> None:
 def test_all_model_names_can_include_unlisted_companion_models() -> None:
     assert "realesr-general-wdn-x4v3" not in all_model_names()
     assert "realesr-general-wdn-x4v3" in all_model_names(include_unlisted=True)
+    assert "facexlib-detection-retinaface-resnet50" in all_model_names(include_unlisted=True)
+    assert "facexlib-parsing-parsenet" in all_model_names(include_unlisted=True)
 
 
 def test_model_records_report_presence(tmp_path: Path) -> None:

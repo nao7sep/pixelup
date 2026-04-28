@@ -20,6 +20,7 @@ WaitingCallback = Callable[[str, float], None]
 
 REAL_ESRGAN_RELEASES = "https://github.com/xinntao/Real-ESRGAN/releases/download"
 GFPGAN_RELEASES = "https://github.com/TencentARC/GFPGAN/releases/download"
+FACEXLIB_RELEASES = "https://github.com/xinntao/facexlib/releases/download"
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 DOWNLOAD_REPORT_BYTES = 5 * 1024 * 1024
 
@@ -92,6 +93,22 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "GFPGANv1.4.pth",
         f"{GFPGAN_RELEASES}/v1.3.4/GFPGANv1.4.pth",
         348632874,
+    ),
+    ModelInfo(
+        "facexlib-detection-retinaface-resnet50",
+        None,
+        "detection_Resnet50_Final.pth",
+        f"{FACEXLIB_RELEASES}/v0.1.0/detection_Resnet50_Final.pth",
+        109497761,
+        listed=False,
+    ),
+    ModelInfo(
+        "facexlib-parsing-parsenet",
+        None,
+        "parsing_parsenet.pth",
+        f"{FACEXLIB_RELEASES}/v0.2.2/parsing_parsenet.pth",
+        85331193,
+        listed=False,
     ),
 )
 
