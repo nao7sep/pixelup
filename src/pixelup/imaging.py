@@ -130,7 +130,7 @@ def save_output_image(
         strip_metadata=strip_metadata,
         target_profile=target_profile,
     )
-    temp_path = _temp_output_path(temp_dir, output_format)
+    temp_path = _temp_output_path(temp_dir)
     try:
         with temp_file_guard(temp_path):
             encoded.save(temp_path, **save_kwargs)
@@ -246,9 +246,8 @@ def _save_kwargs(
     return kwargs
 
 
-def _temp_output_path(temp_dir: Path, output_format: OutputFormat) -> Path:
-    extension = "jpg" if output_format == OutputFormat.JPG else output_format.value
-    return temp_dir / f"pixelup-{os.getpid()}-{uuid4().hex}.{extension}"
+def _temp_output_path(temp_dir: Path) -> Path:
+    return temp_dir / f"pixelup-{os.getpid()}-{uuid4().hex}.tmp"
 
 
 def _source_profile_bytes(source_metadata: SourceMetadata | None) -> bytes:

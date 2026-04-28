@@ -88,7 +88,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
     ),
     ModelInfo(
         "GFPGANv1.4",
-        "face",
+        "gfpgan",
         "GFPGANv1.4.pth",
         f"{GFPGAN_RELEASES}/v1.3.4/GFPGANv1.4.pth",
         348632874,

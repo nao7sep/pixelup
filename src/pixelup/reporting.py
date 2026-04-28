@@ -56,7 +56,12 @@ class Reporter:
     def success(self, payload: dict[str, Any]) -> None:
         if self.mode == ReportMode.HUMAN:
             if not self.quiet:
-                self.console.print(payload.get("message", "OK"))
+                if "message" in payload:
+                    self.console.print(payload["message"])
+                elif "output" in payload:
+                    self.console.print(f"Wrote {payload['output']}")
+                else:
+                    self.console.print("OK")
                 if self.verbose and "ms" in payload:
                     self.console.print(f"Completed in {payload['ms']} ms")
             return

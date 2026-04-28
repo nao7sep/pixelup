@@ -259,14 +259,14 @@ def models_remove(
                 "Specify at least one model or use --all.",
         )
         runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
-        ensure_models_dir(runtime_dirs.models_dir)
         names = all_model_names(include_unlisted=True) if all_models else list(models or [])
         removed: list[str] = []
-        for name in names:
-            path = model_file(runtime_dirs.models_dir, name)
-            if path.is_file():
-                path.unlink()
-                removed.append(name)
+        if runtime_dirs.models_dir.is_dir():
+            for name in names:
+                path = model_file(runtime_dirs.models_dir, name)
+                if path.is_file():
+                    path.unlink()
+                    removed.append(name)
         payload = {"ok": True, "models_dir": str(runtime_dirs.models_dir), "removed": removed}
         reporter.result(payload)
     except PixelupError as exc:

@@ -22,6 +22,7 @@ from pixelup.models import (
     WaitingCallback,
     download_model,
     known_model,
+    model_present,
     require_model_present,
 )
 from pixelup.paths import (
@@ -163,7 +164,7 @@ def run_upscale(
     plan = build_plan(
         options,
         runtime_dirs,
-        check_model=options.dry_run or not options.auto_download,
+        check_model=not options.auto_download,
     )
     for warning in plan_warnings(options, plan):
         if on_warning:
@@ -171,6 +172,10 @@ def run_upscale(
     if options.dry_run:
         payload = plan.to_payload()
         payload["message"] = "Dry run plan is valid."
+        payload["models_present"] = {
+            name: model_present(runtime_dirs.models_dir, name)
+            for name in required_model_names(options)
+        }
         return payload
     if on_start:
         on_start(plan, count_tiles(plan.input_size, options.tile))

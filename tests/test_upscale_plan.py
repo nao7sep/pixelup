@@ -151,6 +151,88 @@ def test_run_upscale_calls_inference_and_writes_output(
     assert ("progress", "encode") in events
 
 
+def test_dry_run_with_auto_download_reports_missing_models(tmp_path: Path) -> None:
+    from pixelup.upscale import run_upscale
+
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    Image.new("RGB", (1, 1), "white").save(input_path)
+
+    result = run_upscale(
+        UpscaleOptions(
+            input_path=input_path,
+            output_arg=str(tmp_path / "output.png"),
+            model="RealESRGAN_x4plus",
+            scale=4,
+            tile=0,
+            tile_pad=10,
+            pre_pad=0,
+            fp32=False,
+            face_enhance=False,
+            denoise_strength=1.0,
+            alpha_mode="realesrgan",
+            gpu_id=None,
+            device="cpu",
+            output_format=OutputFormat.PNG,
+            quality=95,
+            background="white",
+            strip_metadata=False,
+            target_profile=None,
+            overwrite=False,
+            auto_download=True,
+            download_timeout=600,
+            lock_timeout=600,
+            dry_run=True,
+        ),
+        RuntimeDirs(models_dir, temp_dir),
+    )
+
+    assert result["ok"] is True
+    assert result["dry_run"] is True
+    assert result["models_present"] == {"RealESRGAN_x4plus": False}
+
+
+def test_dry_run_without_auto_download_errors_on_missing_model(tmp_path: Path) -> None:
+    from pixelup.upscale import run_upscale
+
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    Image.new("RGB", (1, 1), "white").save(input_path)
+
+    with pytest.raises(PixelupError) as excinfo:
+        run_upscale(
+            options(input_path, str(tmp_path / "output.png"), dry_run=True),
+            RuntimeDirs(models_dir, temp_dir),
+        )
+
+    assert excinfo.value.code == "model_not_found"
+
+
+def test_dry_run_reports_models_present_when_present(tmp_path: Path) -> None:
+    from pixelup.upscale import run_upscale
+
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    Image.new("RGB", (1, 1), "white").save(input_path)
+
+    result = run_upscale(
+        options(input_path, str(tmp_path / "output.png"), model="custom-model", dry_run=True),
+        RuntimeDirs(models_dir, temp_dir),
+    )
+
+    assert result["models_present"] == {"custom-model": True}
+
+
 def test_run_upscale_warns_for_forced_format_extension_mismatch(tmp_path: Path) -> None:
     from pixelup.upscale import run_upscale
 
