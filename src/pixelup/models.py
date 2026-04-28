@@ -104,6 +104,11 @@ def model_short_name(name: str) -> str:
     return _ALIAS_BY_NAME.get(name, name)
 
 
+def all_model_names(*, include_unlisted: bool = False) -> list[str]:
+    models = ALL_MODELS if include_unlisted else KNOWN_MODELS
+    return [model.name for model in models]
+
+
 def known_model(name: str) -> ModelInfo | None:
     return _MODEL_BY_NAME.get(name)
 
@@ -283,7 +288,7 @@ def download_model_info(
 
 def verify_present_models(models_dir: Path) -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
-    for info in KNOWN_MODELS:
+    for info in ALL_MODELS:
         path = models_dir / info.filename
         if not path.is_file():
             continue

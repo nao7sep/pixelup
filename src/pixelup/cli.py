@@ -13,6 +13,7 @@ from pixelup.config import ensure_models_dir, resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError, exit_code_for
 from pixelup.models import (
     KNOWN_MODELS,
+    all_model_names,
     download_models,
     list_model_records,
     model_file,
@@ -234,10 +235,10 @@ def models_remove(
             raise PixelupError(
                 ErrorCode.INVALID_ARGUMENT,
                 "Specify at least one model or use --all.",
-            )
+        )
         runtime_dirs = resolve_runtime_dirs(models_dir=models_dir)
         ensure_models_dir(runtime_dirs.models_dir)
-        names = [info.name for info in KNOWN_MODELS] if all_models else list(models or [])
+        names = all_model_names(include_unlisted=True) if all_models else list(models or [])
         removed: list[str] = []
         for name in names:
             path = model_file(runtime_dirs.models_dir, name)
