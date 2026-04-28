@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -25,6 +26,24 @@ from pixelup.signals import CANCELLED_EXIT_CODE, OperationCancelled, cancellatio
 from pixelup.upscale import UpscaleOptions, run_upscale
 
 HELP_OPTIONS = {"help_option_names": ["--help", "-h"]}
+
+
+class AlphaMode(StrEnum):
+    REALESRGAN = "realesrgan"
+    BICUBIC = "bicubic"
+
+
+class DeviceMode(StrEnum):
+    AUTO = "auto"
+    MPS = "mps"
+    CUDA = "cuda"
+    CPU = "cpu"
+
+
+class TargetProfile(StrEnum):
+    SRGB = "srgb"
+    P3 = "p3"
+    ADOBERGB = "adobergb"
 
 root_app = typer.Typer(
     add_completion=True,
@@ -58,7 +77,7 @@ def main(argv: list[str] | None = None) -> None:
     upscale_app(args=args, prog_name="pixelup")
 
 
-@upscale_app.command()
+@upscale_app.command(help="Upscale one image file to one output file.")
 def upscale(
     input_path: Annotated[Path, typer.Argument(help="Input image path.")],
     output: Annotated[str, typer.Argument(help="Output file, directory, or placeholder path.")],
@@ -70,14 +89,14 @@ def upscale(
     fp32: Annotated[bool, typer.Option("--fp32")] = False,
     face_enhance: Annotated[bool, typer.Option("--face-enhance")] = False,
     denoise_strength: Annotated[float, typer.Option("--denoise-strength")] = 1.0,
-    alpha_mode: Annotated[str, typer.Option("--alpha-mode")] = "realesrgan",
+    alpha_mode: Annotated[AlphaMode, typer.Option("--alpha-mode")] = AlphaMode.REALESRGAN,
     gpu_id: Annotated[int | None, typer.Option("--gpu-id")] = None,
-    device: Annotated[str, typer.Option("--device")] = "auto",
+    device: Annotated[DeviceMode, typer.Option("--device")] = DeviceMode.AUTO,
     output_format: Annotated[OutputFormat | None, typer.Option("--format")] = None,
     quality: Annotated[int, typer.Option("--quality")] = 95,
     background: Annotated[str, typer.Option("--background")] = "white",
     strip_metadata: Annotated[bool, typer.Option("--strip-metadata")] = False,
-    target_profile: Annotated[str | None, typer.Option("--target-profile")] = None,
+    target_profile: Annotated[TargetProfile | None, typer.Option("--target-profile")] = None,
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
     auto_download: Annotated[bool, typer.Option("--auto-download")] = False,
     models_dir: Annotated[Path | None, typer.Option("--models-dir")] = None,
@@ -109,14 +128,14 @@ def upscale(
                 fp32=fp32,
                 face_enhance=face_enhance,
                 denoise_strength=denoise_strength,
-                alpha_mode=alpha_mode,
+                alpha_mode=alpha_mode.value,
                 gpu_id=gpu_id,
-                device=device,
+                device=device.value,
                 output_format=output_format,
                 quality=quality,
                 background=background,
                 strip_metadata=strip_metadata,
-                target_profile=target_profile,
+                target_profile=target_profile.value if target_profile else None,
                 overwrite=overwrite,
                 auto_download=auto_download,
                 download_timeout=download_timeout,
@@ -132,7 +151,7 @@ def upscale(
         raise typer.Exit(exit_code_for(exc.code)) from exc
 
 
-@models_app.command("list")
+@models_app.command("list", help="List known model files and presence status.")
 def models_list(
     report: Annotated[ReportMode, typer.Option("--report")] = ReportMode.AUTO,
     models_dir: Annotated[Path | None, typer.Option("--models-dir")] = None,
@@ -151,7 +170,7 @@ def models_list(
         raise typer.Exit(exit_code_for(exc.code)) from exc
 
 
-@models_app.command("check")
+@models_app.command("check", help="Check model presence, optionally downloading missing models.")
 def models_check(
     models: Annotated[list[str] | None, typer.Argument()] = None,
     download_missing: Annotated[bool, typer.Option("--download-missing")] = False,
@@ -187,7 +206,7 @@ def models_check(
         raise typer.Exit(exit_code_for(exc.code)) from exc
 
 
-@models_app.command("download")
+@models_app.command("download", help="Download known model files.")
 def models_download(
     models: Annotated[list[str], typer.Argument()],
     report: Annotated[ReportMode, typer.Option("--report")] = ReportMode.AUTO,
@@ -222,7 +241,7 @@ def models_download(
         raise typer.Exit(exit_code_for(exc.code)) from exc
 
 
-@models_app.command("remove")
+@models_app.command("remove", help="Remove model files from the models directory.")
 def models_remove(
     models: Annotated[list[str] | None, typer.Argument()] = None,
     all_models: Annotated[bool, typer.Option("--all")] = False,
@@ -255,7 +274,7 @@ def models_remove(
         raise typer.Exit(exit_code_for(exc.code)) from exc
 
 
-@models_app.command("verify")
+@models_app.command("verify", help="Verify present model file sizes and checksums.")
 def models_verify(
     report: Annotated[ReportMode, typer.Option("--report")] = ReportMode.AUTO,
     models_dir: Annotated[Path | None, typer.Option("--models-dir")] = None,
@@ -278,7 +297,7 @@ def models_verify(
         raise typer.Exit(exit_code_for(exc.code)) from exc
 
 
-@models_app.command("dir")
+@models_app.command("dir", help="Print the resolved models directory.")
 def models_dir_command(
     report: Annotated[ReportMode, typer.Option("--report")] = ReportMode.AUTO,
     models_dir: Annotated[Path | None, typer.Option("--models-dir")] = None,
