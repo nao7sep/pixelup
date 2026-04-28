@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from enum import StrEnum
 from typing import Any, TextIO
 
@@ -24,14 +25,17 @@ class Reporter:
         mode: ReportMode,
         *,
         quiet: bool = False,
+        verbose: bool = False,
         stdout: TextIO | None = None,
         stderr: TextIO | None = None,
     ) -> None:
         self.mode = resolve_report_mode(mode, stdout=stdout)
         self.quiet = quiet
+        self.verbose = verbose
         self.stdout = stdout or sys.stdout
         self.stderr = stderr or sys.stderr
         self.console = Console(file=self.stderr, stderr=True, highlight=False)
+        self._last_progress_time = time.perf_counter()
 
     @property
     def is_human(self) -> bool:
@@ -53,6 +57,8 @@ class Reporter:
         if self.mode == ReportMode.HUMAN:
             if not self.quiet:
                 self.console.print(payload.get("message", "OK"))
+                if self.verbose and "ms" in payload:
+                    self.console.print(f"Completed in {payload['ms']} ms")
             return
         self._json_line(payload)
 
@@ -93,12 +99,25 @@ class Reporter:
                     "tiles": tiles,
                 }
             )
+        elif self.mode == ReportMode.HUMAN and self.verbose and not self.quiet:
+            self.console.print(
+                f"Input: {input_path}\n"
+                f"Output: {output_path}\n"
+                f"Model: {model} ({scale}x), tiles: {tiles}"
+            )
 
     def progress(self, *, phase: str) -> None:
         if self.mode == ReportMode.STREAM:
             self._json_line({"event": "progress", "phase": phase})
         elif self.mode == ReportMode.HUMAN and not self.quiet:
-            self.console.print(f"{phase.replace('_', ' ')}...")
+            label = phase.replace("_", " ")
+            if self.verbose:
+                now = time.perf_counter()
+                elapsed_ms = round((now - self._last_progress_time) * 1000)
+                self._last_progress_time = now
+                self.console.print(f"{label}... (+{elapsed_ms} ms)")
+            else:
+                self.console.print(f"{label}...")
 
     def waiting(self, *, reason: str, model: str, seconds_waited: float) -> None:
         if self.mode == ReportMode.STREAM:

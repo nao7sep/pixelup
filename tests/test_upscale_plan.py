@@ -67,6 +67,31 @@ def test_build_plan_validates_input_output_and_model(tmp_path: Path) -> None:
     assert plan.model == "custom-model"
 
 
+def test_build_plan_directory_output_defaults_to_png(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    output_dir = tmp_path / "out"
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    output_dir.mkdir()
+    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    Image.new("RGB", (3, 2), "white").save(input_path)
+
+    plan = build_plan(
+        options(
+            input_path,
+            str(output_dir),
+            model="custom-model",
+            output_format=None,
+        ),
+        RuntimeDirs(models_dir, temp_dir),
+    )
+
+    assert plan.output_format == OutputFormat.PNG
+    assert plan.output_path == output_dir / "input__custom-model_4x__12px.png"
+
+
 def test_build_plan_rejects_missing_model(tmp_path: Path) -> None:
     input_path = tmp_path / "input.png"
     Image.new("RGB", (1, 1), "white").save(input_path)
@@ -188,3 +213,18 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
         "Model 'RealESRGAN_x2plus' is trained for 2x, but --scale is 4x; "
         "Real-ESRGAN will rescale the output."
     ]
+
+
+def test_auto_device_detection_is_portable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixelup import upscale as upscale_module
+    from pixelup.upscale import resolve_device
+
+    monkeypatch.setattr(upscale_module.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(upscale_module.platform, "machine", lambda: "AMD64")
+
+    assert resolve_device("auto", None) == "cpu"
+
+    monkeypatch.setattr(upscale_module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(upscale_module.platform, "machine", lambda: "arm64")
+
+    assert resolve_device("auto", None) == "mps"

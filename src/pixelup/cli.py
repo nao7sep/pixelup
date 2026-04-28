@@ -44,7 +44,10 @@ root_app.add_typer(models_app, name="models")
 def main(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "--version":
-        _version_command(args[1:])
+        try:
+            _version_command(args[1:])
+        except typer.Exit as exc:
+            raise SystemExit(exc.exit_code) from None
         return
     if not args or args[0] in {"--help", "-h", "--install-completion", "--show-completion"}:
         root_app(args=args, prog_name="pixelup")
@@ -86,7 +89,7 @@ def upscale(
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
-    reporter = Reporter(report, quiet=quiet)
+    reporter = Reporter(report, quiet=quiet, verbose=verbose)
     try:
         if quiet and verbose:
             raise PixelupError(
@@ -350,19 +353,29 @@ def _version_command(args: list[str]) -> None:
     quiet = False
     while args:
         token = args.pop(0)
-        if token == "--report" and args:
-            report = ReportMode(args.pop(0))
+        if token == "--report":
+            if not args:
+                _version_error(report, quiet, "Missing value for --report.", {"option": token})
+            raw_report = args.pop(0)
+            try:
+                report = ReportMode(raw_report)
+            except ValueError as exc:
+                _version_error(
+                    report,
+                    quiet,
+                    "--report must be one of 'auto', 'human', 'single', or 'stream'.",
+                    {"report": raw_report},
+                    exc,
+                )
         elif token == "--quiet":
             quiet = True
         else:
-            error = PixelupError(
-                ErrorCode.INVALID_ARGUMENT,
+            _version_error(
+                report,
+                quiet,
                 "Unsupported --version option.",
-                details={"option": token},
+                {"option": token},
             )
-            reporter = Reporter(report, quiet=quiet)
-            reporter.error(error)
-            raise typer.Exit(exit_code_for(error.code)) from error
     reporter = Reporter(report, quiet=quiet)
     payload = {
         "ok": True,
@@ -379,6 +392,23 @@ def _version_command(args: list[str]) -> None:
         )
     else:
         reporter.success(payload)
+
+
+def _version_error(
+    report: ReportMode,
+    quiet: bool,
+    message: str,
+    details: dict[str, object],
+    cause: Exception | None = None,
+) -> None:
+    error = PixelupError(
+        ErrorCode.INVALID_ARGUMENT,
+        message,
+        details=details,
+    )
+    reporter = Reporter(report, quiet=quiet)
+    reporter.error(error)
+    raise typer.Exit(exit_code_for(error.code)) from cause or error
 
 
 def _metadata_version(package: str) -> str:

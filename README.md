@@ -3,7 +3,7 @@
 PixelUp is a Python CLI for upscaling one image file to one output file with
 Real-ESRGAN.
 
-This repository is currently at **phase 9** of the blueprint implementation:
+Current blueprint coverage:
 
 - package metadata and `pixelup` console entry point
 - Typer-based CLI surface for the root command and `models` namespace
@@ -28,6 +28,9 @@ This repository is currently at **phase 9** of the blueprint implementation:
 - opt-in real small-image inference smoke coverage
 - human-mode warnings for forced format/extension and model scale mismatches
 - model verify/remove coverage for unlisted companion model weights
+- directory and `{ext}` placeholder outputs default to PNG when no format is forced
+- portable device auto-detection and hardened `--version` reporting
+- human `--verbose` output with start context and elapsed stage timing
 
 ## Installation
 

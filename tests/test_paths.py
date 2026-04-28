@@ -3,7 +3,13 @@ from pathlib import Path
 import pytest
 
 from pixelup.errors import PixelupError
-from pixelup.paths import OutputContext, OutputFormat, RunTimestamp, resolve_output_path
+from pixelup.paths import (
+    OutputContext,
+    OutputFormat,
+    RunTimestamp,
+    infer_output_format,
+    resolve_output_path,
+)
 
 
 def context(output_arg: str, *, face: bool = False, denoise: float = 1.0) -> OutputContext:
@@ -51,3 +57,11 @@ def test_unknown_placeholder_is_invalid() -> None:
         resolve_output_path(context("/tmp/{stem}_{unknown}.{ext}"))
 
     assert excinfo.value.code == "invalid_argument"
+
+
+def test_directory_output_defaults_to_png_when_format_is_unset(tmp_path: Path) -> None:
+    assert infer_output_format(str(tmp_path), None) == OutputFormat.PNG
+
+
+def test_ext_placeholder_defaults_to_png_when_format_is_unset() -> None:
+    assert infer_output_format("/tmp/{stem}.{ext}", None) == OutputFormat.PNG

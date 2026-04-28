@@ -68,7 +68,12 @@ def resolve_output_path(context: OutputContext) -> Path:
 def infer_output_format(output_arg: str, forced: OutputFormat | None) -> OutputFormat:
     if forced is not None:
         return forced
+    output = Path(output_arg).expanduser()
+    if _is_directory_output(output_arg, output):
+        return OutputFormat.PNG
     suffix = Path(output_arg).suffix.lower().lstrip(".")
+    if suffix == "{ext}":
+        return OutputFormat.PNG
     if suffix == "jpeg":
         suffix = "jpg"
     try:
@@ -149,4 +154,3 @@ def _remove_empty_placeholder(text: str, start: int, end: int) -> tuple[str, int
 
 def _is_directory_output(raw: str, path: Path) -> bool:
     return raw.endswith(("/", "\\")) or path.is_dir()
-

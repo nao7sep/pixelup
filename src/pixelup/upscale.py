@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import platform
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -360,4 +361,4 @@ def resolve_device(device: str, gpu_id: int | None) -> str:
 
 
 def _is_apple_silicon() -> bool:
-    return os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
+    return platform.system() == "Darwin" and platform.machine() == "arm64"
