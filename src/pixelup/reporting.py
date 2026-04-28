@@ -41,6 +41,10 @@ class Reporter:
         if self.mode == ReportMode.HUMAN and not self.quiet:
             self.console.print(message)
 
+    def warning(self, message: str) -> None:
+        if self.mode == ReportMode.HUMAN and not self.quiet:
+            self.console.print(f"Warning: {message}")
+
     def table(self, table: Table) -> None:
         if self.mode == ReportMode.HUMAN and not self.quiet:
             self.console.print(table)

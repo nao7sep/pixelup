@@ -16,12 +16,14 @@ def options(
     model: str = "RealESRGAN_x4plus",
     dry_run: bool = True,
     tile: int = 0,
+    scale: int = 4,
+    output_format: OutputFormat | None = OutputFormat.PNG,
 ) -> UpscaleOptions:
     return UpscaleOptions(
         input_path=input_path,
         output_arg=output_arg,
         model=model,
-        scale=4,
+        scale=scale,
         tile=tile,
         tile_pad=10,
         pre_pad=0,
@@ -31,7 +33,7 @@ def options(
         alpha_mode="realesrgan",
         gpu_id=None,
         device="cpu",
-        output_format=OutputFormat.PNG,
+        output_format=output_format,
         quality=95,
         background="white",
         strip_metadata=False,
@@ -122,3 +124,67 @@ def test_run_upscale_calls_inference_and_writes_output(
     assert output_path.is_file()
     assert ("start", 4) in events
     assert ("progress", "encode") in events
+
+
+def test_run_upscale_warns_for_forced_format_extension_mismatch(tmp_path: Path) -> None:
+    from pixelup.upscale import run_upscale
+
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    Image.new("RGB", (1, 1), "white").save(input_path)
+    warnings: list[str] = []
+
+    run_upscale(
+        options(
+            input_path,
+            str(tmp_path / "output.png"),
+            model="custom-model",
+            dry_run=True,
+            output_format=OutputFormat.JPG,
+        ),
+        RuntimeDirs(models_dir, temp_dir),
+        on_warning=warnings.append,
+    )
+
+    assert warnings == [
+        "Output path extension '.png' does not match requested format 'jpg'."
+    ]
+
+
+def test_run_upscale_warns_for_model_native_scale_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup import upscale as upscale_module
+    from pixelup.upscale import run_upscale
+
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    (models_dir / "RealESRGAN_x2plus.pth").write_bytes(b"weights")
+    Image.new("RGB", (1, 1), "white").save(input_path)
+    warnings: list[str] = []
+    monkeypatch.setattr(upscale_module, "require_model_present", lambda *args: None)
+
+    run_upscale(
+        options(
+            input_path,
+            str(tmp_path / "output.png"),
+            model="RealESRGAN_x2plus",
+            dry_run=True,
+            scale=4,
+        ),
+        RuntimeDirs(models_dir, temp_dir),
+        on_warning=warnings.append,
+    )
+
+    assert warnings == [
+        "Model 'RealESRGAN_x2plus' is trained for 2x, but --scale is 4x; "
+        "Real-ESRGAN will rescale the output."
+    ]

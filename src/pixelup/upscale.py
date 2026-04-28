@@ -15,7 +15,7 @@ from pixelup.imaging import (
     read_image_size,
     save_output_image,
 )
-from pixelup.inference import InferenceConfig, run_inference
+from pixelup.inference import InferenceConfig, model_architecture_spec, run_inference
 from pixelup.models import (
     DownloadCallback,
     WaitingCallback,
@@ -33,6 +33,7 @@ from pixelup.paths import (
 
 StartCallback = Callable[["UpscalePlan", int], None]
 ProgressCallback = Callable[[str], None]
+WarningCallback = Callable[[str], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +156,7 @@ def run_upscale(
     on_waiting: WaitingCallback | None = None,
     on_start: StartCallback | None = None,
     on_progress: ProgressCallback | None = None,
+    on_warning: WarningCallback | None = None,
 ) -> dict[str, object]:
     started = time.perf_counter()
     plan = build_plan(
@@ -162,6 +164,9 @@ def run_upscale(
         runtime_dirs,
         check_model=options.dry_run or not options.auto_download,
     )
+    for warning in plan_warnings(options, plan):
+        if on_warning:
+            on_warning(warning)
     if options.dry_run:
         payload = plan.to_payload()
         payload["message"] = "Dry run plan is valid."
@@ -279,6 +284,33 @@ def required_model_names(options: UpscaleOptions) -> list[str]:
     if options.face_enhance:
         names.append("GFPGANv1.4")
     return names
+
+
+def plan_warnings(options: UpscaleOptions, plan: UpscalePlan) -> list[str]:
+    warnings: list[str] = []
+    if format_mismatch := _format_extension_mismatch(plan.output_path, plan.output_format):
+        warnings.append(
+            "Output path extension "
+            f"'.{format_mismatch}' does not match requested format "
+            f"'{plan.output_format.value}'."
+        )
+    native_scale = model_architecture_spec(options.model, requested_scale=options.scale).netscale
+    if native_scale != options.scale:
+        warnings.append(
+            f"Model '{options.model}' is trained for {native_scale}x, "
+            f"but --scale is {options.scale}x; Real-ESRGAN will rescale the output."
+        )
+    return warnings
+
+
+def _format_extension_mismatch(path: Path, output_format: OutputFormat) -> str | None:
+    suffix = path.suffix.lower().lstrip(".")
+    if not suffix:
+        return None
+    if suffix == "jpeg":
+        suffix = "jpg"
+    expected = "jpg" if output_format == OutputFormat.JPG else output_format.value
+    return suffix if suffix != expected else None
 
 
 def count_tiles(input_size: tuple[int, int], tile: int) -> int:
