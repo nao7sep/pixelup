@@ -193,6 +193,10 @@ Processing:
 --gpu-id INT
 ```
 
+`--device auto` selects MPS if available, then CUDA, then CPU. `--gpu-id`
+only chooses a non-default CUDA device; it is not required to enable CUDA
+under `auto`.
+
 Output:
 
 ```console
@@ -432,6 +436,7 @@ face_enhance_unavailable
 out_of_memory
 invalid_argument
 internal_error
+cancelled
 ```
 
 Exit codes:

@@ -10,8 +10,6 @@ from typing import Any
 
 from pixelup.errors import ErrorCode, PixelupError
 
-CANCELLED_EXIT_CODE = 7
-
 
 class OperationCancelled(PixelupError):
     def __init__(self, signum: int | None = None) -> None:
@@ -19,7 +17,7 @@ class OperationCancelled(PixelupError):
         if signum is not None:
             details["signal"] = _signal_name(signum)
         super().__init__(
-            ErrorCode.INTERNAL_ERROR,
+            ErrorCode.CANCELLED,
             "Operation cancelled.",
             details=details,
         )

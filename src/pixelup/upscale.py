@@ -366,10 +366,11 @@ def resolve_device(device: str, gpu_id: int | None) -> str:
     import torch
 
     mps_available = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+    cuda_available = torch.cuda.is_available()
     if device == "auto":
         if mps_available:
             return "mps"
-        if gpu_id is not None and torch.cuda.is_available():
+        if cuda_available:
             return "cuda"
         return "cpu"
     if device == "mps":
@@ -377,7 +378,7 @@ def resolve_device(device: str, gpu_id: int | None) -> str:
             raise PixelupError(ErrorCode.INVALID_ARGUMENT, "MPS is not available.")
         return "mps"
     if device == "cuda":
-        if not torch.cuda.is_available():
+        if not cuda_available:
             raise PixelupError(ErrorCode.INVALID_ARGUMENT, "CUDA is not available.")
         device_count = torch.cuda.device_count()
         if gpu_id is not None and gpu_id >= device_count:

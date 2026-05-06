@@ -332,8 +332,8 @@ def test_auto_device_detection_uses_torch(monkeypatch: pytest.MonkeyPatch) -> No
     assert resolve_device("auto", None) == "cpu"
     assert resolve_device("auto", 0) == "cpu"
 
-    fake_torch.cuda = SimpleNamespace(is_available=lambda: True)
-    assert resolve_device("auto", None) == "cpu"
+    fake_torch.cuda = SimpleNamespace(is_available=lambda: True, device_count=lambda: 1)
+    assert resolve_device("auto", None) == "cuda"
     assert resolve_device("auto", 0) == "cuda"
 
     fake_torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True))

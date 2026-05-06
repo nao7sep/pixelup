@@ -23,7 +23,7 @@ from pixelup.models import (
 )
 from pixelup.paths import OutputFormat
 from pixelup.reporting import Reporter, ReportMode
-from pixelup.signals import CANCELLED_EXIT_CODE, OperationCancelled, cancellation_context
+from pixelup.signals import cancellation_context
 from pixelup.upscale import UpscaleOptions, run_upscale
 
 HELP_OPTIONS = {"help_option_names": ["--help", "-h"]}
@@ -193,9 +193,6 @@ def upscale(
                 dry_run=dry_run,
             )
             reporter.result(run_upscale(options, runtime_dirs, **_run_callbacks(reporter)))
-    except OperationCancelled as exc:
-        reporter.error(exc)
-        raise typer.Exit(CANCELLED_EXIT_CODE) from exc
     except PixelupError as exc:
         reporter.error(exc)
         raise typer.Exit(exit_code_for(exc.code)) from exc

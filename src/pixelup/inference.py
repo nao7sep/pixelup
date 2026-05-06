@@ -345,10 +345,9 @@ def _torch_device(torch: Any, device: str, gpu_id: int | None) -> Any:
     if device == "auto":
         if mps_available:
             return torch.device("mps")
-        if gpu_id is not None:
-            device = "cuda"
-        else:
-            return torch.device("cpu")
+        if torch.cuda.is_available():
+            return torch.device(f"cuda:{gpu_id}" if gpu_id is not None else "cuda")
+        return torch.device("cpu")
     if device == "mps":
         if not mps_available:
             raise PixelupError(ErrorCode.INVALID_ARGUMENT, "MPS is not available.")

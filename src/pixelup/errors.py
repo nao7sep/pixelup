@@ -21,6 +21,7 @@ class ErrorCode(StrEnum):
     OUT_OF_MEMORY = "out_of_memory"
     INVALID_ARGUMENT = "invalid_argument"
     INTERNAL_ERROR = "internal_error"
+    CANCELLED = "cancelled"
 
 
 EXIT_CODE_BY_ERROR: dict[ErrorCode, int] = {
@@ -39,6 +40,7 @@ EXIT_CODE_BY_ERROR: dict[ErrorCode, int] = {
     ErrorCode.INVALID_ARGUMENT: 2,
     ErrorCode.OUT_OF_MEMORY: 6,
     ErrorCode.INTERNAL_ERROR: 1,
+    ErrorCode.CANCELLED: 7,
 }
 
 
