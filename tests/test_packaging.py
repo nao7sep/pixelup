@@ -4,7 +4,7 @@ import tomllib
 from pathlib import Path
 
 EXPECTED_RUNTIME_PINS = {
-    "PySide6": "6.10.1",
+    "PySide6": "6.11.0",
     "Pillow": "12.2.0",
     "pillow-heif": "1.3.0",
     "filelock": "3.29.0",
