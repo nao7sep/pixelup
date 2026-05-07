@@ -129,6 +129,9 @@ Each app launch creates a session log file using a UTC filename:
 ~/.pixelup/logs/yyyymmdd-hhmmss-utc.log
 ```
 
+Log entries also use UTC, but in ISO-style timestamps, and include settings
+changes, queue decisions, job progress, warnings, outputs, and sidecar paths.
+
 ## Development
 
 Run the normal checks:

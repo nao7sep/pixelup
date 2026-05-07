@@ -16,6 +16,7 @@ EXPECTED_RUNTIME_PINS = {
     "realesrgan": "0.3.0",
     "basicsr-fixed": "1.4.2",
     "gfpgan": "1.3.8",
+    "superqt": "0.8.1",
 }
 
 

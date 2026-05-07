@@ -22,4 +22,8 @@ def test_configure_session_logging_writes_log_file(tmp_path: Path) -> None:
     for handler in logger.handlers:
         handler.flush()
 
-    assert "hello from test" in log_path.read_text(encoding="utf-8")
+    text = log_path.read_text(encoding="utf-8")
+
+    assert "hello from test" in text
+    assert "Z INFO hello from test" in text
+    assert text.splitlines()[-1].startswith("20")

@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import count
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import (
+    QObject,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QColor, QDesktopServices, QDragEnterEvent, QDropEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -31,6 +42,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QSplitterHandle,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -38,6 +50,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from superqt import QCollapsible, QElidingLabel
 
 from pixelup import __version__
 from pixelup.app_config import CONFIG_PATH, AppConfig, load_app_config, save_app_config
@@ -59,11 +72,130 @@ MODEL_ORDER = (
     "RealESRGAN_x4plus_anime_6B",
     "realesr-animevideov3",
 )
+MODEL_DESCRIPTIONS = {
+    "realesr-general-x4v3": "Best default for mixed images.",
+    "RealESRGAN_x4plus": "General 4x with stronger detail enhancement.",
+    "RealESRNet_x4plus": "General 4x with a softer, less GAN-heavy look.",
+    "RealESRGAN_x2plus": "2x upscale when 4x is too much.",
+    "RealESRGAN_x4plus_anime_6B": "Best for anime and flat illustrations.",
+    "realesr-animevideov3": "Good for anime and video-frame style images.",
+}
 KNOWN_MODEL_NAMES = {model.name for model in KNOWN_MODELS}
 UPSCALE_MODELS = tuple(name for name in MODEL_ORDER if name in KNOWN_MODEL_NAMES)
-TAB_TEXT_MAX_WIDTH = 180
-LEFT_PANE_MIN_WIDTH = 210
-LEFT_PANE_START_WIDTH = 220
+TAB_CHIP_MAX_WIDTH = 220
+LEFT_PANE_MIN_WIDTH = 300
+LEFT_PANE_START_WIDTH = 330
+APP_STYLESHEET = """
+QWidget {
+    background: #f6f8fb;
+    color: #111827;
+    font-size: 13px;
+}
+QMainWindow {
+    background: #f6f8fb;
+}
+QFrame#topBarCard,
+QFrame#tabStripCard,
+QFrame#panelCard,
+QFrame#dialogCard,
+QFrame#sectionCard,
+QFrame#modelCard {
+    background: #ffffff;
+    border: 1px solid #e4e7ec;
+    border-radius: 14px;
+}
+QLabel#windowTitle {
+    font-size: 20px;
+    font-weight: 700;
+    color: #111827;
+}
+QLabel#mutedText,
+QLabel#pathText,
+QLabel#modelNote,
+QLabel#dialogSubtitle {
+    color: #667085;
+}
+QLabel#sectionTitle {
+    font-size: 15px;
+    font-weight: 700;
+}
+QPushButton,
+QToolButton,
+QComboBox,
+QSpinBox,
+QDoubleSpinBox {
+    background: #ffffff;
+    border: 1px solid #d0d5dd;
+    border-radius: 10px;
+    padding: 7px 12px;
+}
+QPushButton:hover,
+QToolButton:hover,
+QComboBox:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover {
+    border-color: #98a2b3;
+}
+QPushButton:pressed,
+QToolButton:pressed {
+    background: #f2f4f7;
+}
+QPushButton#primaryButton {
+    background: #111827;
+    color: #ffffff;
+    border-color: #111827;
+}
+QPushButton#primaryButton:hover {
+    background: #1f2937;
+    border-color: #1f2937;
+}
+QPushButton#chipButton {
+    padding: 6px 12px;
+}
+QPushButton#advancedToggle {
+    background: transparent;
+    border: none;
+    padding: 0 0 0 2px;
+    font-weight: 600;
+}
+QPushButton#advancedToggle[modified="true"] {
+    color: #c2410c;
+}
+QPushButton#advancedToggle:hover {
+    color: #344054;
+}
+QScrollArea,
+QScrollArea > QWidget > QWidget {
+    border: none;
+    background: transparent;
+}
+QCheckBox {
+    spacing: 8px;
+}
+QRadioButton {
+    spacing: 6px;
+}
+QTableWidget {
+    background: #ffffff;
+    border: 1px solid #e4e7ec;
+    border-radius: 12px;
+    gridline-color: #eef2f6;
+    font-size: 13px;
+}
+QHeaderView::section {
+    background: #f9fafb;
+    color: #667085;
+    border: none;
+    border-bottom: 1px solid #e4e7ec;
+    padding: 8px 10px;
+    font-weight: 600;
+}
+QSplitter::handle {
+    background: #d0d5dd;
+    margin: 12px 0;
+    border-radius: 4px;
+}
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,10 +240,9 @@ class JobWorker(QObject):
     def run(self) -> None:
         warnings: list[str] = []
         LOGGER.info(
-            "Starting job %s for %s with %s",
+            "Starting job %s details=%s",
             self.job.id,
-            self.job.input_path,
-            self.job.model,
+            _job_log_payload(self.job),
         )
         try:
             options = _options_for_job(self.job)
@@ -120,10 +251,12 @@ class JobWorker(QObject):
                 resolve_runtime_dirs(),
                 on_progress=lambda phase: self.signals.progress.emit(self.job.id, phase),
                 on_tile=lambda done, total: self.signals.progress.emit(
-                    self.job.id, f"tile {done}/{total}"
+                    self.job.id,
+                    f"tile {done}/{total}",
                 ),
                 on_download=lambda model, done, total: self.signals.progress.emit(
-                    self.job.id, _download_text(model, done, total)
+                    self.job.id,
+                    _download_text(model, done, total),
                 ),
                 on_warning=warnings.append,
             )
@@ -135,18 +268,34 @@ class JobWorker(QObject):
                 warnings=warnings,
             )
             result["sidecar"] = str(sidecar)
-            LOGGER.info("Finished job %s successfully -> %s", self.job.id, self.job.output_path)
+            LOGGER.info(
+                "Finished job %s output=%s sidecar=%s warnings=%s",
+                self.job.id,
+                self.job.output_path,
+                sidecar,
+                warnings,
+            )
             self.signals.finished.emit(self.job.id, True, "done", result, warnings)
         except PixelupError as exc:
-            LOGGER.warning("Job %s failed: %s", self.job.id, exc.message)
+            LOGGER.warning(
+                "Job %s failed message=%s warnings=%s details=%s",
+                self.job.id,
+                exc.message,
+                warnings,
+                _job_log_payload(self.job),
+            )
             self.signals.finished.emit(self.job.id, False, exc.message, {}, warnings)
         except Exception as exc:
-            LOGGER.exception("Job %s failed unexpectedly", self.job.id)
+            LOGGER.exception(
+                "Job %s failed unexpectedly details=%s",
+                self.job.id,
+                _job_log_payload(self.job),
+            )
             self.signals.finished.emit(self.job.id, False, f"Unexpected error: {exc}", {}, warnings)
 
 
 class FlowLayout(QLayout):
-    def __init__(self, parent: QWidget | None = None, margin: int = 0, spacing: int = 6) -> None:
+    def __init__(self, parent: QWidget | None = None, margin: int = 0, spacing: int = 8) -> None:
         super().__init__(parent)
         self._items: list[QLayoutItem] = []
         self.setContentsMargins(margin, margin, margin, margin)
@@ -199,7 +348,6 @@ class FlowLayout(QLayout):
         right = rect.right()
 
         for item in self._items:
-            widget = item.widget()
             spacing = self.spacing()
             size = item.sizeHint()
             next_x = x + size.width() + spacing
@@ -210,39 +358,82 @@ class FlowLayout(QLayout):
                 line_height = 0
             if not test_only:
                 item.setGeometry(QRect(QPoint(x, y), size))
-                if widget is not None:
-                    widget.updateGeometry()
             x = next_x
             line_height = max(line_height, size.height())
         return y + line_height - rect.y()
 
 
-class ElidedLabel(QLabel):
-    def __init__(
-        self,
-        text: str = "",
-        *,
-        mode: Qt.TextElideMode = Qt.TextElideMode.ElideRight,
-    ) -> None:
-        super().__init__()
-        self._full_text = ""
-        self._mode = mode
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setText(text)
+class PreviewLabel(QLabel):
+    def __init__(self) -> None:
+        super().__init__("Preview unavailable")
+        self._source: QPixmap | None = None
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(340)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def setText(self, text: str) -> None:  # noqa: N802
-        self._full_text = text
-        self.setToolTip(text)
-        self._update_text()
+    def set_image_path(self, path: Path) -> None:
+        pixmap = QPixmap(str(path))
+        self._source = pixmap if not pixmap.isNull() else None
+        self._update_pixmap()
 
     def resizeEvent(self, event: object) -> None:
-        self._update_text()
+        self._update_pixmap()
         super().resizeEvent(event)
 
-    def _update_text(self) -> None:
-        width = max(10, self.contentsRect().width())
-        text = self.fontMetrics().elidedText(self._full_text, self._mode, width)
-        super().setText(text)
+    def _update_pixmap(self) -> None:
+        if self._source is None:
+            self.setPixmap(QPixmap())
+            self.setText("Preview unavailable")
+            return
+        size = self.contentsRect().size() - QSize(24, 24)
+        if size.width() <= 0 or size.height() <= 0:
+            return
+        self.setText("")
+        self.setPixmap(
+            self._source.scaled(
+                size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+
+class PaneSplitterHandle(QSplitterHandle):
+    def __init__(self, orientation: Qt.Orientation, parent: QSplitter) -> None:
+        super().__init__(orientation, parent)
+        self.setCursor(Qt.CursorShape.SplitHCursor)
+
+
+class PaneSplitter(QSplitter):
+    def __init__(self) -> None:
+        super().__init__(Qt.Orientation.Horizontal)
+        self.setHandleWidth(10)
+        self.setChildrenCollapsible(False)
+
+    def createHandle(self) -> QSplitterHandle:  # noqa: N802
+        return PaneSplitterHandle(self.orientation(), self)
+
+
+class ModelOptionRow(QFrame):
+    def __init__(self, model: str, note: str) -> None:
+        super().__init__()
+        self.setObjectName("modelCard")
+        self.checkbox = QCheckBox(model)
+        note_label = QLabel(note)
+        note_label.setObjectName("modelNote")
+        note_label.setWordWrap(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(4)
+        layout.addWidget(self.checkbox)
+        layout.addWidget(note_label)
+
+    def is_checked(self) -> bool:
+        return self.checkbox.isChecked()
+
+    def set_checked(self, checked: bool) -> None:
+        self.checkbox.setChecked(checked)
 
 
 class WrappedTabChip(QFrame):
@@ -254,41 +445,36 @@ class WrappedTabChip(QFrame):
         self._full_text = text
         self._selected = False
         self._color = QColor("black")
-
-        self._button = QToolButton()
-        self._button.setAutoRaise(True)
-        self._button.setCheckable(True)
-        self._button.clicked.connect(lambda: self.activated.emit(self))
-
-        self._close_button = QToolButton()
-        self._close_button.setAutoRaise(True)
-        self._close_button.setText("×")
-        self._close_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._close_button.clicked.connect(lambda: self.close_requested.emit(self))
+        self._label = QPushButton()
+        self._label.setObjectName("chipButton")
+        self._label.clicked.connect(lambda: self.activated.emit(self))
+        self._close = QToolButton()
+        self._close.setText("×")
+        self._close.clicked.connect(lambda: self.close_requested.emit(self))
+        self._close.setAutoRaise(True)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 6, 4)
+        layout.setContentsMargins(8, 6, 6, 6)
         layout.setSpacing(4)
-        layout.addWidget(self._button, 1)
-        layout.addWidget(self._close_button)
+        layout.addWidget(self._label)
+        layout.addWidget(self._close)
 
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        self.setMaximumWidth(230)
-        self.setMinimumWidth(90)
+        self.setMaximumWidth(TAB_CHIP_MAX_WIDTH + 40)
+        self.setMinimumWidth(120)
         self.set_text(text)
         self._refresh_style()
 
     def sizeHint(self) -> QSize:
-        return QSize(200, 32)
+        return QSize(TAB_CHIP_MAX_WIDTH + 20, 42)
 
     def set_text(self, text: str) -> None:
         self._full_text = text
         self.setToolTip(text)
-        self._update_button_text()
+        self._update_text()
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
-        self._button.setChecked(selected)
         self._refresh_style()
 
     def set_color(self, color: QColor) -> None:
@@ -296,12 +482,12 @@ class WrappedTabChip(QFrame):
         self._refresh_style()
 
     def resizeEvent(self, event: object) -> None:
-        self._update_button_text()
+        self._update_text()
         super().resizeEvent(event)
 
-    def _update_button_text(self) -> None:
-        available = max(40, min(TAB_TEXT_MAX_WIDTH, self.width() - 34))
-        self._button.setText(
+    def _update_text(self) -> None:
+        available = max(60, min(TAB_CHIP_MAX_WIDTH, self.width() - 42))
+        self._label.setText(
             self.fontMetrics().elidedText(
                 self._full_text,
                 Qt.TextElideMode.ElideRight,
@@ -311,20 +497,30 @@ class WrappedTabChip(QFrame):
 
     def _refresh_style(self) -> None:
         fg = self._color.name()
-        bg = "#edf4ff" if self._selected else "#f5f5f5"
-        border = "#7aa2ff" if self._selected else "#d0d0d0"
+        bg = "#eef4ff" if self._selected else "#ffffff"
+        border = "#7aa2ff" if self._selected else "#d0d5dd"
         self.setStyleSheet(
             f"""
             QFrame {{
                 background: {bg};
                 border: 1px solid {border};
-                border-radius: 8px;
+                border-radius: 12px;
+            }}
+            QPushButton {{
+                color: {fg};
+                font-size: 14px;
+                font-weight: 600;
+                background: transparent;
+                border: none;
+                padding: 0;
+                text-align: left;
             }}
             QToolButton {{
                 color: {fg};
                 background: transparent;
                 border: none;
-                padding: 0;
+                padding: 0 4px;
+                font-size: 14px;
             }}
             """
         )
@@ -337,15 +533,22 @@ class WrappedTabs(QWidget):
         super().__init__()
         self._entries: list[dict[str, object]] = []
 
+        tab_card = QFrame()
+        tab_card.setObjectName("tabStripCard")
+        tab_layout = QVBoxLayout(tab_card)
+        tab_layout.setContentsMargins(10, 10, 10, 10)
+        tab_layout.setSpacing(0)
+
         self._tab_row = QWidget()
-        self._tab_layout = FlowLayout(self._tab_row)
+        self._flow = FlowLayout(self._tab_row, spacing=8)
+        tab_layout.addWidget(self._tab_row)
 
         self._stack = QStackedWidget()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addWidget(self._tab_row)
+        layout.setSpacing(12)
+        layout.addWidget(tab_card)
         layout.addWidget(self._stack, 1)
 
     def addTab(self, widget: QWidget, text: str) -> int:  # noqa: N802
@@ -355,7 +558,7 @@ class WrappedTabs(QWidget):
         self._entries.append(
             {"widget": widget, "chip": chip, "text": text, "color": QColor("black")}
         )
-        self._tab_layout.addWidget(chip)
+        self._flow.addWidget(chip)
         self._stack.addWidget(widget)
         if len(self._entries) == 1:
             self.setCurrentWidget(widget)
@@ -375,26 +578,22 @@ class WrappedTabs(QWidget):
                 return index
         return -1
 
+    def setCurrentWidget(self, widget: QWidget) -> None:  # noqa: N802
+        self._stack.setCurrentWidget(widget)
+        self._sync_selection()
+
     def removeTab(self, index: int) -> None:  # noqa: N802
         if not 0 <= index < len(self._entries):
             return
         entry = self._entries.pop(index)
         widget = entry["widget"]
         chip = entry["chip"]
-        current_index = self._stack.currentIndex()
         self._stack.removeWidget(widget)  # type: ignore[arg-type]
-        self._tab_layout.removeWidget(chip)  # type: ignore[arg-type]
+        self._flow.removeWidget(chip)  # type: ignore[arg-type]
         chip.deleteLater()  # type: ignore[union-attr]
         if self._entries:
             next_index = min(index, len(self._entries) - 1)
-            if current_index == index:
-                self.setCurrentWidget(self._entries[next_index]["widget"])  # type: ignore[arg-type]
-            else:
-                self._sync_selection()
-
-    def setCurrentWidget(self, widget: QWidget) -> None:  # noqa: N802
-        self._stack.setCurrentWidget(widget)
-        self._sync_selection()
+            self.setCurrentWidget(self._entries[next_index]["widget"])  # type: ignore[arg-type]
 
     def setTabText(self, index: int, text: str) -> None:  # noqa: N802
         if not 0 <= index < len(self._entries):
@@ -431,9 +630,8 @@ class WrappedTabs(QWidget):
     def _sync_selection(self) -> None:
         current = self._stack.currentWidget()
         for entry in self._entries:
-            selected = entry["widget"] is current
             chip = entry["chip"]
-            chip.set_selected(selected)  # type: ignore[union-attr]
+            chip.set_selected(entry["widget"] is current)  # type: ignore[union-attr]
             chip.set_color(entry["color"])  # type: ignore[union-attr]
 
 
@@ -455,10 +653,10 @@ class ImageTab(QWidget):
         self._rows_by_job: dict[int, int] = {}
         self._default_advanced = defaults
 
-        self.model_checks: dict[str, QCheckBox] = {}
+        self.model_rows: dict[str, ModelOptionRow] = {}
         for model in UPSCALE_MODELS:
-            check = QCheckBox(model)
-            self.model_checks[model] = check
+            row = ModelOptionRow(model, MODEL_DESCRIPTIONS.get(model, ""))
+            self.model_rows[model] = row
 
         self.scale_group = QButtonGroup(self)
         self.scale_2 = QRadioButton("2x")
@@ -468,103 +666,130 @@ class ImageTab(QWidget):
         self.scale_group.addButton(self.scale_4)
 
         enqueue_button = QPushButton("Enqueue selected")
+        enqueue_button.setObjectName("primaryButton")
         enqueue_button.clicked.connect(self._enqueue_selected)
-        try_all_button = QPushButton("Try all models")
-        try_all_button.clicked.connect(self._try_all_models)
+        enqueue_all_button = QPushButton("Enqueue all models")
+        enqueue_all_button.clicked.connect(self._enqueue_all_models)
         retry_button = QPushButton("Retry failed")
         retry_button.clicked.connect(lambda: self.retry_requested.emit(self))
 
-        self.name_label = ElidedLabel(self.input_path.name, mode=Qt.TextElideMode.ElideRight)
-        self.dir_label = ElidedLabel(str(self.input_path.parent), mode=Qt.TextElideMode.ElideMiddle)
+        actions = QWidget()
+        actions_layout = FlowLayout(actions, spacing=8)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.addWidget(enqueue_button)
+        actions_layout.addWidget(enqueue_all_button)
+        actions_layout.addWidget(retry_button)
 
-        left = QWidget()
-        left.setMinimumWidth(LEFT_PANE_MIN_WIDTH)
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(8)
+        left_card = QFrame()
+        left_card.setObjectName("panelCard")
+        left_layout = QVBoxLayout(left_card)
+        left_layout.setContentsMargins(16, 16, 16, 16)
+        left_layout.setSpacing(12)
+
+        self.name_label = _elided_label(
+            self.input_path.name,
+            mode=Qt.TextElideMode.ElideRight,
+            object_name="sectionTitle",
+        )
+        self.dir_label = _elided_label(
+            str(self.input_path.parent),
+            mode=Qt.TextElideMode.ElideMiddle,
+            object_name="pathText",
+        )
         left_layout.addWidget(self.name_label)
         left_layout.addWidget(self.dir_label)
-        left_layout.addSpacing(4)
-        left_layout.addWidget(QLabel("Models"))
 
-        model_box = QWidget()
-        model_layout = QVBoxLayout(model_box)
-        model_layout.setContentsMargins(0, 0, 0, 0)
-        model_layout.setSpacing(2)
-        for check in self.model_checks.values():
-            model_layout.addWidget(check)
-        model_layout.addStretch()
-        model_scroll = QScrollArea()
-        model_scroll.setWidgetResizable(True)
-        model_scroll.setMaximumHeight(170)
-        model_scroll.setWidget(model_box)
-        left_layout.addWidget(model_scroll)
+        left_layout.addWidget(_section_label("Models"))
+        models_box = QWidget()
+        models_box_layout = QVBoxLayout(models_box)
+        models_box_layout.setContentsMargins(0, 0, 0, 0)
+        models_box_layout.setSpacing(8)
+        for row in self.model_rows.values():
+            models_box_layout.addWidget(row)
+        models_box_layout.addStretch()
+
+        models_scroll = QScrollArea()
+        models_scroll.setWidgetResizable(True)
+        models_scroll.setMaximumHeight(250)
+        models_scroll.setWidget(models_box)
+        left_layout.addWidget(models_scroll)
 
         scale_row = QWidget()
         scale_layout = QHBoxLayout(scale_row)
         scale_layout.setContentsMargins(0, 0, 0, 0)
-        scale_layout.setSpacing(8)
-        scale_layout.addWidget(QLabel("Scale"))
+        scale_layout.setSpacing(10)
+        scale_layout.addWidget(_section_label("Scale"))
         scale_layout.addWidget(self.scale_2)
         scale_layout.addWidget(self.scale_4)
         scale_layout.addStretch()
         left_layout.addWidget(scale_row)
 
-        self.advanced_toggle = QToolButton()
-        self.advanced_toggle.setCheckable(True)
-        self.advanced_toggle.setChecked(False)
-        self.advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
-        self.advanced_toggle.toggled.connect(self._toggle_advanced)
-        left_layout.addWidget(self.advanced_toggle)
+        self.advanced_box = QCollapsible(
+            "Advanced options - defaults",
+            expandedIcon="▾",
+            collapsedIcon="▸",
+        )
+        self.advanced_box.setObjectName("sectionCard")
+        self.advanced_box.layout().setContentsMargins(12, 12, 12, 12)
+        self.advanced_box.layout().setSpacing(10)
+        self.advanced_box.toggleButton().setObjectName("advancedToggle")
+        self.advanced_box.toggleButton().setToolTip("Show or hide advanced options.")
+        self.advanced_box.toggled.connect(self._on_advanced_toggled)
 
-        self.advanced_content = self._build_advanced_content()
-        self.advanced_content.setVisible(False)
-        left_layout.addWidget(self.advanced_content)
+        advanced_content = QWidget()
+        advanced_content_layout = QVBoxLayout(advanced_content)
+        advanced_content_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_content_layout.setSpacing(0)
+        advanced_content_layout.addLayout(self._build_advanced_form())
+        self.advanced_box.addWidget(advanced_content)
+        self.advanced_box.collapse()
+        left_layout.addWidget(self.advanced_box)
 
-        left_layout.addWidget(enqueue_button)
-        left_layout.addWidget(try_all_button)
-        left_layout.addWidget(retry_button)
+        left_layout.addWidget(actions)
         left_layout.addStretch()
 
-        self.preview = QLabel("Preview unavailable")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumHeight(260)
-        pixmap = QPixmap(str(self.input_path))
-        if not pixmap.isNull():
-            self.preview.setPixmap(
-                pixmap.scaled(
-                    620,
-                    460,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
+        preview_card = QFrame()
+        preview_card.setObjectName("panelCard")
+        preview_layout = QVBoxLayout(preview_card)
+        preview_layout.setContentsMargins(16, 16, 16, 16)
+        preview_layout.setSpacing(10)
+        preview_layout.addWidget(_section_label("Preview"))
+        self.preview = PreviewLabel()
+        self.preview.set_image_path(self.input_path)
+        preview_layout.addWidget(self.preview, 1)
 
+        queue_card = QFrame()
+        queue_card.setObjectName("panelCard")
+        queue_layout = QVBoxLayout(queue_card)
+        queue_layout.setContentsMargins(16, 16, 16, 16)
+        queue_layout.setSpacing(10)
+        queue_layout.addWidget(_section_label("Queue"))
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Model", "Scale", "Output", "Status"])
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setMaximumHeight(220)
-        self.table.verticalHeader().setDefaultSectionSize(24)
+        self.table.setAlternatingRowColors(True)
+        self.table.setMaximumHeight(180)
+        self.table.verticalHeader().setDefaultSectionSize(30)
+        queue_layout.addWidget(self.table)
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        right_stack = QWidget()
+        right_layout = QVBoxLayout(right_stack)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
-        right_layout.addWidget(self.preview, 5)
-        right_layout.addWidget(self.table, 2)
+        right_layout.setSpacing(12)
+        right_layout.addWidget(preview_card, 5)
+        right_layout.addWidget(queue_card, 2)
 
-        self.splitter = QSplitter()
-        self.splitter.setChildrenCollapsible(False)
-        self.splitter.addWidget(left)
-        self.splitter.addWidget(right)
-        self.splitter.setSizes([left_pane_width, 900 - left_pane_width])
+        self.splitter = PaneSplitter()
+        self.splitter.addWidget(left_card)
+        self.splitter.addWidget(right_stack)
+        self.splitter.setSizes([left_pane_width, max(500, 1100 - left_pane_width)])
         self.splitter.splitterMoved.connect(self._emit_left_width_changed)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.splitter)
 
+        self.set_left_pane_width(left_pane_width)
         self.set_default_advanced(defaults)
 
     def add_jobs(self, jobs: list[Job]) -> None:
@@ -611,7 +836,7 @@ class ImageTab(QWidget):
         return 2 if self.scale_2.isChecked() else 4
 
     def current_advanced(self) -> AdvancedSettings:
-        profile_text = self.target_profile.currentText()
+        profile = self.target_profile.currentData()
         return AdvancedSettings(
             face_enhance=self.face_enhance.isChecked(),
             denoise_strength=self.denoise_strength.value(),
@@ -621,29 +846,28 @@ class ImageTab(QWidget):
             quality=self.quality.value(),
             tile=self.tile.value(),
             strip_metadata=self.strip_metadata.isChecked(),
-            target_profile=profile_text if profile_text else None,
+            target_profile=profile,
         )
 
     def set_default_advanced(self, defaults: AdvancedSettings) -> None:
-        previous = self._default_advanced
         current = self.current_advanced() if hasattr(self, "face_enhance") else defaults
-        was_default = current == previous
+        old_defaults = getattr(self, "_default_advanced", defaults)
         self._default_advanced = defaults
-        if was_default:
+        if current == old_defaults:
             self._apply_advanced(defaults)
         self._update_advanced_summary()
 
     def set_left_pane_width(self, width: int) -> None:
-        total = max(sum(self.splitter.sizes()), width + 200)
+        width = max(LEFT_PANE_MIN_WIDTH, width)
+        total = max(sum(self.splitter.sizes()), width + 500)
         self.splitter.blockSignals(True)
-        self.splitter.setSizes([width, max(200, total - width)])
+        self.splitter.setSizes([width, max(500, total - width)])
         self.splitter.blockSignals(False)
 
-    def _build_advanced_content(self) -> QWidget:
-        box = QWidget()
-        form = QFormLayout(box)
-        form.setContentsMargins(8, 0, 0, 0)
-        form.setSpacing(6)
+    def _build_advanced_form(self) -> QFormLayout:
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(8)
 
         self.face_enhance = QCheckBox("Enable face enhancement")
         self.face_enhance.toggled.connect(self._update_advanced_summary)
@@ -684,14 +908,14 @@ class ImageTab(QWidget):
         self.strip_metadata.toggled.connect(self._update_advanced_summary)
 
         self.target_profile = QComboBox()
-        self.target_profile.addItem("", None)
-        self.target_profile.addItem("srgb", "srgb")
-        self.target_profile.addItem("p3", "p3")
-        self.target_profile.addItem("adobergb", "adobergb")
+        self.target_profile.addItem("Default", None)
+        self.target_profile.addItem("sRGB", "srgb")
+        self.target_profile.addItem("Display P3", "p3")
+        self.target_profile.addItem("Adobe RGB", "adobergb")
         self.target_profile.currentIndexChanged.connect(self._update_advanced_summary)
 
-        restore_button = QPushButton("Restore defaults")
-        restore_button.clicked.connect(self._restore_advanced_defaults)
+        restore = QPushButton("Restore defaults")
+        restore.clicked.connect(self._restore_advanced_defaults)
 
         form.addRow("", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
@@ -702,8 +926,8 @@ class ImageTab(QWidget):
         form.addRow("Device", self.device)
         form.addRow("", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
-        form.addRow("", restore_button)
-        return box
+        form.addRow("", restore)
+        return form
 
     def _apply_advanced(self, settings: AdvancedSettings) -> None:
         self.face_enhance.setChecked(settings.face_enhance)
@@ -714,34 +938,44 @@ class ImageTab(QWidget):
         self.tile.setValue(settings.tile)
         self.device.setCurrentIndex(self.device.findData(settings.device))
         self.strip_metadata.setChecked(settings.strip_metadata)
-        profile_index = self.target_profile.findText(settings.target_profile or "")
-        self.target_profile.setCurrentIndex(max(0, profile_index))
+        self.target_profile.setCurrentIndex(self.target_profile.findData(settings.target_profile))
         self._update_advanced_summary()
 
     def _restore_advanced_defaults(self) -> None:
         self._apply_advanced(self._default_advanced)
+        LOGGER.info(
+            "Restored advanced defaults input=%s defaults=%s",
+            self.input_path,
+            _advanced_log_payload(self._default_advanced),
+        )
 
-    def _toggle_advanced(self, expanded: bool) -> None:
-        self.advanced_content.setVisible(expanded)
-        self.advanced_toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+    def _on_advanced_toggled(self, expanded: bool) -> None:
+        LOGGER.info(
+            "Advanced options %s input=%s current=%s",
+            "expanded" if expanded else "collapsed",
+            self.input_path,
+            _advanced_log_payload(self.current_advanced()),
         )
 
     def _update_advanced_summary(self) -> None:
         modified = self.current_advanced() != self._default_advanced
-        status = "modified" if modified else "defaults"
-        self.advanced_toggle.setText(f"Advanced options ({status})")
-        color = "#b45f06" if modified else "#555555"
-        self.advanced_toggle.setStyleSheet(f"QToolButton {{ color: {color}; }}")
+        toggle = self.advanced_box.toggleButton()
+        toggle.setProperty("modified", modified)
+        toggle.setText(f"Advanced options - {'modified' if modified else 'defaults'}")
+        toggle.style().unpolish(toggle)
+        toggle.style().polish(toggle)
 
-    def _emit_left_width_changed(self, *_: object) -> None:
+    def _emit_left_width_changed(self, position: int, index: int) -> None:
+        del position, index
         self.left_width_changed.emit(self.splitter.sizes()[0])
 
-    def _enqueue_selected(self) -> None:
-        models = [name for name, check in self.model_checks.items() if check.isChecked()]
-        self.enqueue_requested.emit(self, models, self.current_scale())
+    def _selected_models(self) -> list[str]:
+        return [name for name, row in self.model_rows.items() if row.is_checked()]
 
-    def _try_all_models(self) -> None:
+    def _enqueue_selected(self) -> None:
+        self.enqueue_requested.emit(self, self._selected_models(), self.current_scale())
+
+    def _enqueue_all_models(self) -> None:
         self.enqueue_requested.emit(self, list(UPSCALE_MODELS), self.current_scale())
 
 
@@ -757,14 +991,15 @@ class MainWindow(QMainWindow):
         self._left_pane_width = LEFT_PANE_START_WIDTH
 
         self.setWindowTitle("PixelUp")
-        self.resize(1080, 760)
+        self.resize(1260, 860)
         self.setAcceptDrops(True)
-
-        self.tabs = WrappedTabs()
-        self.tabs.tabCloseRequested.connect(self._close_tab_at)
-        self.setCentralWidget(self.tabs)
-        self.statusBar().showMessage("Drop image files here, or choose File > Open.")
-        self._build_menu()
+        self._build_ui()
+        self.statusBar().showMessage("Drop image files here, or open them from the header.")
+        LOGGER.info(
+            "Loaded config path=%s values=%s",
+            CONFIG_PATH,
+            _config_log_payload(self.config),
+        )
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -775,10 +1010,11 @@ class MainWindow(QMainWindow):
         self.open_paths(paths)
 
     def open_paths(self, paths: list[Path]) -> None:
-        LOGGER.info("Opening paths: %s", [str(path) for path in paths])
+        LOGGER.info("Open requested paths=%s", [str(path) for path in paths])
         for path in paths:
             resolved = path.expanduser().resolve()
             if not resolved.is_file():
+                LOGGER.warning("Ignored non-file open request path=%s resolved=%s", path, resolved)
                 continue
             tab = self._tabs_by_path.get(resolved)
             if tab is None:
@@ -789,48 +1025,110 @@ class MainWindow(QMainWindow):
                 )
                 tab.enqueue_requested.connect(self._enqueue_jobs)
                 tab.retry_requested.connect(self._retry_failed)
-                tab.left_width_changed.connect(self._sync_left_pane_width)
+                tab.left_width_changed.connect(self._sync_left_width)
                 self._tabs_by_path[resolved] = tab
                 self.tabs.addTab(tab, resolved.name)
+                LOGGER.info(
+                    "Created tab input=%s left_pane_width=%s defaults=%s",
+                    resolved,
+                    self._left_pane_width,
+                    _advanced_log_payload(_advanced_defaults(self.config)),
+                )
+            else:
+                LOGGER.info("Focused existing tab input=%s", resolved)
             self.tabs.setCurrentWidget(tab)
             self._update_tab_state(tab)
 
-    def _build_menu(self) -> None:
-        file_menu = self.menuBar().addMenu("&File")
-        open_action = file_menu.addAction("&Open images...")
-        open_action.triggered.connect(self._open_dialog)
-        settings_action = file_menu.addAction("&Settings...")
-        settings_action.triggered.connect(self._settings_dialog)
-        reveal_logs_action = file_menu.addAction("Reveal current &log")
-        reveal_logs_action.triggered.connect(self._reveal_log_file)
-        file_menu.addSeparator()
-        quit_action = file_menu.addAction("&Quit")
-        quit_action.triggered.connect(self.close)
+    def _build_ui(self) -> None:
+        root = QWidget()
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(16, 16, 16, 16)
+        root_layout.setSpacing(12)
 
-        help_menu = self.menuBar().addMenu("&Help")
-        about_action = help_menu.addAction("&About PixelUp")
-        about_action.triggered.connect(self._about_dialog)
+        root_layout.addWidget(self._build_header())
+
+        self.tabs = WrappedTabs()
+        self.tabs.tabCloseRequested.connect(self._close_tab_at)
+        root_layout.addWidget(self.tabs, 1)
+
+        self.setCentralWidget(root)
+
+    def _build_header(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("topBarCard")
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
+
+        title_box = QWidget()
+        title_layout = QVBoxLayout(title_box)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(2)
+
+        title = QLabel("PixelUp")
+        title.setObjectName("windowTitle")
+        subtitle = QLabel("Queue Real-ESRGAN runs with a simple desktop workflow.")
+        subtitle.setObjectName("dialogSubtitle")
+        title_layout.addWidget(title)
+        title_layout.addWidget(subtitle)
+
+        open_button = QPushButton("Open images…")
+        open_button.setObjectName("primaryButton")
+        open_button.clicked.connect(self._open_dialog)
+
+        settings_button = QPushButton("Settings")
+        settings_button.clicked.connect(self._settings_dialog)
+        about_button = QPushButton("About")
+        about_button.clicked.connect(self._about_dialog)
+        logs_button = QPushButton("Reveal log")
+        logs_button.clicked.connect(self._reveal_log_file)
+
+        action_row = QWidget()
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
+        action_layout.addWidget(open_button)
+        action_layout.addWidget(logs_button)
+        action_layout.addWidget(settings_button)
+        action_layout.addWidget(about_button)
+
+        layout.addWidget(title_box, 1)
+        layout.addWidget(action_row, 0, Qt.AlignmentFlag.AlignRight)
+        return card
 
     def _open_dialog(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, "Open images")
+        LOGGER.info("Open dialog returned count=%s", len(files))
         self.open_paths([Path(file) for file in files])
 
     def _settings_dialog(self) -> None:
+        LOGGER.info("Opened settings dialog")
         dialog = SettingsDialog(self.config, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            previous_config = self.config
             previous_defaults = _advanced_defaults(self.config)
             self.config = dialog.config()
             save_app_config(self.config)
+            LOGGER.info(
+                "Saved settings path=%s previous=%s current=%s",
+                CONFIG_PATH,
+                _config_log_payload(previous_config),
+                _config_log_payload(self.config),
+            )
             for tab in self._tabs_by_path.values():
                 if tab.current_advanced() == previous_defaults:
                     tab.set_default_advanced(_advanced_defaults(self.config))
                 else:
-                    tab.set_default_advanced(_advanced_defaults(self.config))
-            LOGGER.info("Saved settings to %s", CONFIG_PATH)
-            self.statusBar().showMessage("Settings saved.", 3000)
+                    tab._default_advanced = _advanced_defaults(self.config)
+                    tab._update_advanced_summary()
             self._schedule()
+            self.statusBar().showMessage("Settings saved.", 3000)
+            return
+        LOGGER.info("Closed settings dialog without saving")
 
     def _about_dialog(self) -> None:
+        LOGGER.info("Opened about dialog")
         AboutDialog(self.log_file, self).exec()
 
     def _reveal_log_file(self) -> None:
@@ -840,17 +1138,22 @@ class MainWindow(QMainWindow):
     @Slot(object, object, int)
     def _enqueue_jobs(self, tab: ImageTab, models: list[str], scale: int) -> None:
         if not models:
+            LOGGER.warning(
+                "Rejected enqueue request input=%s reason=no-models-selected",
+                tab.input_path,
+            )
             QMessageBox.information(self, "PixelUp", "Choose at least one model.")
             return
         advanced = tab.current_advanced()
         jobs: list[Job] = []
         reserved = {job.output_path for job in tab.jobs}
         for model in models:
+            model_advanced = _advanced_for_model(advanced, model)
             output_path = default_output_path(
                 tab.input_path,
                 model=model,
                 scale=scale,
-                output_format=advanced.output_format,
+                output_format=model_advanced.output_format,
                 reserved=reserved,
             )
             reserved.add(output_path)
@@ -861,18 +1164,20 @@ class MainWindow(QMainWindow):
                     model=model,
                     scale=scale,
                     output_path=output_path,
-                    advanced=advanced,
+                    advanced=model_advanced,
                     auto_download=self.config.auto_download,
                 )
             )
         LOGGER.info(
-            "Enqueued %s job(s) for %s with models=%s scale=%s advanced=%s",
-            len(jobs),
+            "Accepted enqueue request input=%s models=%s scale=%s advanced=%s auto_download=%s",
             tab.input_path,
             models,
             scale,
-            advanced,
+            _advanced_log_payload(advanced),
+            self.config.auto_download,
         )
+        for job in jobs:
+            LOGGER.info("Queued job %s details=%s", job.id, _job_log_payload(job))
         tab.add_jobs(jobs)
         self._update_tab_state(tab)
         self._schedule()
@@ -881,6 +1186,7 @@ class MainWindow(QMainWindow):
     def _retry_failed(self, tab: ImageTab) -> None:
         reserved = {job.output_path for job in tab.jobs if job.status != "failed"}
         changed = False
+        retried_jobs: list[int] = []
         for job in tab.jobs:
             if job.status != "failed":
                 continue
@@ -896,13 +1202,14 @@ class MainWindow(QMainWindow):
             job.message = ""
             tab.update_job(job)
             changed = True
+            retried_jobs.append(job.id)
         if changed:
-            LOGGER.info("Retrying failed jobs for %s", tab.input_path)
+            LOGGER.info("Retrying failed jobs input=%s job_ids=%s", tab.input_path, retried_jobs)
             self._update_tab_state(tab)
             self._schedule()
 
     @Slot(int)
-    def _sync_left_pane_width(self, width: int) -> None:
+    def _sync_left_width(self, width: int) -> None:
         self._left_pane_width = max(LEFT_PANE_MIN_WIDTH, width)
         for tab in self._tabs_by_path.values():
             tab.set_left_pane_width(self._left_pane_width)
@@ -949,6 +1256,15 @@ class MainWindow(QMainWindow):
     @Slot(int, str)
     def _job_progress(self, job_id: int, message: str) -> None:
         tab, job = self._find_job(job_id)
+        if message != job.message:
+            LOGGER.info(
+                "Job %s progress input=%s model=%s output=%s message=%s",
+                job.id,
+                tab.input_path,
+                job.model,
+                job.output_path,
+                message,
+            )
         job.message = message
         tab.update_job(job)
 
@@ -969,7 +1285,7 @@ class MainWindow(QMainWindow):
         self._active_jobs = max(0, self._active_jobs - 1)
         self._update_tab_state(tab)
         if self.config.close_tab_on_success and tab.all_succeeded():
-            self._close_tab(tab)
+            self._close_tab(tab, reason="all-jobs-succeeded")
         QTimer.singleShot(0, self._schedule)
 
     def _find_job(self, job_id: int) -> tuple[ImageTab, Job]:
@@ -992,26 +1308,28 @@ class MainWindow(QMainWindow):
         if failed:
             color = QColor("#b00020")
         elif running or any(job.status == "pending" for job in tab.jobs):
-            color = QColor("#0057b8")
+            color = QColor("#2563eb")
         elif total and done == total:
-            color = QColor("#148a14")
+            color = QColor("#15803d")
         else:
-            color = QColor("black")
+            color = QColor("#111827")
         self.tabs.setTabTextColor(index, color)
 
     def _close_tab_at(self, index: int) -> None:
         tab = self.tabs.widget(index)
         if isinstance(tab, ImageTab) and tab.has_active_jobs():
+            LOGGER.info("Blocked tab close input=%s reason=active-jobs", tab.input_path)
             QMessageBox.information(self, "PixelUp", "This tab still has pending or running jobs.")
             return
         if isinstance(tab, ImageTab):
-            self._close_tab(tab)
+            self._close_tab(tab, reason="user")
 
-    def _close_tab(self, tab: ImageTab) -> None:
+    def _close_tab(self, tab: ImageTab, *, reason: str) -> None:
         index = self.tabs.indexOf(tab)
         if index >= 0:
             self.tabs.removeTab(index)
         self._tabs_by_path.pop(tab.input_path, None)
+        LOGGER.info("Closed tab input=%s reason=%s", tab.input_path, reason)
         tab.deleteLater()
 
 
@@ -1019,21 +1337,46 @@ class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
+        self.resize(540, 460)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        form = QFormLayout()
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("Settings")
+        title.setObjectName("windowTitle")
+        subtitle = QLabel("Default behavior for new jobs and tabs.")
+        subtitle.setObjectName("dialogSubtitle")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        general_card = _section_card("General")
+        general_form = QFormLayout()
+        general_form.setSpacing(10)
 
         self.concurrent = QSpinBox()
         self.concurrent.setRange(1, 8)
         self.concurrent.setValue(config.max_concurrent_jobs)
 
-        self.close_tabs = QCheckBox("Close successful tabs")
+        self.close_tabs = QCheckBox("Close tabs after all jobs succeed")
         self.close_tabs.setChecked(config.close_tab_on_success)
 
+        self.auto_download = QCheckBox("Download missing models automatically")
+        self.auto_download.setChecked(config.auto_download)
+
+        general_form.addRow("Concurrent jobs", self.concurrent)
+        general_form.addRow("", self.close_tabs)
+        general_form.addRow("", self.auto_download)
+        general_card.layout().addLayout(general_form)
+
+        defaults_card = _section_card("Advanced defaults")
+        defaults_form = QFormLayout()
+        defaults_form.setSpacing(10)
+
         self.format = QComboBox()
-        self.format.addItems([item.value for item in OutputFormat])
-        self.format.setCurrentText(config.output_format.value)
+        self.format.addItems([item.value.upper() for item in OutputFormat])
+        self.format.setCurrentText(config.output_format.value.upper())
 
         self.quality = QSpinBox()
         self.quality.setRange(0, 100)
@@ -1048,26 +1391,24 @@ class SettingsDialog(QDialog):
         self.device.addItems(["auto", "mps", "cuda", "cpu"])
         self.device.setCurrentText(config.device)
 
-        self.auto_download = QCheckBox("Download missing models")
-        self.auto_download.setChecked(config.auto_download)
+        defaults_form.addRow("Output format", self.format)
+        defaults_form.addRow("Quality", self.quality)
+        defaults_form.addRow("Tile size", self.tile)
+        defaults_form.addRow("Device", self.device)
+        defaults_card.layout().addLayout(defaults_form)
 
-        form.addRow("Concurrent jobs", self.concurrent)
-        form.addRow("", self.close_tabs)
-        form.addRow("Default output format", self.format)
-        form.addRow("Default quality", self.quality)
-        form.addRow("Default tile size", self.tile)
-        form.addRow("Default device", self.device)
-        form.addRow("", self.auto_download)
-        layout.addLayout(form)
+        layout.addWidget(general_card)
+        layout.addWidget(defaults_card)
+        layout.addStretch()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        restore_defaults = buttons.addButton(
+        restore = buttons.addButton(
             "Restore defaults",
             QDialogButtonBox.ButtonRole.ResetRole,
         )
-        restore_defaults.clicked.connect(self._restore_defaults)
+        restore.clicked.connect(self._restore_defaults)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -1076,7 +1417,7 @@ class SettingsDialog(QDialog):
         return AppConfig(
             max_concurrent_jobs=self.concurrent.value(),
             close_tab_on_success=self.close_tabs.isChecked(),
-            output_format=OutputFormat(self.format.currentText()),
+            output_format=OutputFormat(self.format.currentText().lower()),
             quality=self.quality.value(),
             tile=self.tile.value(),
             device=self.device.currentText(),
@@ -1087,11 +1428,11 @@ class SettingsDialog(QDialog):
         defaults = AppConfig()
         self.concurrent.setValue(defaults.max_concurrent_jobs)
         self.close_tabs.setChecked(defaults.close_tab_on_success)
-        self.format.setCurrentText(defaults.output_format.value)
+        self.auto_download.setChecked(defaults.auto_download)
+        self.format.setCurrentText(defaults.output_format.value.upper())
         self.quality.setValue(defaults.quality)
         self.tile.setValue(defaults.tile)
         self.device.setCurrentText(defaults.device)
-        self.auto_download.setChecked(defaults.auto_download)
 
 
 class AboutDialog(QDialog):
@@ -1099,25 +1440,56 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self.log_file = log_file
         self.setWindowTitle("About PixelUp")
+        self.resize(520, 360)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        title = QLabel(f"<b>PixelUp</b> {__version__}")
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("PixelUp")
+        title.setObjectName("windowTitle")
         subtitle = QLabel("Simple Real-ESRGAN desktop upscaler")
-        config_label = ElidedLabel(str(CONFIG_PATH), mode=Qt.TextElideMode.ElideMiddle)
-        log_label = ElidedLabel(str(log_file), mode=Qt.TextElideMode.ElideMiddle)
-
-        reveal_button = QPushButton("Reveal current log")
-        reveal_button.clicked.connect(lambda: _reveal_in_file_browser(self.log_file))
-
+        subtitle.setObjectName("dialogSubtitle")
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addSpacing(8)
-        layout.addWidget(QLabel("Config file"))
-        layout.addWidget(config_label)
-        layout.addWidget(QLabel("Current session log"))
-        layout.addWidget(log_label)
-        layout.addWidget(reveal_button)
+
+        info_card = _section_card("Session")
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(8)
+        info_layout.addWidget(QLabel(f"Version {__version__}"))
+        info_layout.addWidget(QLabel("Config file"))
+        info_layout.addWidget(
+            _elided_label(
+                str(CONFIG_PATH),
+                mode=Qt.TextElideMode.ElideMiddle,
+                object_name="pathText",
+            )
+        )
+        info_layout.addWidget(QLabel("Current session log"))
+        info_layout.addWidget(
+            _elided_label(
+                str(log_file),
+                mode=Qt.TextElideMode.ElideMiddle,
+                object_name="pathText",
+            )
+        )
+        info_card.layout().addLayout(info_layout)
+        layout.addWidget(info_card)
+
+        button_row = QWidget()
+        button_layout = QHBoxLayout(button_row)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(8)
+        reveal_config = QPushButton("Reveal config")
+        reveal_config.clicked.connect(lambda: _reveal_in_file_browser(CONFIG_PATH))
+        reveal_log = QPushButton("Reveal current log")
+        reveal_log.clicked.connect(lambda: _reveal_in_file_browser(self.log_file))
+        button_layout.addWidget(reveal_config)
+        button_layout.addWidget(reveal_log)
+        button_layout.addStretch()
+        layout.addWidget(button_row)
+        layout.addStretch()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -1132,6 +1504,12 @@ def _advanced_defaults(config: AppConfig) -> AdvancedSettings:
         quality=config.quality,
         tile=config.tile,
     )
+
+
+def _advanced_for_model(settings: AdvancedSettings, model: str) -> AdvancedSettings:
+    if model != "realesr-general-x4v3" and settings.denoise_strength != 1.0:
+        return replace(settings, denoise_strength=1.0)
+    return settings
 
 
 def _options_for_job(job: Job) -> UpscaleOptions:
@@ -1161,10 +1539,35 @@ def _options_for_job(job: Job) -> UpscaleOptions:
     )
 
 
-def _download_text(model: str, done: int, total: int | None) -> str:
-    if total:
-        return f"download {model} {done * 100 // total}%"
-    return f"download {model}"
+def _section_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("sectionTitle")
+    return label
+
+
+def _section_card(title: str) -> QFrame:
+    card = QFrame()
+    card.setObjectName("sectionCard")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(14, 14, 14, 14)
+    layout.setSpacing(10)
+    layout.addWidget(_section_label(title))
+    return card
+
+
+def _elided_label(
+    text: str,
+    *,
+    mode: Qt.TextElideMode,
+    object_name: str | None = None,
+) -> QElidingLabel:
+    label = QElidingLabel(text)
+    label.setElideMode(mode)
+    label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    label.setToolTip(text)
+    if object_name:
+        label.setObjectName(object_name)
+    return label
 
 
 def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
@@ -1172,6 +1575,49 @@ def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
     if tooltip:
         item.setToolTip(tooltip)
     return item
+
+
+def _download_text(model: str, done: int, total: int | None) -> str:
+    if total:
+        return f"download {model} {done * 100 // total}%"
+    return f"download {model}"
+
+
+def _advanced_log_payload(settings: AdvancedSettings) -> dict[str, object]:
+    return {
+        "face_enhance": settings.face_enhance,
+        "denoise_strength": settings.denoise_strength,
+        "alpha_mode": settings.alpha_mode,
+        "device": settings.device,
+        "output_format": settings.output_format.value,
+        "quality": settings.quality,
+        "tile": settings.tile,
+        "strip_metadata": settings.strip_metadata,
+        "target_profile": settings.target_profile,
+    }
+
+
+def _config_log_payload(config: AppConfig) -> dict[str, object]:
+    return {
+        "max_concurrent_jobs": config.max_concurrent_jobs,
+        "close_tab_on_success": config.close_tab_on_success,
+        "output_format": config.output_format.value,
+        "quality": config.quality,
+        "tile": config.tile,
+        "device": config.device,
+        "auto_download": config.auto_download,
+    }
+
+
+def _job_log_payload(job: Job) -> dict[str, object]:
+    return {
+        "input_path": str(job.input_path),
+        "model": job.model,
+        "scale": job.scale,
+        "output_path": str(job.output_path),
+        "advanced": _advanced_log_payload(job.advanced),
+        "auto_download": job.auto_download,
+    }
 
 
 def _reveal_in_file_browser(path: Path) -> None:
@@ -1191,9 +1637,25 @@ def _reveal_in_file_browser(path: Path) -> None:
 def main() -> int:
     register_image_plugins()
     log_file = configure_session_logging()
+    runtime_dirs = resolve_runtime_dirs()
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    app.setApplicationName("PixelUp")
+    app.setApplicationDisplayName("PixelUp")
+    app.setStyleSheet(APP_STYLESHEET)
+    LOGGER.info(
+        "PixelUp started python=%s platform=%s log_file=%s runtime_dirs=%s argv=%s",
+        sys.version.split()[0],
+        sys.platform,
+        log_file,
+        {
+            "models_dir": str(runtime_dirs.models_dir),
+            "temp_dir": str(runtime_dirs.temp_dir),
+        },
+        sys.argv[1:],
+    )
+
     window = MainWindow(log_file=log_file)
-    LOGGER.info("PixelUp started with log file %s", log_file)
     window.show()
     paths = [Path(arg) for arg in sys.argv[1:] if not arg.startswith("-")]
     if paths:

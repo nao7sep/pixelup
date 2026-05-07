@@ -10,6 +10,17 @@ from pixelup.config import resolve_state_dir
 LOGGER_NAME = "pixelup"
 
 
+class UtcIsoFormatter(logging.Formatter):
+    def formatTime(  # noqa: N802
+        self,
+        record: logging.LogRecord,
+        datefmt: str | None = None,
+    ) -> str:
+        del datefmt
+        timestamp = datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds")
+        return timestamp.replace("+00:00", "Z")
+
+
 def session_log_path(*, state_dir: Path | None = None, now: datetime | None = None) -> Path:
     moment = now.astimezone(UTC) if now is not None else datetime.now(UTC)
     stamp = moment.strftime("%Y%m%d-%H%M%S-utc")
@@ -30,11 +41,11 @@ def configure_session_logging(log_path: Path | None = None) -> Path:
     logger.propagate = False
 
     file_handler = logging.FileHandler(path, encoding="utf-8")
-    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    file_handler.setFormatter(UtcIsoFormatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(file_handler)
 
     _install_excepthook(logger)
-    logger.info("Session started")
+    logger.info("Session started log_path=%s", path)
     return path
 
 
