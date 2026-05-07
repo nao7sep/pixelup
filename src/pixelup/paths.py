@@ -7,7 +7,6 @@ from enum import StrEnum
 from pathlib import Path
 
 from pixelup.errors import ErrorCode, PixelupError
-from pixelup.models import model_short_name
 
 
 class OutputFormat(StrEnum):
@@ -50,19 +49,23 @@ class OutputContext:
         return width * self.scale, height * self.scale
 
 
-_PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
-_SEPARATORS = "_-"
-
-
 def resolve_output_path(context: OutputContext) -> Path:
-    output_arg = context.output_arg
-    output = Path(output_arg).expanduser()
-    template = output_arg
-    if _is_directory_output(output_arg, output):
-        template = str(output / default_filename_pattern())
-    if "{" in template or "}" in template:
-        template = substitute_placeholders(template, context)
-    return Path(template).expanduser().resolve()
+    output = Path(context.output_arg).expanduser()
+    if _is_directory_output(context.output_arg, output):
+        return default_output_path(
+            context.input_path,
+            model=context.model,
+            scale=context.scale,
+            output_format=context.output_format,
+            output_dir=output,
+        )
+    if "{" in context.output_arg or "}" in context.output_arg:
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT,
+            "Output filename templates are not supported by the GUI app.",
+            details={"output": context.output_arg},
+        )
+    return output.resolve()
 
 
 def infer_output_format(output_arg: str, forced: OutputFormat | None) -> OutputFormat:
@@ -71,9 +74,7 @@ def infer_output_format(output_arg: str, forced: OutputFormat | None) -> OutputF
     output = Path(output_arg).expanduser()
     if _is_directory_output(output_arg, output):
         return OutputFormat.PNG
-    suffix = Path(output_arg).suffix.lower().lstrip(".")
-    if suffix == "{ext}":
-        return OutputFormat.PNG
+    suffix = output.suffix.lower().lstrip(".")
     if suffix == "jpeg":
         suffix = "jpg"
     try:
@@ -82,74 +83,45 @@ def infer_output_format(output_arg: str, forced: OutputFormat | None) -> OutputF
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
             "Output format could not be inferred from the output path.",
-            hint="Use --format png, --format jpg, or --format webp.",
+            hint="Choose png, jpg, or webp.",
             details={"output": output_arg},
         ) from exc
 
 
-def default_filename_pattern() -> str:
-    return "{stem}__{model_short}_{scale}x__{width}px.{ext}"
+def default_output_path(
+    input_path: Path,
+    *,
+    model: str,
+    scale: int,
+    output_format: OutputFormat,
+    output_dir: Path | None = None,
+    reserved: set[Path] | None = None,
+) -> Path:
+    directory = (output_dir or input_path.parent).expanduser().resolve()
+    stem = f"{input_path.stem}-{model_filename_token(model)}-{scale}x"
+    suffix = "." + ("jpg" if output_format == OutputFormat.JPG else output_format.value)
+    return collision_safe_path(directory / f"{stem}{suffix}", reserved=reserved)
 
 
-def substitute_placeholders(template: str, context: OutputContext) -> str:
-    values = _placeholder_values(context)
-    result = template
-    search_start = 0
-    while match := _PLACEHOLDER_RE.search(result, search_start):
-        name = match.group(1)
-        if name not in values:
-            raise PixelupError(
-                ErrorCode.INVALID_ARGUMENT,
-                f"Unknown output placeholder '{{{name}}}'.",
-                details={"placeholder": name},
-            )
-        value = values[name]
-        if value:
-            result = result[: match.start()] + value + result[match.end() :]
-            search_start = match.start() + len(value)
-            continue
-        result, search_start = _remove_empty_placeholder(result, match.start(), match.end())
-    if "{" in result or "}" in result:
-        raise PixelupError(
-            ErrorCode.INVALID_ARGUMENT,
-            "Output path contains an invalid placeholder.",
-            details={"output": template},
-        )
-    return result
+def collision_safe_path(path: Path, *, reserved: set[Path] | None = None) -> Path:
+    used = {item.expanduser().resolve() for item in (reserved or set())}
+    candidate = path.expanduser().resolve()
+    if not candidate.exists() and candidate not in used:
+        return candidate
+    for index in range(2, 10000):
+        numbered = candidate.with_name(f"{candidate.stem}-{index}{candidate.suffix}")
+        if not numbered.exists() and numbered not in used:
+            return numbered
+    raise PixelupError(
+        ErrorCode.OUTPUT_EXISTS,
+        "Could not find an unused output filename.",
+        details={"output": str(path)},
+    )
 
 
-def _placeholder_values(context: OutputContext) -> dict[str, str]:
-    width, height = context.output_size
-    denoise = ""
-    if context.model == "realesr-general-x4v3" and context.denoise_strength != 1.0:
-        denoise = f"{context.denoise_strength:g}"
-    return {
-        "stem": context.input_path.stem,
-        "ext": context.output_format.value,
-        "model": context.model,
-        "model_short": model_short_name(context.model),
-        "scale": str(context.scale),
-        "width": str(width),
-        "height": str(height),
-        "denoise": denoise,
-        "face": "face" if context.face_enhance else "",
-        "date": context.timestamp.date,
-        "time": context.timestamp.time,
-        "datetime": context.timestamp.datetime,
-    }
-
-
-def _remove_empty_placeholder(text: str, start: int, end: int) -> tuple[str, int]:
-    right = end
-    while right < len(text) and text[right] in _SEPARATORS:
-        right += 1
-    if right > end:
-        return text[:start] + text[right:], start
-
-    left = start
-    while left > 0 and text[left - 1] in _SEPARATORS:
-        left -= 1
-    return text[:left] + text[end:], left
+def model_filename_token(model: str) -> str:
+    token = model.lower().replace("_", "-")
+    return re.sub(r"[^a-z0-9.-]+", "-", token).strip("-")
 
 
 def _is_directory_output(raw: str, path: Path) -> bool:

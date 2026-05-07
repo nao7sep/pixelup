@@ -1,5 +1,4 @@
-from pixelup.cli import main
+from pixelup.gui import main
 
 if __name__ == "__main__":
-    main()
-
+    raise SystemExit(main())

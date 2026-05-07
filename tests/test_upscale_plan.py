@@ -91,7 +91,7 @@ def test_build_plan_directory_output_defaults_to_png(tmp_path: Path) -> None:
     )
 
     assert plan.output_format == OutputFormat.PNG
-    assert plan.output_path == output_dir / "input__custom-model_4x__12px.png"
+    assert plan.output_path == output_dir / "input-custom-model-4x.png"
 
 
 def test_build_plan_rejects_missing_unknown_model(tmp_path: Path) -> None:

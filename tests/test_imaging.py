@@ -7,7 +7,6 @@ from PIL import Image, ImageCms
 from pixelup.errors import PixelupError
 from pixelup.imaging import SourceMetadata, _profile_bytes, save_output_image
 from pixelup.paths import OutputFormat
-from pixelup.signals import OperationCancelled
 
 
 def test_save_output_image_writes_atomically_and_flattens_jpg_alpha(tmp_path: Path) -> None:
@@ -137,7 +136,7 @@ def test_save_output_image_preserves_png_xmp(tmp_path: Path) -> None:
         assert saved.info["xmp"] == xmp
 
 
-def test_save_output_image_cleans_temp_file_on_cancellation(
+def test_save_output_image_cleans_temp_file_on_save_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -145,12 +144,12 @@ def test_save_output_image_cleans_temp_file_on_cancellation(
     temp_dir = tmp_path / "temp"
     original_save = Image.Image.save
 
-    def cancel_after_partial_write(self: Image.Image, fp: object, **kwargs: object) -> None:
+    def fail_after_partial_write(self: Image.Image, fp: object, **kwargs: object) -> None:
         Path(fp).write_bytes(b"partial")
-        raise OperationCancelled()
+        raise ValueError("boom")
 
-    monkeypatch.setattr(Image.Image, "save", cancel_after_partial_write)
-    with pytest.raises(OperationCancelled):
+    monkeypatch.setattr(Image.Image, "save", fail_after_partial_write)
+    with pytest.raises(PixelupError) as excinfo:
         save_output_image(
             Image.new("RGB", (1, 1), "white"),
             output_path=output,
@@ -164,5 +163,6 @@ def test_save_output_image_cleans_temp_file_on_cancellation(
         )
 
     monkeypatch.setattr(Image.Image, "save", original_save)
+    assert excinfo.value.code == "output_unwritable"
     assert not output.exists()
     assert list(temp_dir.iterdir()) == []

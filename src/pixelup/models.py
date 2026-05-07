@@ -184,8 +184,7 @@ def require_model_present(
             ErrorCode.MODEL_NOT_FOUND,
             f"Model '{name}' is not present in the models directory.",
             hint=(
-                "Run 'pixelup models download MODEL', use --auto-download, "
-                "or place the .pth file there."
+                "Enable automatic model downloads, or place the .pth file in the models directory."
             ),
             details={"model": name, "models_dir": str(models_dir), "path": str(path)},
         )

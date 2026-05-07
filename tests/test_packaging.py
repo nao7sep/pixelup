@@ -4,8 +4,7 @@ import tomllib
 from pathlib import Path
 
 EXPECTED_RUNTIME_PINS = {
-    "typer": "0.25.0",
-    "rich": "15.0.0",
+    "PySide6": "6.10.1",
     "Pillow": "12.2.0",
     "pillow-heif": "1.3.0",
     "filelock": "3.29.0",
@@ -35,3 +34,9 @@ def test_inference_extra_is_not_declared() -> None:
     extras = pyproject["project"].get("optional-dependencies", {})
 
     assert "inference" not in extras
+
+
+def test_script_starts_gui() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+
+    assert pyproject["project"]["scripts"]["pixelup"] == "pixelup.gui:main"

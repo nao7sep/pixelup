@@ -1,297 +1,68 @@
 # PixelUp
 
-PixelUp is a command-line tool for upscaling one image file to one output file
-with Real-ESRGAN. It is designed for shell scripts, batch files, desktop apps,
-and other callers that want a predictable subprocess contract.
+PixelUp is a simple PySide6 desktop app for trying Real-ESRGAN upscale models on
+image files.
 
-PixelUp intentionally does not process folders, write manifests, or manage
-worker pools. Run one process per image and let the caller handle batching.
+The app is intentionally small: open or drag image files into the window, enqueue
+one or more model runs per tab, and let the global queue process them. Each tab is
+one unique input path. Opening the same path focuses its existing tab.
 
 ## Features
 
-- Single-image upscale command: `pixelup INPUT OUTPUT [OPTIONS]`
-- Machine-readable `single` and `stream` report modes
-- Human report mode with warnings, progress messages, and optional verbose timing
-- Output filename placeholders such as `{stem}`, `{model_short}`, `{width}`, and `{datetime}`
-- PNG, JPEG, and WebP output
-- HEIC/HEIF input support through `pillow-heif`
-- EXIF/XMP preservation unless `--strip-metadata` is set
-- ICC conversion to sRGB, Display P3, or Adobe RGB
-- Atomic temp-file writes followed by `os.replace`
-- SIGINT/SIGTERM cleanup for in-flight temp output files
-- Model download, check, verify, remove, and directory commands
-- Cross-process model download locks under `<models-dir>/.locks/`
-- Pinned Real-ESRGAN/GFPGAN inference stack bundled with the CLI
+- Tab per input image
+- Drag-and-drop image opening
+- Per-tab queue
+- "Try all models" button
+- Configurable global job concurrency, defaulting to 1
+- Output files written next to the source image
+- Sidecar JSON metadata for every successful output
+- Automatic model download when enabled
+- Retry failed jobs
+- Optional close-tab-on-success behavior, enabled by default
 
 ## Installation
-
-```console
-pip install -e .
-```
-
-With uv:
-
-```console
-uv sync
-```
-
-For development:
 
 ```console
 uv sync --extra dev
 ```
 
-The Real-ESRGAN inference stack (`torch`, `torchvision`, `realesrgan`,
-`basicsr-fixed`, `gfpgan`, `opencv-python`, `numpy`) is pinned exactly and
-installed as part of the base package, so a single install yields a fully
-working upscaler.
-
-## Quick Start
-
-Download a small general model:
+Run the app:
 
 ```console
-pixelup models download realesr-general-x4v3 --models-dir ./models
+uv run pixelup
 ```
 
-Validate an upscale plan without running inference:
+You can also pass image paths directly:
 
 ```console
-pixelup input.png output.png \
-  --model realesr-general-x4v3 \
-  --dry-run \
-  --models-dir ./models
+uv run pixelup image.png another-image.jpg
 ```
 
-Run an upscale:
+## Output Files
 
-```console
-pixelup input.png output.png \
-  --model realesr-general-x4v3 \
-  --models-dir ./models \
-  --report human
-```
-
-Use stream mode from an application:
-
-```console
-pixelup input.png output.png --report stream
-```
-
-## Subprocess Contract
-
-PixelUp is safe to call from scripts and applications as a one-image,
-one-output subprocess. Use `--report single` when the caller only needs the
-final result, or `--report stream` when the caller needs live progress.
-In machine-readable modes, expected successes and failures are JSON on stdout;
-use the process exit code for coarse control flow and the JSON `code` field for
-specific failure handling. `stream` mode ends with a final `result` event whose
-payload matches the `single` success or failure shape.
-
-Recommended caller flow:
-
-```console
-pixelup models check realesr-general-x4v3 \
-  --download-missing \
-  --models-dir ./models \
-  --report single
-
-pixelup input.png output.png \
-  --model realesr-general-x4v3 \
-  --dry-run \
-  --models-dir ./models \
-  --report single
-
-pixelup input.png output.png \
-  --model realesr-general-x4v3 \
-  --models-dir ./models \
-  --report stream
-```
-
-Dry-run validates the same preconditions as a real upscale at the moment it is
-called: input readability, output path validity, output overwrite rules, model
-presence, option values, and forced device availability. Dry-run never performs
-inference and never downloads models, even when `--auto-download` is supplied.
-If a required model is missing, dry-run fails with `model_not_found`; callers
-that want setup to happen automatically should run `models check
---download-missing` before dry-run or before the real upscale.
-
-In `single` report mode, a successful dry-run writes one JSON object to stdout:
-
-```json
-{
-  "ok": true,
-  "input": "/abs/path/input.png",
-  "output": "/abs/path/output.png",
-  "model": "realesr-general-x4v3",
-  "scale": 4,
-  "input_size": [800, 600],
-  "output_size": [3200, 2400],
-  "format": "png",
-  "device": "mps",
-  "dry_run": true,
-  "models_dir": "/abs/path/models",
-  "temp_dir": "/abs/path/temp",
-  "message": "Dry run plan is valid.",
-  "models_present": {
-    "realesr-general-x4v3": true
-  }
-}
-```
-
-On a real successful upscale, `single` report mode writes:
-
-```json
-{
-  "ok": true,
-  "input": "/abs/path/input.png",
-  "output": "/abs/path/output.png",
-  "model": "realesr-general-x4v3",
-  "scale": 4,
-  "input_size": [800, 600],
-  "output_size": [3200, 2400],
-  "format": "png",
-  "ms": 4200
-}
-```
-
-## Core Usage
-
-```console
-pixelup INPUT OUTPUT [OPTIONS]
-pixelup models list [OPTIONS]
-pixelup models check [MODEL...] [--download-missing] [OPTIONS]
-pixelup models download MODEL... [OPTIONS]
-pixelup models remove MODEL... [--all] [OPTIONS]
-pixelup models verify [OPTIONS]
-pixelup models dir [OPTIONS]
-pixelup --version [--report auto|human|single|stream]
-pixelup --show-completion [bash|zsh|fish|powershell|pwsh]
-pixelup --install-completion [bash|zsh|fish|powershell|pwsh]
-```
-
-Only `-h` is available as a short option, as an alias for `--help`.
-
-Completion commands accept an explicit shell name. If omitted, PixelUp falls
-back to the `SHELL` environment variable.
-
-## Important Options
-
-Processing:
-
-```console
---model NAME
---scale 2|4
---tile INT
---tile-pad INT
---pre-pad INT
---fp32
---face-enhance
---denoise-strength FLOAT
---alpha-mode realesrgan|bicubic
---device auto|mps|cuda|cpu
---gpu-id INT
-```
-
-`--device auto` selects MPS if available, then CUDA, then CPU. `--gpu-id`
-only chooses a non-default CUDA device; it is not required to enable CUDA
-under `auto`.
-
-Output:
-
-```console
---format png|jpg|webp
---quality INT
---background COLOR
---strip-metadata
---target-profile srgb|p3|adobergb
---overwrite
-```
-
-Runtime:
-
-```console
---auto-download
---models-dir PATH
---temp-dir PATH
---download-timeout SECONDS
---lock-timeout SECONDS
---dry-run
---report auto|human|single|stream
---quiet
---verbose
-```
-
-`--quiet` and `--verbose` are mutually exclusive.
-
-## Output Paths
-
-`OUTPUT` can be a file path, a directory, or a placeholder template.
-
-If `OUTPUT` is an existing directory, PixelUp writes this default pattern:
+By default, PixelUp writes outputs next to the input image:
 
 ```text
-{stem}__{model_short}_{scale}x__{width}px.{ext}
+source-model-scale.png
 ```
 
-Supported placeholders:
+For example:
 
 ```text
-{stem}
-{ext}
-{model}
-{model_short}
-{scale}
-{width}
-{height}
-{denoise}
-{face}
-{date}
-{time}
-{datetime}
+a-realesr-general-x4v3-4x.png
+a-realesr-general-x4v3-4x.pixelup.json
 ```
 
-Empty optional placeholders collapse adjacent `_` or `-` separators. For
-example, `{stem}__{denoise}__{model_short}.{ext}` becomes
-`input__general.png` when denoise is not used.
+Model names are lowercased and underscores become hyphens. If the output filename
+already exists, PixelUp appends `-2`, `-3`, and so on before the extension.
 
-Directory outputs and `{ext}` templates default to PNG when `--format` is not
-provided.
-
-## Report Modes
-
-`auto` selects `human` when stdout is a terminal and `single` otherwise.
-
-`human` writes interactive output to stderr. It shows warnings for output
-extension/format mismatches and model/native scale mismatches. With `--verbose`,
-it also prints start context and elapsed stage timing.
-
-`single` writes one JSON object to stdout and is silent during processing.
-
-`stream` writes JSON lines to stdout. Events include:
-
-```text
-start
-progress
-waiting
-download
-result
-```
-
-The final stream line is always a `result` object. Instant commands such as
-`models dir` and `--version` intentionally produce the same single JSON object
-in `single` and `stream` modes.
-
-When `--tile` is greater than zero, PixelUp emits a best-effort `progress`
-event with `phase: "upscale"` and `tile`/`tiles` fields after each tile
-completes. This relies on the internal tile loop of the pinned `realesrgan`
-release; if a future version diverges, PixelUp silently falls back to a single
-per-phase `progress` event without affecting output correctness. With
-`--tile 0` (no tiling) only the per-phase `progress` event is emitted.
+The sidecar JSON is meant for replication. It stores the model, scale, safe
+options, input fingerprint, dimensions, and output filename. It does not store
+absolute paths, parent directories, usernames, model directories, or temp paths.
 
 ## Models
 
-Known public model names:
+"Try all models" enqueues these upscale models:
 
 ```text
 RealESRGAN_x4plus
@@ -300,157 +71,40 @@ RealESRGAN_x2plus
 RealESRGAN_x4plus_anime_6B
 realesr-animevideov3
 realesr-general-x4v3
-GFPGANv1.4
 ```
 
-Hidden companion models are recognized but omitted from the default list:
+`GFPGANv1.4` is kept as a face-enhancement helper model and is not part of "Try
+all models" in this simple GUI.
+
+## Config
+
+Config lives at:
 
 ```text
-realesr-general-wdn-x4v3
-facexlib-detection-retinaface-resnet50
-facexlib-parsing-parsenet
+~/.pixelup/config.toml
 ```
 
-`realesr-general-wdn-x4v3` is used when `--model realesr-general-x4v3` and
-`--denoise-strength` is not `1.0`.
-
-`--face-enhance` requires `GFPGANv1.4` plus the two hidden facexlib helper
-models. PixelUp stores all three in the active models directory and validates
-them as part of dry-run and real upscale planning. A real run with
-`--face-enhance --auto-download` downloads all missing face-enhancement weights;
-dry-run never downloads them.
-
-Model commands:
-
-```console
-pixelup models list --models-dir ./models
-pixelup models check RealESRGAN_x4plus --models-dir ./models
-pixelup models check realesr-general-x4v3 --download-missing --models-dir ./models
-pixelup models download realesr-general-x4v3 --models-dir ./models
-pixelup models verify --models-dir ./models
-pixelup models remove realesr-general-x4v3 --models-dir ./models
-pixelup models remove --all --models-dir ./models
-pixelup models dir --report single
-```
-
-`models check --download-missing` may be run without model names; in that case
-it downloads every missing public known model.
-
-`models verify` validates present recognized model files by expected size and,
-when available, checksum. It fails fast on the first corrupt model and reports
-that mismatch as `model_corrupt`.
-
-`models remove --all` removes all recognized model files, including hidden
-denoise and face-enhancement helper models. Unknown files in the models
-directory are left alone.
-
-## Runtime Directories
-
-Default persistent state lives under `~/.pixelup/`:
+Runtime model and temp files live under:
 
 ```text
-~/.pixelup/
-  models/
-  temp/
+~/.pixelup/models/
+~/.pixelup/temp/
 ```
 
-Resolution order:
+The settings dialog writes:
 
-```text
-models: --models-dir, PIXELUP_MODELS_DIR, ~/.pixelup/models
-temp:   --temp-dir,   PIXELUP_TEMP_DIR,   ~/.pixelup/temp
+```toml
+max_concurrent_jobs = 1
+close_tab_on_success = true
+output_format = "png"
+quality = 95
+tile = 0
+device = "auto"
+auto_download = true
 ```
 
-PixelUp creates these runtime directories when needed. It does not clean stale
-model files or old temp directories for you.
-
-## Inference Stack
-
-PixelUp installs the Real-ESRGAN inference stack as part of the base package.
-The pinned versions are:
-
-```text
-numpy==2.4.4
-torch==2.11.0
-torchvision==0.26.0
-opencv-python==4.13.0.92
-realesrgan==0.3.0
-basicsr-fixed==1.4.2
-gfpgan==1.3.8
-```
-
-`basicsr-fixed` is the compatibility fix for the removed
-`torchvision.transforms.functional_tensor` module that upstream `basicsr` 1.4.2
-imports. `realesrgan` also declares upstream `basicsr`, so PixelUp installs a
-runtime import alias for `torchvision.transforms.functional_tensor` before
-loading Real-ESRGAN/BasicSR. This keeps clean non-editable installs compatible
-even if the upstream `basicsr` package wins the top-level package collision.
-
-## Color And Metadata
-
-Default behavior preserves the source ICC profile, EXIF, and XMP metadata.
-
-`--strip-metadata` drops EXIF and XMP. If the source image has an ICC profile,
-PixelUp converts the image to sRGB before dropping that profile.
-
-`--target-profile` converts and embeds one of:
-
-```text
-srgb
-p3
-adobergb
-```
-
-PixelUp generates Display P3 and Adobe RGB profiles from color-space constants,
-so it does not depend on platform ColorSync profile files.
-
-## Error Handling
-
-Machine-readable failures use:
-
-```json
-{
-  "ok": false,
-  "code": "model_not_found",
-  "message": "Human-readable explanation.",
-  "hint": "Suggested next action.",
-  "details": {}
-}
-```
-
-Public error codes:
-
-```text
-input_not_found
-input_unreadable
-input_invalid_format
-output_exists
-output_unwritable
-output_dir_missing
-model_not_found
-model_download_failed
-model_corrupt
-auto_download_disabled
-denoise_strength_unsupported
-face_enhance_unavailable
-out_of_memory
-invalid_argument
-internal_error
-cancelled
-```
-
-Exit codes:
-
-```text
-0 success
-1 internal error or uncaught exception
-2 invalid argument
-3 input error
-4 output error
-5 model error
-6 out of memory
-7 cancelled
-```
+`PIXELUP_MODELS_DIR` and `PIXELUP_TEMP_DIR` can still override the runtime
+directories.
 
 ## Development
 
@@ -462,8 +116,8 @@ uv run --extra dev pytest -q
 uv lock --check
 ```
 
-The regular test suite does not download ML packages or model weights. To run
-the opt-in real inference smoke test:
+The regular test suite does not download model weights. To run the opt-in real
+inference smoke test:
 
 ```console
 PIXELUP_RUN_REAL_INFERENCE=1 \

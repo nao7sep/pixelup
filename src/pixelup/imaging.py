@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -12,7 +14,6 @@ from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageEr
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
 from pixelup.paths import OutputFormat
-from pixelup.signals import check_cancelled, temp_file_guard
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +115,6 @@ def save_output_image(
             "Could not create the temp directory.",
             details={"path": str(temp_dir), "reason": str(exc)},
         ) from exc
-    check_cancelled()
     encoded = _prepare_image_for_save(
         image,
         output_format=output_format,
@@ -134,7 +134,6 @@ def save_output_image(
     try:
         with temp_file_guard(temp_path):
             encoded.save(temp_path, **save_kwargs)
-            check_cancelled()
             os.replace(temp_path, output_path)
     except PixelupError:
         temp_path.unlink(missing_ok=True)
@@ -248,6 +247,15 @@ def _save_kwargs(
 
 def _temp_output_path(temp_dir: Path) -> Path:
     return temp_dir / f"pixelup-{os.getpid()}-{uuid4().hex}.tmp"
+
+
+@contextmanager
+def temp_file_guard(path: Path) -> Iterator[None]:
+    try:
+        yield
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _source_profile_bytes(source_metadata: SourceMetadata | None) -> bytes:
