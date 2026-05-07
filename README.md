@@ -38,6 +38,16 @@ You can also pass image paths directly:
 uv run pixelup image.png another-image.jpg
 ```
 
+On macOS or Windows, the `scripts/` directory also contains double-clickable
+helpers:
+
+```text
+scripts/run.command
+scripts/update-packages.command
+scripts/run.ps1
+scripts/update-packages.ps1
+```
+
 ## Output Files
 
 By default, PixelUp writes outputs next to the input image:
@@ -81,7 +91,7 @@ all models" in this simple GUI.
 Config lives at:
 
 ```text
-~/.pixelup/config.toml
+~/.pixelup/config.json
 ```
 
 Runtime model and temp files live under:
@@ -93,14 +103,16 @@ Runtime model and temp files live under:
 
 The settings dialog writes:
 
-```toml
-max_concurrent_jobs = 1
-close_tab_on_success = true
-output_format = "png"
-quality = 95
-tile = 0
-device = "auto"
-auto_download = true
+```json
+{
+  "auto_download": true,
+  "close_tab_on_success": true,
+  "device": "auto",
+  "max_concurrent_jobs": 1,
+  "output_format": "png",
+  "quality": 95,
+  "tile": 0
+}
 ```
 
 `PIXELUP_MODELS_DIR` and `PIXELUP_TEMP_DIR` can still override the runtime

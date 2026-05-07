@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import tomllib
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pixelup.config import APP_NAME
 from pixelup.paths import OutputFormat
 
-CONFIG_PATH = Path.home() / f".{APP_NAME}" / "config.toml"
+CONFIG_PATH = Path.home() / f".{APP_NAME}" / "config.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +25,9 @@ class AppConfig:
 def load_app_config(path: Path = CONFIG_PATH) -> AppConfig:
     if not path.exists():
         return AppConfig()
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"PixelUp config must be a JSON object: {path}")
     return AppConfig(
         max_concurrent_jobs=max(1, int(data.get("max_concurrent_jobs", 1))),
         close_tab_on_success=bool(data.get("close_tab_on_success", True)),
@@ -38,22 +41,16 @@ def load_app_config(path: Path = CONFIG_PATH) -> AppConfig:
 
 def save_app_config(config: AppConfig, path: Path = CONFIG_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "\n".join(
-            [
-                f"max_concurrent_jobs = {config.max_concurrent_jobs}",
-                f"close_tab_on_success = {_toml_bool(config.close_tab_on_success)}",
-                f'output_format = "{config.output_format.value}"',
-                f"quality = {config.quality}",
-                f"tile = {config.tile}",
-                f'device = "{config.device}"',
-                f"auto_download = {_toml_bool(config.auto_download)}",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(_to_json(config), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _toml_bool(value: bool) -> str:
-    return "true" if value else "false"
+def _to_json(config: AppConfig) -> dict[str, Any]:
+    return {
+        "auto_download": config.auto_download,
+        "close_tab_on_success": config.close_tab_on_success,
+        "device": config.device,
+        "max_concurrent_jobs": config.max_concurrent_jobs,
+        "output_format": config.output_format.value,
+        "quality": config.quality,
+        "tile": config.tile,
+    }
