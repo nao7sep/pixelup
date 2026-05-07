@@ -40,7 +40,6 @@ def test_sidecar_omits_private_paths(tmp_path: Path) -> None:
             auto_download=True,
             download_timeout=600,
             lock_timeout=600,
-            dry_run=False,
         ),
         result={
             "input_size": [1, 1],

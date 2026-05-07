@@ -21,13 +21,11 @@ from pixelup.models import (
     WaitingCallback,
     download_model,
     known_model,
-    model_present,
     require_model_present,
 )
 from pixelup.paths import (
     OutputContext,
     OutputFormat,
-    RunTimestamp,
     infer_output_format,
     resolve_output_path,
 )
@@ -62,7 +60,6 @@ class UpscaleOptions:
     auto_download: bool
     download_timeout: int
     lock_timeout: int
-    dry_run: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,25 +71,7 @@ class UpscalePlan:
     input_size: tuple[int, int]
     output_size: tuple[int, int]
     output_format: OutputFormat
-    runtime_dirs: RuntimeDirs
     device: str
-    dry_run: bool
-
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "ok": True,
-            "input": str(self.input_path),
-            "output": str(self.output_path),
-            "model": self.model,
-            "scale": self.scale,
-            "input_size": list(self.input_size),
-            "output_size": list(self.output_size),
-            "format": self.output_format.value,
-            "device": self.device,
-            "dry_run": self.dry_run,
-            "models_dir": str(self.runtime_dirs.models_dir),
-            "temp_dir": str(self.runtime_dirs.temp_dir),
-        }
 
 
 def build_plan(
@@ -118,7 +97,6 @@ def build_plan(
 
     input_size = read_image_size(input_path)
     output_format = infer_output_format(options.output_arg, options.output_format)
-    timestamp = RunTimestamp.now()
     context = OutputContext(
         input_path=input_path,
         output_arg=options.output_arg,
@@ -126,9 +104,6 @@ def build_plan(
         scale=options.scale,
         output_format=output_format,
         input_size=input_size,
-        face_enhance=options.face_enhance,
-        denoise_strength=options.denoise_strength,
-        timestamp=timestamp,
     )
     output_path = resolve_output_path(context)
     validate_output_path(output_path, overwrite=options.overwrite)
@@ -144,9 +119,7 @@ def build_plan(
         input_size=input_size,
         output_size=context.output_size,
         output_format=output_format,
-        runtime_dirs=runtime_dirs,
         device=device,
-        dry_run=options.dry_run,
     )
 
 
@@ -165,19 +138,11 @@ def run_upscale(
     plan = build_plan(
         options,
         runtime_dirs,
-        check_model=options.dry_run or not options.auto_download,
+        check_model=not options.auto_download,
     )
     for warning in plan_warnings(options, plan):
         if on_warning:
             on_warning(warning)
-    if options.dry_run:
-        payload = plan.to_payload()
-        payload["message"] = "Dry run plan is valid."
-        payload["models_present"] = {
-            name: model_present(runtime_dirs.models_dir, name)
-            for name in required_model_names(options)
-        }
-        return payload
     if on_start:
         on_start(plan, count_tiles(plan.input_size, options.tile))
     if options.auto_download:

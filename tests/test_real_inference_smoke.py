@@ -55,7 +55,6 @@ def test_real_esrgan_small_image_smoke(tmp_path: Path) -> None:
             auto_download=False,
             download_timeout=600,
             lock_timeout=600,
-            dry_run=False,
         ),
         RuntimeDirs(models_dir=models_dir, temp_dir=temp_dir),
     )

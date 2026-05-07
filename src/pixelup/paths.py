@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -16,22 +15,6 @@ class OutputFormat(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class RunTimestamp:
-    date: str
-    time: str
-    datetime: str
-
-    @classmethod
-    def now(cls) -> RunTimestamp:
-        value = datetime.now(UTC)
-        return cls(
-            date=value.strftime("%Y%m%d"),
-            time=value.strftime("%H%M%S"),
-            datetime=value.strftime("%Y%m%d-%H%M%S-utc"),
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class OutputContext:
     input_path: Path
     output_arg: str
@@ -39,9 +22,6 @@ class OutputContext:
     scale: int
     output_format: OutputFormat
     input_size: tuple[int, int]
-    face_enhance: bool
-    denoise_strength: float
-    timestamp: RunTimestamp
 
     @property
     def output_size(self) -> tuple[int, int]:

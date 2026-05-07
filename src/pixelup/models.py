@@ -114,16 +114,6 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
 
 KNOWN_MODELS: tuple[ModelInfo, ...] = tuple(model for model in ALL_MODELS if model.listed)
 _MODEL_BY_NAME = {model.name: model for model in ALL_MODELS}
-_ALIAS_BY_NAME = {model.name: model.alias for model in ALL_MODELS if model.alias}
-
-
-def model_short_name(name: str) -> str:
-    return _ALIAS_BY_NAME.get(name, name)
-
-
-def all_model_names(*, include_unlisted: bool = False) -> list[str]:
-    models = ALL_MODELS if include_unlisted else KNOWN_MODELS
-    return [model.name for model in models]
 
 
 def known_model(name: str) -> ModelInfo | None:
@@ -134,45 +124,6 @@ def model_file(models_dir: Path, name: str) -> Path:
     info = known_model(name)
     filename = info.filename if info else f"{name}.pth"
     return models_dir / filename
-
-
-def model_present(models_dir: Path, name: str) -> bool:
-    path = model_file(models_dir, name)
-    return path.is_file() and path.stat().st_size > 0
-
-
-def model_record(models_dir: Path, info: ModelInfo) -> dict[str, object]:
-    path = models_dir / info.filename
-    present = path.is_file()
-    return {
-        "name": info.name,
-        "alias": info.alias,
-        "present": present,
-        "size_bytes": path.stat().st_size if present else None,
-    }
-
-
-def list_model_records(models_dir: Path, names: list[str] | None = None) -> list[dict[str, object]]:
-    if not names:
-        return [model_record(models_dir, info) for info in KNOWN_MODELS]
-    records: list[dict[str, object]] = []
-    for name in names:
-        info = known_model(name)
-        if info is None:
-            path = model_file(models_dir, name)
-            present = path.is_file()
-            records.append(
-                {
-                    "name": name,
-                    "alias": None,
-                    "present": present,
-                    "size_bytes": path.stat().st_size if present else None,
-                }
-            )
-        else:
-            records.append(model_record(models_dir, info))
-    return records
-
 
 def require_model_present(
     models_dir: Path,
@@ -190,28 +141,6 @@ def require_model_present(
         )
     verify_model_file(path, known_model(name))
     return path
-
-
-def download_models(
-    models_dir: Path,
-    names: list[str],
-    *,
-    download_timeout: int,
-    lock_timeout: int,
-    on_download: DownloadCallback | None = None,
-    on_waiting: WaitingCallback | None = None,
-) -> list[dict[str, object]]:
-    return [
-        download_model(
-            models_dir,
-            name,
-            download_timeout=download_timeout,
-            lock_timeout=lock_timeout,
-            on_download=on_download,
-            on_waiting=on_waiting,
-        )
-        for name in names
-    ]
 
 
 def download_model(
@@ -302,16 +231,6 @@ def download_model_info(
     finally:
         lock.release()
     return _download_result(info, target, "downloaded")
-
-
-def verify_present_models(models_dir: Path) -> list[dict[str, object]]:
-    results: list[dict[str, object]] = []
-    for info in ALL_MODELS:
-        path = models_dir / info.filename
-        if not path.is_file():
-            continue
-        results.append(verify_model_file(path, info))
-    return results
 
 
 def verify_model_file(path: Path, info: ModelInfo | None = None) -> dict[str, object]:

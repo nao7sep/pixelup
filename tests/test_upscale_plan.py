@@ -14,7 +14,6 @@ def options(
     output_arg: str,
     *,
     model: str = "RealESRGAN_x4plus",
-    dry_run: bool = True,
     tile: int = 0,
     scale: int = 4,
     output_format: OutputFormat | None = OutputFormat.PNG,
@@ -44,7 +43,17 @@ def options(
         auto_download=auto_download,
         download_timeout=600,
         lock_timeout=600,
-        dry_run=dry_run,
+    )
+
+
+def _stub_successful_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixelup import upscale as upscale_module
+
+    monkeypatch.setattr(upscale_module, "run_inference", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        upscale_module,
+        "image_from_bgr_array",
+        lambda array: Image.new("RGB", (8, 8), "red"),
     )
 
 
@@ -115,7 +124,6 @@ def test_run_upscale_calls_inference_and_writes_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pixelup import upscale as upscale_module
     from pixelup.upscale import run_upscale
 
     input_path = tmp_path / "input.png"
@@ -127,20 +135,10 @@ def test_run_upscale_calls_inference_and_writes_output(
     (models_dir / "custom-model.pth").write_bytes(b"weights")
     Image.new("RGB", (2, 2), "white").save(input_path)
     events: list[tuple[str, object]] = []
-
-    def fake_run_inference(*args: object, **kwargs: object) -> object:
-        assert kwargs.get("on_progress") is not None
-        return object()
-
-    monkeypatch.setattr(upscale_module, "run_inference", fake_run_inference)
-    monkeypatch.setattr(
-        upscale_module,
-        "image_from_bgr_array",
-        lambda array: Image.new("RGB", (8, 8), "red"),
-    )
+    _stub_successful_inference(monkeypatch)
 
     result = run_upscale(
-        options(input_path, str(output_path), model="custom-model", dry_run=False, tile=1),
+        options(input_path, str(output_path), model="custom-model", tile=1),
         RuntimeDirs(models_dir, temp_dir),
         on_start=lambda plan, tiles: events.append(("start", tiles)),
         on_progress=lambda phase: events.append(("progress", phase)),
@@ -153,7 +151,7 @@ def test_run_upscale_calls_inference_and_writes_output(
     assert ("progress", "encode") in events
 
 
-def test_dry_run_with_auto_download_errors_on_missing_model(tmp_path: Path) -> None:
+def test_run_upscale_without_auto_download_errors_on_missing_model(tmp_path: Path) -> None:
     from pixelup.upscale import run_upscale
 
     input_path = tmp_path / "input.png"
@@ -165,73 +163,11 @@ def test_dry_run_with_auto_download_errors_on_missing_model(tmp_path: Path) -> N
 
     with pytest.raises(PixelupError) as excinfo:
         run_upscale(
-            options(
-                input_path,
-                str(tmp_path / "output.png"),
-                dry_run=True,
-                auto_download=True,
-            ),
+            options(input_path, str(tmp_path / "output.png")),
             RuntimeDirs(models_dir, temp_dir),
         )
 
     assert excinfo.value.code == "model_not_found"
-
-
-def test_dry_run_without_auto_download_errors_on_missing_known_model(tmp_path: Path) -> None:
-    from pixelup.upscale import run_upscale
-
-    input_path = tmp_path / "input.png"
-    models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
-    models_dir.mkdir()
-    temp_dir.mkdir()
-    Image.new("RGB", (1, 1), "white").save(input_path)
-
-    with pytest.raises(PixelupError) as excinfo:
-        run_upscale(
-            options(input_path, str(tmp_path / "output.png"), dry_run=True),
-            RuntimeDirs(models_dir, temp_dir),
-        )
-
-    assert excinfo.value.code == "model_not_found"
-
-
-def test_dry_run_without_auto_download_errors_on_missing_unknown_model(tmp_path: Path) -> None:
-    from pixelup.upscale import run_upscale
-
-    input_path = tmp_path / "input.png"
-    models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
-    models_dir.mkdir()
-    temp_dir.mkdir()
-    Image.new("RGB", (1, 1), "white").save(input_path)
-
-    with pytest.raises(PixelupError) as excinfo:
-        run_upscale(
-            options(input_path, str(tmp_path / "output.png"), model="custom-model", dry_run=True),
-            RuntimeDirs(models_dir, temp_dir),
-        )
-
-    assert excinfo.value.code == "model_not_found"
-
-
-def test_dry_run_reports_models_present_when_present(tmp_path: Path) -> None:
-    from pixelup.upscale import run_upscale
-
-    input_path = tmp_path / "input.png"
-    models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
-    models_dir.mkdir()
-    temp_dir.mkdir()
-    (models_dir / "custom-model.pth").write_bytes(b"weights")
-    Image.new("RGB", (1, 1), "white").save(input_path)
-
-    result = run_upscale(
-        options(input_path, str(tmp_path / "output.png"), model="custom-model", dry_run=True),
-        RuntimeDirs(models_dir, temp_dir),
-    )
-
-    assert result["models_present"] == {"custom-model": True}
 
 
 def test_face_enhance_requires_gfpgan_and_facexlib_helper_models(tmp_path: Path) -> None:
@@ -254,7 +190,10 @@ def test_face_enhance_requires_gfpgan_and_facexlib_helper_models(tmp_path: Path)
     ]
 
 
-def test_run_upscale_warns_for_forced_format_extension_mismatch(tmp_path: Path) -> None:
+def test_run_upscale_warns_for_forced_format_extension_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from pixelup.upscale import run_upscale
 
     input_path = tmp_path / "input.png"
@@ -265,13 +204,13 @@ def test_run_upscale_warns_for_forced_format_extension_mismatch(tmp_path: Path) 
     (models_dir / "custom-model.pth").write_bytes(b"weights")
     Image.new("RGB", (1, 1), "white").save(input_path)
     warnings: list[str] = []
+    _stub_successful_inference(monkeypatch)
 
     run_upscale(
         options(
             input_path,
             str(tmp_path / "output.png"),
             model="custom-model",
-            dry_run=True,
             output_format=OutputFormat.JPG,
         ),
         RuntimeDirs(models_dir, temp_dir),
@@ -298,6 +237,7 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
     (models_dir / "RealESRGAN_x2plus.pth").write_bytes(b"weights")
     Image.new("RGB", (1, 1), "white").save(input_path)
     warnings: list[str] = []
+    _stub_successful_inference(monkeypatch)
     monkeypatch.setattr(upscale_module, "require_model_present", lambda *args, **kwargs: None)
 
     run_upscale(
@@ -305,7 +245,6 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
             input_path,
             str(tmp_path / "output.png"),
             model="RealESRGAN_x2plus",
-            dry_run=True,
             scale=4,
         ),
         RuntimeDirs(models_dir, temp_dir),

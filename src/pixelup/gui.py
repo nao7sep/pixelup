@@ -516,7 +516,6 @@ def _options_for_job(job: Job, config: AppConfig) -> UpscaleOptions:
         auto_download=config.auto_download,
         download_timeout=600,
         lock_timeout=600,
-        dry_run=False,
     )
 
 

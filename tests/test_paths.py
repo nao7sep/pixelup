@@ -6,7 +6,6 @@ from pixelup.errors import PixelupError
 from pixelup.paths import (
     OutputContext,
     OutputFormat,
-    RunTimestamp,
     default_output_path,
     infer_output_format,
     model_filename_token,
@@ -22,9 +21,6 @@ def context(output_arg: str) -> OutputContext:
         scale=4,
         output_format=OutputFormat.PNG,
         input_size=(800, 600),
-        face_enhance=False,
-        denoise_strength=1.0,
-        timestamp=RunTimestamp("20260428", "032202", "20260428-032202-utc"),
     )
 
 
@@ -37,9 +33,6 @@ def test_directory_output_uses_model_and_scale_filename(tmp_path: Path) -> None:
             scale=4,
             output_format=OutputFormat.PNG,
             input_size=(800, 600),
-            face_enhance=False,
-            denoise_strength=1.0,
-            timestamp=RunTimestamp("20260428", "032202", "20260428-032202-utc"),
         )
     )
 
