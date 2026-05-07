@@ -40,6 +40,12 @@ def resolve_temp_dir(override: Path | None, env: dict[str, str] | None = None) -
     return _resolve_dir(override, TEMP_ENV, "temp", env)
 
 
+def resolve_state_dir(override: Path | None = None) -> Path:
+    if override is not None:
+        return override.expanduser().resolve()
+    return _default_state_dir().resolve()
+
+
 def ensure_models_dir(path: Path) -> Path:
     return _ensure_dir(path, ErrorCode.MODEL_NOT_FOUND, "Could not create the models directory.")
 
@@ -77,4 +83,3 @@ def _ensure_dir(path: Path, code: ErrorCode, message: str) -> Path:
     if not path.is_dir():
         raise PixelupError(code, message, details={"path": str(path)})
     return path
-

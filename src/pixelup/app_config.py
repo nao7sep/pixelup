@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pixelup.config import APP_NAME
+from pixelup.config import resolve_state_dir
 from pixelup.paths import OutputFormat
 
-CONFIG_PATH = Path.home() / f".{APP_NAME}" / "config.json"
+CONFIG_PATH = resolve_state_dir() / "config.json"
 
 
 @dataclass(frozen=True, slots=True)

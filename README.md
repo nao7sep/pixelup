@@ -10,14 +10,18 @@ one unique input path. Opening the same path focuses its existing tab.
 ## Features
 
 - Tab per input image
+- Wrapped tab chips with truncated labels
 - Drag-and-drop image opening
 - Per-tab queue
 - "Try all models" button
+- Collapsed per-tab advanced options with restore-defaults support
 - Configurable global job concurrency, defaulting to 1
 - Output files written next to the source image
 - Sidecar JSON metadata for every successful output
 - Automatic model download when enabled
 - Retry failed jobs
+- Proper Settings and About dialogs
+- Session log file per app launch
 - Optional close-tab-on-success behavior, enabled by default
 
 ## Installation
@@ -75,12 +79,12 @@ absolute paths, parent directories, usernames, model directories, or temp paths.
 "Try all models" enqueues these upscale models:
 
 ```text
+realesr-general-x4v3
 RealESRGAN_x4plus
 RealESRNet_x4plus
 RealESRGAN_x2plus
 RealESRGAN_x4plus_anime_6B
 realesr-animevideov3
-realesr-general-x4v3
 ```
 
 `GFPGANv1.4` is kept as a face-enhancement helper model and is not part of "Try
@@ -99,6 +103,7 @@ Runtime model and temp files live under:
 ```text
 ~/.pixelup/models/
 ~/.pixelup/temp/
+~/.pixelup/logs/
 ```
 
 The settings dialog writes:
@@ -117,6 +122,12 @@ The settings dialog writes:
 
 `PIXELUP_MODELS_DIR` and `PIXELUP_TEMP_DIR` can still override the runtime
 directories.
+
+Each app launch creates a session log file using a UTC filename:
+
+```text
+~/.pixelup/logs/yyyymmdd-hhmmss-utc.log
+```
 
 ## Development
 
