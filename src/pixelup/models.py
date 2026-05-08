@@ -17,6 +17,7 @@ from pixelup.errors import ErrorCode, PixelupError
 
 DownloadCallback = Callable[[str, int, int | None], None]
 WaitingCallback = Callable[[str, float], None]
+CancelCheck = Callable[[], bool]
 
 REAL_ESRGAN_RELEASES = "https://github.com/xinntao/Real-ESRGAN/releases/download"
 GFPGAN_RELEASES = "https://github.com/TencentARC/GFPGAN/releases/download"
@@ -151,6 +152,7 @@ def download_model(
     lock_timeout: int,
     on_download: DownloadCallback | None = None,
     on_waiting: WaitingCallback | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> dict[str, object]:
     info = known_model(name)
     if info is None or info.url is None:
@@ -166,6 +168,7 @@ def download_model(
         lock_timeout=lock_timeout,
         on_download=on_download,
         on_waiting=on_waiting,
+        should_cancel=should_cancel,
     )
 
 
@@ -177,6 +180,7 @@ def download_model_info(
     lock_timeout: int,
     on_download: DownloadCallback | None = None,
     on_waiting: WaitingCallback | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> dict[str, object]:
     if download_timeout <= 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--download-timeout must be positive.")
@@ -215,6 +219,7 @@ def download_model_info(
                 temp_path,
                 download_timeout=download_timeout,
                 on_download=on_download,
+                should_cancel=should_cancel,
             )
             verify_model_file(temp_path, info)
             os.replace(temp_path, target)
@@ -272,6 +277,7 @@ def _download_to_temp(
     *,
     download_timeout: int,
     on_download: DownloadCallback | None,
+    should_cancel: CancelCheck | None = None,
 ) -> None:
     assert info.url is not None
     bytes_done = 0
@@ -281,6 +287,8 @@ def _download_to_temp(
         bytes_total = _response_size(response.headers.get("Content-Length"), info.expected_size)
         with temp_path.open("wb") as output:
             while chunk := response.read(DOWNLOAD_CHUNK_BYTES):
+                if should_cancel and should_cancel():
+                    raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
                 output.write(chunk)
                 bytes_done += len(chunk)
                 if _should_report_download(bytes_done, bytes_total, last_reported, last_percent):

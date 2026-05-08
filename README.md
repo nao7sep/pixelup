@@ -22,6 +22,8 @@ one unique input path. Opening the same path focuses its existing tab.
 - Sidecar JSON metadata for every successful output
 - Automatic model download when enabled
 - Retry failed jobs
+- Cancel pending and running jobs from a per-tab Cancel queue button
+- Confirmation prompt before quitting with open images
 - Proper Settings and About dialogs
 - Session log file per app launch
 - Optional close-tab-on-success behavior, enabled by default

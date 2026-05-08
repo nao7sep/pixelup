@@ -19,10 +19,12 @@ from PySide6.QtCore import (
     Slot,
 )
 from PySide6.QtGui import (
+    QCloseEvent,
     QColor,
     QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
+    QGuiApplication,
     QPainter,
     QPen,
     QPixmap,
@@ -65,7 +67,7 @@ from superqt import QCollapsible, QElidingLabel
 from pixelup import __version__
 from pixelup.app_config import CONFIG_PATH, AppConfig, load_app_config, save_app_config
 from pixelup.config import resolve_runtime_dirs
-from pixelup.errors import PixelupError
+from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import read_image_size, register_image_plugins
 from pixelup.models import KNOWN_MODELS
 from pixelup.paths import OutputFormat, default_output_path
@@ -274,7 +276,7 @@ QSplitter::handle {
 @dataclass(frozen=True, slots=True)
 class AdvancedSettings:
     face_enhance: bool = False
-    denoise_strength: float = 1.0
+    denoise_strength: float = 0.5
     alpha_mode: str = "realesrgan"
     device: str = "auto"
     output_format: OutputFormat = OutputFormat.PNG
@@ -308,6 +310,13 @@ class JobWorker(QObject):
         super().__init__()
         self.job = job
         self.signals = JobSignals()
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        self._cancel_requested = True
+
+    def _is_cancelled(self) -> bool:
+        return self._cancel_requested
 
     @Slot()
     def run(self) -> None:
@@ -335,6 +344,7 @@ class JobWorker(QObject):
                     _download_text(model, done, total),
                 ),
                 on_warning=warnings.append,
+                should_cancel=self._is_cancelled,
             )
             sidecar = write_sidecar(
                 input_path=self.job.input_path,
@@ -353,6 +363,12 @@ class JobWorker(QObject):
             )
             self.signals.finished.emit(self.job.id, True, "Done", result, warnings)
         except PixelupError as exc:
+            if exc.code == ErrorCode.JOB_CANCELLED:
+                LOGGER.info("Job %s cancelled", self.job.id)
+                self.signals.finished.emit(
+                    self.job.id, False, "Cancelled", {"cancelled": True}, warnings
+                )
+                return
             LOGGER.warning(
                 "Job %s failed message=%s warnings=%s details=%s",
                 self.job.id,
@@ -783,6 +799,7 @@ class WrappedTabs(QWidget):
 class ImageTab(QWidget):
     enqueue_requested = Signal(object, object, int)
     retry_requested = Signal(object)
+    cancel_requested = Signal(object)
     left_width_changed = Signal(int)
 
     def __init__(
@@ -822,6 +839,9 @@ class ImageTab(QWidget):
         self.retry_button = QPushButton("Retry failed")
         self.retry_button.setEnabled(False)
         self.retry_button.clicked.connect(lambda: self.retry_requested.emit(self))
+        self.cancel_button = QPushButton("Cancel queue")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(lambda: self.cancel_requested.emit(self))
 
         actions = QWidget()
         actions_layout = FlowLayout(actions, spacing=8)
@@ -829,6 +849,7 @@ class ImageTab(QWidget):
         actions_layout.addWidget(self.enqueue_button)
         actions_layout.addWidget(self.enqueue_all_button)
         actions_layout.addWidget(self.retry_button)
+        actions_layout.addWidget(self.cancel_button)
 
         left_card = QFrame()
         left_card.setObjectName("panelCard")
@@ -924,12 +945,13 @@ class ImageTab(QWidget):
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(0, 260)
-        self.table.setColumnWidth(1, 70)
-        self.table.setColumnWidth(3, 150)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        widths = _queue_column_widths(self.table.fontMetrics())
+        self.table.setColumnWidth(0, widths["model"])
+        self.table.setColumnWidth(1, widths["scale"])
+        self.table.setColumnWidth(3, widths["status"])
         self.table.setAlternatingRowColors(True)
         self.table.setMaximumHeight(150)
         self.table.verticalHeader().setVisible(False)
@@ -974,6 +996,8 @@ class ImageTab(QWidget):
         self.table.item(row, 2).setText(job.output_path.name)
         self.table.item(row, 2).setToolTip(str(job.output_path))
         status_text = job.message or _status_text(job.status)
+        if job.status == "cancelling":
+            status_text = _status_text("cancelling")
         self.table.item(row, 3).setText(status_text)
         tooltip = "\n".join(job.warnings) if job.warnings else status_text
         self.table.item(row, 3).setToolTip(tooltip)
@@ -982,6 +1006,8 @@ class ImageTab(QWidget):
             "running": QColor("#fff4cc"),
             "succeeded": QColor("#e8f7e8"),
             "failed": QColor("#ffe8e8"),
+            "cancelling": QColor("#fff4cc"),
+            "cancelled": QColor("#f0f0f0"),
         }.get(job.status, QColor("white"))
         for column in range(self.table.columnCount()):
             self.table.item(row, column).setBackground(color)
@@ -991,13 +1017,16 @@ class ImageTab(QWidget):
         total = len(self.jobs)
         done = sum(1 for job in self.jobs if job.status == "succeeded")
         failed = sum(1 for job in self.jobs if job.status == "failed")
-        running = sum(1 for job in self.jobs if job.status == "running")
+        running = sum(1 for job in self.jobs if job.status in {"running", "cancelling"})
         return total, done, failed, running
 
     def all_succeeded(self) -> bool:
         return bool(self.jobs) and all(job.status == "succeeded" for job in self.jobs)
 
     def has_active_jobs(self) -> bool:
+        return any(job.status in {"pending", "running", "cancelling"} for job in self.jobs)
+
+    def has_cancellable_jobs(self) -> bool:
         return any(job.status in {"pending", "running"} for job in self.jobs)
 
     def current_scale(self) -> int:
@@ -1095,6 +1124,7 @@ class ImageTab(QWidget):
 
         form.addRow("Face enhancement", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
+        form.addRow("", _muted_label("Only affects realesr-general-x4v3."))
         form.addRow("Alpha mode", self.alpha_mode)
         form.addRow("Output format", self.output_format)
         form.addRow("Quality", self.quality)
@@ -1156,6 +1186,7 @@ class ImageTab(QWidget):
     def _update_action_buttons(self) -> None:
         self.enqueue_button.setEnabled(bool(self._selected_models()))
         self.retry_button.setEnabled(any(job.status == "failed" for job in self.jobs))
+        self.cancel_button.setEnabled(self.has_cancellable_jobs())
 
     def _enqueue_selected(self) -> None:
         models = self._selected_models()
@@ -1179,15 +1210,78 @@ class MainWindow(QMainWindow):
         self._tabs_by_path: dict[Path, ImageTab] = {}
         self._left_pane_width = LEFT_PANE_START_WIDTH
 
+        self._session_shutdown = False
         self.setWindowTitle("PixelUp")
         self.resize(1260, 860)
         self.setAcceptDrops(True)
         self._build_ui()
+        app = QApplication.instance()
+        if app is not None:
+            commit = getattr(app, "commitDataRequest", None)
+            if commit is not None:
+                commit.connect(self._on_commit_data_request)
         LOGGER.info(
             "Loaded config path=%s values=%s",
             CONFIG_PATH,
             _config_log_payload(self.config),
         )
+
+    def _on_commit_data_request(self, _manager: object) -> None:
+        self._session_shutdown = True
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._session_shutdown or QGuiApplication.isSavingSession():
+            LOGGER.info("Accepting close during session shutdown")
+            self._cleanup_workers_for_quit()
+            event.accept()
+            return
+        if not self._tabs_by_path:
+            self._cleanup_workers_for_quit()
+            event.accept()
+            return
+        running = sum(1 for tab in self._tabs_by_path.values() if tab.has_active_jobs())
+        if running:
+            text = (
+                f"PixelUp has {running} tab(s) with running or pending jobs. "
+                "Quit and abandon them?"
+            )
+        else:
+            text = "PixelUp has open images. Quit anyway?"
+        choice = QMessageBox.question(
+            self,
+            "Quit PixelUp?",
+            text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice == QMessageBox.StandardButton.Yes:
+            LOGGER.info("User confirmed quit with open tabs running=%s", running)
+            self._cleanup_workers_for_quit()
+            event.accept()
+        else:
+            LOGGER.info("User cancelled quit")
+            event.ignore()
+
+    def _cleanup_workers_for_quit(self) -> None:
+        if not self._threads:
+            return
+        entries = list(self._threads.values())
+        for _thread, worker in entries:
+            try:
+                worker.request_cancel()
+            except Exception:
+                pass
+            for signal in (worker.signals.progress, worker.signals.finished):
+                try:
+                    signal.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+        for thread, _worker in entries:
+            try:
+                thread.wait(2000)
+            except Exception:
+                pass
+        LOGGER.info("Cleaned up %s worker thread(s) for quit", len(entries))
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -1213,6 +1307,7 @@ class MainWindow(QMainWindow):
                 )
                 tab.enqueue_requested.connect(self._enqueue_jobs)
                 tab.retry_requested.connect(self._retry_failed)
+                tab.cancel_requested.connect(self._cancel_queue)
                 tab.left_width_changed.connect(self._sync_left_width)
                 self._tabs_by_path[resolved] = tab
                 self.tabs.addTab(tab, resolved.name)
@@ -1362,6 +1457,32 @@ class MainWindow(QMainWindow):
         self._schedule()
 
     @Slot(object)
+    def _cancel_queue(self, tab: ImageTab) -> None:
+        cancelled_pending: list[int] = []
+        signalled_running: list[int] = []
+        for job in tab.jobs:
+            if job.status == "pending":
+                job.status = "cancelled"
+                job.message = "Cancelled"
+                tab.update_job(job)
+                cancelled_pending.append(job.id)
+            elif job.status == "running":
+                entry = self._threads.get(job.id)
+                if entry is not None:
+                    _, worker = entry
+                    worker.request_cancel()
+                job.status = "cancelling"
+                tab.update_job(job)
+                signalled_running.append(job.id)
+        LOGGER.info(
+            "Cancel queue input=%s cancelled_pending=%s signalled_running=%s",
+            tab.input_path,
+            cancelled_pending,
+            signalled_running,
+        )
+        self._update_tab_state(tab)
+
+    @Slot(object)
     def _retry_failed(self, tab: ImageTab) -> None:
         reserved = {job.output_path for job in tab.jobs if job.status != "failed"}
         changed = False
@@ -1453,11 +1574,17 @@ class MainWindow(QMainWindow):
         job_id: int,
         ok: bool,
         message: str,
-        _result: object,
+        result: object,
         warnings: object,
     ) -> None:
         tab, job = self._find_job(job_id)
-        job.status = "succeeded" if ok else "failed"
+        cancelled = isinstance(result, dict) and bool(result.get("cancelled"))
+        if ok:
+            job.status = "succeeded"
+        elif cancelled:
+            job.status = "cancelled"
+        else:
+            job.status = "failed"
         job.message = message
         job.warnings = list(warnings) if isinstance(warnings, list) else []
         tab.update_job(job)
@@ -1898,22 +2025,22 @@ def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
 
 def _download_text(model: str, done: int, total: int | None) -> str:
     if total:
-        return f"Downloading {model} ({done * 100 // total}%)"
+        return f"{done * 100 // total}% — downloading {model}"
     return f"Downloading {model}"
 
 
 def _progress_text(phase: str) -> str:
     match phase:
         case "upscale":
-            return "Upscaling image"
+            return "Upscaling"
         case "encode":
-            return "Saving output"
+            return "Saving"
         case _:
             return phase.replace("-", " ").replace("_", " ").capitalize()
 
 
 def _tile_progress_text(done: int, total: int) -> str:
-    return f"Processing tiles {done}/{total}"
+    return f"Tiles {done}/{total} — processing"
 
 
 def _status_text(status: str) -> str:
@@ -1922,7 +2049,24 @@ def _status_text(status: str) -> str:
         "running": "Running",
         "succeeded": "Done",
         "failed": "Failed",
+        "cancelling": "Cancelling…",
+        "cancelled": "Cancelled",
     }.get(status, status.replace("-", " ").replace("_", " ").capitalize())
+
+
+def _queue_column_widths(metrics: object) -> dict[str, int]:
+    longest_model = max(UPSCALE_MODELS, key=len) if UPSCALE_MODELS else "RealESRGAN_x4plus_anime_6B"
+    samples = {
+        "model": longest_model,
+        "scale": "4x",
+        "status": _tile_progress_text(9999, 9999),
+    }
+    padding = 32
+    floors = {"model": 180, "scale": 56, "status": 180}
+    return {
+        key: max(floors[key], metrics.horizontalAdvance(text) + padding)  # type: ignore[attr-defined]
+        for key, text in samples.items()
+    }
 
 
 def _safe_image_size(path: Path) -> tuple[int, int] | None:

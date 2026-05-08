@@ -20,6 +20,7 @@ class ErrorCode(StrEnum):
     OUT_OF_MEMORY = "out_of_memory"
     INVALID_ARGUMENT = "invalid_argument"
     INTERNAL_ERROR = "internal_error"
+    JOB_CANCELLED = "job_cancelled"
 
 
 @dataclass(slots=True)

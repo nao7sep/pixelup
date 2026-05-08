@@ -34,6 +34,7 @@ StartCallback = Callable[["UpscalePlan", int], None]
 ProgressCallback = Callable[[str], None]
 WarningCallback = Callable[[str], None]
 TileCallback = Callable[[int, int], None]
+CancelCheck = Callable[[], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +134,7 @@ def run_upscale(
     on_progress: ProgressCallback | None = None,
     on_warning: WarningCallback | None = None,
     on_tile: TileCallback | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> dict[str, object]:
     started = time.perf_counter()
     plan = build_plan(
@@ -145,6 +147,8 @@ def run_upscale(
             on_warning(warning)
     if on_start:
         on_start(plan, count_tiles(plan.input_size, options.tile))
+    if should_cancel and should_cancel():
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
     if options.auto_download:
         for name in required_model_names(options):
             if known_model(name) is None:
@@ -157,6 +161,7 @@ def run_upscale(
                 lock_timeout=options.lock_timeout,
                 on_download=on_download,
                 on_waiting=on_waiting,
+                should_cancel=should_cancel,
             )
 
     output_array = run_inference(
@@ -177,7 +182,10 @@ def run_upscale(
         ),
         on_progress=on_progress,
         on_tile=on_tile,
+        should_cancel=should_cancel,
     )
+    if should_cancel and should_cancel():
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
     if on_progress:
         on_progress("encode")
     output_size = save_output_image(

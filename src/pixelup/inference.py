@@ -19,6 +19,7 @@ from pixelup.models import model_file
 
 ProgressCallback = Callable[[str], None]
 TileCallback = Callable[[int, int], None]
+CancelCheck = Callable[[], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +67,15 @@ def run_inference(
     *,
     on_progress: ProgressCallback | None = None,
     on_tile: TileCallback | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> Any:
     try:
-        return _run_inference(config, on_progress=on_progress, on_tile=on_tile)
+        return _run_inference(
+            config,
+            on_progress=on_progress,
+            on_tile=on_tile,
+            should_cancel=should_cancel,
+        )
     except PixelupError:
         raise
     except RuntimeError as exc:
@@ -96,13 +103,21 @@ def _run_inference(
     *,
     on_progress: ProgressCallback | None = None,
     on_tile: TileCallback | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> Any:
+    _check_cancelled(should_cancel)
     _emit(on_progress, "load_model")
     torch = _import_torch()
     image = _read_input_image(config.input_path)
     device = _torch_device(torch, config.device, config.gpu_id)
-    upsampler = _create_upsampler(config, torch_device=device, on_tile=on_tile)
+    upsampler = _create_upsampler(
+        config,
+        torch_device=device,
+        on_tile=on_tile,
+        should_cancel=should_cancel,
+    )
 
+    _check_cancelled(should_cancel)
     _emit(on_progress, "upscale")
     if config.face_enhance:
         _emit(on_progress, "face_enhance")
@@ -146,6 +161,7 @@ def _create_upsampler(
     *,
     torch_device: Any,
     on_tile: TileCallback | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> Any:
     _install_torchvision_functional_tensor_compat()
     try:
@@ -163,9 +179,8 @@ def _create_upsampler(
         dni_weight = [config.denoise_strength, 1 - config.denoise_strength]
 
     spec = model_architecture_spec(config.model, requested_scale=config.scale)
-    cls = _tile_reporting_upsampler_class(RealESRGANer) if (
-        config.tile > 0 and on_tile is not None
-    ) else RealESRGANer
+    needs_tile_subclass = config.tile > 0 and (on_tile is not None or should_cancel is not None)
+    cls = _tile_reporting_upsampler_class(RealESRGANer) if needs_tile_subclass else RealESRGANer
     upsampler = cls(
         scale=spec.netscale,
         model_path=model_paths,
@@ -180,6 +195,7 @@ def _create_upsampler(
     )
     if cls is not RealESRGANer:
         upsampler._pixelup_on_tile = on_tile  # type: ignore[attr-defined]
+        upsampler._pixelup_should_cancel = should_cancel  # type: ignore[attr-defined]
     return upsampler
 
 
@@ -197,7 +213,8 @@ def _tile_reporting_upsampler_class(base: type) -> type:
     class _TileReportingUpsampler(base):  # type: ignore[misc, valid-type]
         def tile_process(self) -> Any:
             callback: TileCallback | None = getattr(self, "_pixelup_on_tile", None)
-            if callback is None:
+            should_cancel: CancelCheck | None = getattr(self, "_pixelup_should_cancel", None)
+            if callback is None and should_cancel is None:
                 return super().tile_process()
             try:
                 _, _, height, width = self.img.shape
@@ -210,12 +227,17 @@ def _tile_reporting_upsampler_class(base: type) -> type:
             counter = [0]
 
             def wrapped_model(*args: Any, **kwargs: Any) -> Any:
+                if should_cancel is not None and should_cancel():
+                    raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
                 result = original_model(*args, **kwargs)
                 counter[0] += 1
-                try:
-                    callback(counter[0], total)
-                except Exception:
-                    pass
+                if callback is not None:
+                    try:
+                        callback(counter[0], total)
+                    except PixelupError:
+                        raise
+                    except Exception:
+                        pass
                 return result
 
             self.model = wrapped_model
@@ -414,3 +436,8 @@ def _is_out_of_memory(exc: RuntimeError) -> bool:
 def _emit(callback: ProgressCallback | None, phase: str) -> None:
     if callback:
         callback(phase)
+
+
+def _check_cancelled(should_cancel: CancelCheck | None) -> None:
+    if should_cancel is not None and should_cancel():
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
