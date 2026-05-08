@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from itertools import count
 from pathlib import Path
 
 from PySide6.QtCore import (
     QObject,
-    QPoint,
     QRect,
     QSize,
     Qt,
@@ -18,7 +18,15 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QColor, QDesktopServices, QDragEnterEvent, QDropEvent, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDropEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -32,6 +40,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLayout,
     QLayoutItem,
@@ -57,7 +66,7 @@ from pixelup import __version__
 from pixelup.app_config import CONFIG_PATH, AppConfig, load_app_config, save_app_config
 from pixelup.config import resolve_runtime_dirs
 from pixelup.errors import PixelupError
-from pixelup.imaging import register_image_plugins
+from pixelup.imaging import read_image_size, register_image_plugins
 from pixelup.models import KNOWN_MODELS
 from pixelup.paths import OutputFormat, default_output_path
 from pixelup.session_log import configure_session_logging, get_logger
@@ -65,6 +74,8 @@ from pixelup.sidecar import write_sidecar
 from pixelup.upscale import UpscaleOptions, run_upscale
 
 LOGGER = get_logger()
+PROJECT_URL = "https://github.com/nao7sep/pixelup"
+ISSUES_URL = "https://github.com/nao7sep/pixelup/issues"
 MODEL_ORDER = (
     "realesr-general-x4v3",
     "RealESRGAN_x4plus",
@@ -130,7 +141,7 @@ QLabel#dialogSubtitle {
     color: #66789c;
 }
 QLabel#mutedText {
-    font-size: 12px;
+    font-size: 13px;
 }
 QLabel#sectionTitle {
     font-size: 15px;
@@ -141,27 +152,18 @@ QLabel {
     border: none;
 }
 QPushButton,
-QToolButton,
-QComboBox,
-QSpinBox,
-QDoubleSpinBox {
+QToolButton {
     background: #ffffff;
     border: 1px solid #c9d6ff;
     border-radius: 10px;
     padding: 7px 12px;
 }
 QPushButton:hover,
-QToolButton:hover,
-QComboBox:hover,
-QSpinBox:hover,
-QDoubleSpinBox:hover {
+QToolButton:hover {
     border-color: #91a6ff;
 }
 QPushButton:disabled,
-QToolButton:disabled,
-QComboBox:disabled,
-QSpinBox:disabled,
-QDoubleSpinBox:disabled {
+QToolButton:disabled {
     background: #f8faff;
     border-color: #dbe3f5;
     color: #9aa8c5;
@@ -179,6 +181,11 @@ QPushButton#primaryButton:hover {
     background: #4338ca;
     border-color: #4338ca;
 }
+QPushButton#primaryButton:disabled {
+    background: #c7d2fe;
+    border-color: #c7d2fe;
+    color: #eef2ff;
+}
 QPushButton#chipButton {
     padding: 6px 12px;
 }
@@ -194,80 +201,49 @@ QPushButton#advancedToggle[modified="true"] {
 QPushButton#advancedToggle:hover {
     color: #344054;
 }
-QComboBox {
-    padding-right: 34px;
-}
-QComboBox::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: top right;
-    width: 26px;
-    border: none;
-    border-left: 1px solid #d9e3ff;
-    border-top-right-radius: 10px;
-    border-bottom-right-radius: 10px;
-    background: #eef3ff;
-}
-QComboBox::down-arrow {
-    image: none;
-    width: 0px;
-    height: 0px;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #62729b;
-    margin-right: 8px;
-}
+QComboBox,
 QSpinBox,
 QDoubleSpinBox {
-    padding-right: 30px;
+    background: #ffffff;
+    border: 1px solid #c9d6ff;
+    border-radius: 10px;
+    padding: 6px 10px;
+    min-height: 22px;
 }
-QSpinBox::up-button,
-QDoubleSpinBox::up-button {
-    subcontrol-origin: border;
-    subcontrol-position: top right;
-    width: 18px;
+QComboBox:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover {
+    border-color: #91a6ff;
+}
+QComboBox:disabled,
+QSpinBox:disabled,
+QDoubleSpinBox:disabled {
+    background: #f8faff;
+    border-color: #dbe3f5;
+    color: #9aa8c5;
+}
+QAbstractItemView {
+    background: #ffffff;
+    color: #24324d;
+    border: 1px solid #c9d6ff;
+    outline: 0;
+    selection-background-color: #e8eeff;
+    selection-color: #24324d;
+}
+QToolButton#helpButton {
+    background: transparent;
     border: none;
-    border-left: 1px solid #d9e3ff;
-    border-top-right-radius: 10px;
-    background: #eef3ff;
+    color: #5c6c92;
+    font-weight: 700;
+    padding: 0 2px;
 }
-QSpinBox::down-button,
-QDoubleSpinBox::down-button {
-    subcontrol-origin: border;
-    subcontrol-position: bottom right;
-    width: 18px;
-    border: none;
-    border-left: 1px solid #d9e3ff;
-    border-bottom-right-radius: 10px;
-    background: #eef3ff;
-}
-QSpinBox::up-arrow,
-QDoubleSpinBox::up-arrow {
-    image: none;
-    width: 0px;
-    height: 0px;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 6px solid #62729b;
-}
-QSpinBox::down-arrow,
-QDoubleSpinBox::down-arrow {
-    image: none;
-    width: 0px;
-    height: 0px;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 6px solid #62729b;
+QToolButton#helpButton:hover {
+    color: #4050a8;
 }
 QScrollArea,
 QScrollArea > QWidget > QWidget {
     border: none;
     background: transparent;
-}
-QCheckBox {
-    spacing: 8px;
-}
-QRadioButton {
-    spacing: 6px;
 }
 QTableWidget {
     background: #ffffff;
@@ -276,12 +252,15 @@ QTableWidget {
     gridline-color: #edf2ff;
     font-size: 13px;
 }
+QTableWidget::item {
+    padding: 6px 10px;
+}
 QHeaderView::section {
     background: #f3f6ff;
     color: #5c6c92;
     border: none;
     border-bottom: 1px solid #d9e3ff;
-    padding: 8px 10px;
+    padding: 6px 10px;
     font-weight: 600;
 }
 QSplitter::handle {
@@ -451,7 +430,7 @@ class FlowLayout(QLayout):
                 next_x = x + size.width() + spacing
                 line_height = 0
             if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), size))
+                item.setGeometry(QRect(x, y, size.width(), size.height()))
             x = next_x
             line_height = max(line_height, size.height())
         return y + line_height - rect.y()
@@ -479,7 +458,7 @@ class PreviewLabel(QLabel):
             self.setPixmap(QPixmap())
             self.setText("Preview unavailable")
             return
-        size = self.contentsRect().size() - QSize(24, 24)
+        size = self.contentsRect().size() - QSize(4, 4)
         if size.width() <= 0 or size.height() <= 0:
             return
         self.setText("")
@@ -489,6 +468,63 @@ class PreviewLabel(QLabel):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
+        )
+
+
+class IndicatorCheckBox(QCheckBox):
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(max(hint.width(), self.fontMetrics().horizontalAdvance(self.text()) + 28), 24)
+
+    def paintEvent(self, event: object) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect()
+        indicator = QRect(0, (rect.height() - 16) // 2, 16, 16)
+        border = QColor("#4f46e5") if self.isChecked() else QColor("#9aa8c5")
+        fill = QColor("#4f46e5") if self.isChecked() else QColor("#ffffff")
+        painter.setPen(QPen(border, 1.4))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(indicator.adjusted(1, 1, -1, -1), 4, 4)
+        if self.isChecked():
+            painter.setPen(
+                QPen(QColor("#ffffff"), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            )
+            painter.drawLine(4, indicator.center().y(), 7, indicator.bottom() - 4)
+            painter.drawLine(7, indicator.bottom() - 4, 13, indicator.top() + 4)
+        painter.setPen(QPen(QColor("#24324d")))
+        painter.drawText(
+            QRect(26, 0, rect.width() - 26, rect.height()),
+            Qt.AlignmentFlag.AlignVCenter,
+            self.text(),
+        )
+
+
+class IndicatorRadioButton(QRadioButton):
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(max(hint.width(), self.fontMetrics().horizontalAdvance(self.text()) + 28), 24)
+
+    def paintEvent(self, event: object) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect()
+        indicator = QRect(0, (rect.height() - 16) // 2, 16, 16)
+        border = QColor("#4f46e5") if self.isChecked() else QColor("#9aa8c5")
+        painter.setPen(QPen(border, 1.4))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawEllipse(indicator.adjusted(1, 1, -1, -1))
+        if self.isChecked():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#4f46e5"))
+            painter.drawEllipse(indicator.adjusted(5, 5, -5, -5))
+        painter.setPen(QPen(QColor("#24324d")))
+        painter.drawText(
+            QRect(26, 0, rect.width() - 26, rect.height()),
+            Qt.AlignmentFlag.AlignVCenter,
+            self.text(),
         )
 
 
@@ -512,7 +548,7 @@ class ModelOptionRow(QFrame):
     def __init__(self, model: str, note: str) -> None:
         super().__init__()
         self.setObjectName("modelCard")
-        self.checkbox = QCheckBox(model)
+        self.checkbox = IndicatorCheckBox(model)
         note_label = QLabel(note)
         note_label.setObjectName("modelNote")
         note_label.setWordWrap(True)
@@ -638,13 +674,16 @@ class WrappedTabs(QWidget):
         self._tab_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._tab_row = QWidget()
         self._flow = FlowLayout(self._tab_row, spacing=8)
+        self._tab_scroll = QScrollArea()
+        self._tab_scroll.setWidget(self._tab_row)
+        self._tab_scroll.setWidgetResizable(True)
+        self._tab_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._tab_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._tab_scroll.setMaximumHeight(116)
         tab_layout.addWidget(self._tab_hint)
-        tab_layout.addWidget(self._tab_row)
+        tab_layout.addWidget(self._tab_scroll)
 
-        self._empty_page = _tabs_empty_state()
         self._stack = QStackedWidget()
-        self._stack.addWidget(self._empty_page)
-        self._stack.setCurrentWidget(self._empty_page)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -697,8 +736,6 @@ class WrappedTabs(QWidget):
         if self._entries:
             next_index = min(index, len(self._entries) - 1)
             self.setCurrentWidget(self._entries[next_index]["widget"])  # type: ignore[arg-type]
-        else:
-            self._stack.setCurrentWidget(self._empty_page)
         self._update_empty_state()
 
     def setTabText(self, index: int, text: str) -> None:  # noqa: N802
@@ -742,10 +779,8 @@ class WrappedTabs(QWidget):
 
     def _update_empty_state(self) -> None:
         has_tabs = bool(self._entries)
-        self._tab_row.setVisible(has_tabs)
+        self._tab_scroll.setVisible(has_tabs)
         self._tab_hint.setVisible(not has_tabs)
-        if not has_tabs:
-            self._stack.setCurrentWidget(self._empty_page)
 
 
 class ImageTab(QWidget):
@@ -765,6 +800,7 @@ class ImageTab(QWidget):
         self.jobs: list[Job] = []
         self._rows_by_job: dict[int, int] = {}
         self._default_advanced = defaults
+        self._input_size = _safe_image_size(input_path)
 
         self.model_rows: dict[str, ModelOptionRow] = {}
         for model in UPSCALE_MODELS:
@@ -773,18 +809,20 @@ class ImageTab(QWidget):
             row.checkbox.toggled.connect(self._update_action_buttons)
 
         self.scale_group = QButtonGroup(self)
-        self.scale_2 = QRadioButton("2x")
-        self.scale_4 = QRadioButton("4x")
+        self.scale_2 = IndicatorRadioButton("2x")
+        self.scale_4 = IndicatorRadioButton("4x")
         self.scale_4.setChecked(True)
         self.scale_group.addButton(self.scale_2)
         self.scale_group.addButton(self.scale_4)
 
         self.enqueue_button = QPushButton("Enqueue selected")
         self.enqueue_button.setObjectName("primaryButton")
+        self.enqueue_button.setEnabled(False)
         self.enqueue_button.clicked.connect(self._enqueue_selected)
         self.enqueue_all_button = QPushButton("Enqueue all models")
         self.enqueue_all_button.clicked.connect(self._enqueue_all_models)
         self.retry_button = QPushButton("Retry failed")
+        self.retry_button.setEnabled(False)
         self.retry_button.clicked.connect(lambda: self.retry_requested.emit(self))
 
         actions = QWidget()
@@ -813,20 +851,19 @@ class ImageTab(QWidget):
         left_layout.addWidget(self.name_label)
         left_layout.addWidget(self.dir_label)
 
-        left_layout.addWidget(_section_label("Models"))
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(12)
+
+        controls_layout.addWidget(_section_label("Models"))
         models_box = QWidget()
         models_box_layout = QVBoxLayout(models_box)
         models_box_layout.setContentsMargins(0, 0, 0, 0)
         models_box_layout.setSpacing(8)
         for row in self.model_rows.values():
             models_box_layout.addWidget(row)
-        models_box_layout.addStretch()
-
-        models_scroll = QScrollArea()
-        models_scroll.setWidgetResizable(True)
-        models_scroll.setMaximumHeight(250)
-        models_scroll.setWidget(models_box)
-        left_layout.addWidget(models_scroll)
+        controls_layout.addWidget(models_box)
 
         scale_row = QWidget()
         scale_layout = QHBoxLayout(scale_row)
@@ -836,7 +873,7 @@ class ImageTab(QWidget):
         scale_layout.addWidget(self.scale_2)
         scale_layout.addWidget(self.scale_4)
         scale_layout.addStretch()
-        left_layout.addWidget(scale_row)
+        controls_layout.addWidget(scale_row)
 
         self.advanced_box = QCollapsible(
             "Advanced options - defaults",
@@ -844,8 +881,8 @@ class ImageTab(QWidget):
             collapsedIcon="▸",
         )
         self.advanced_box.setObjectName("sectionCard")
-        self.advanced_box.layout().setContentsMargins(12, 12, 12, 12)
-        self.advanced_box.layout().setSpacing(10)
+        self.advanced_box.layout().setContentsMargins(12, 8, 12, 8)
+        self.advanced_box.layout().setSpacing(6)
         self.advanced_box.toggleButton().setObjectName("advancedToggle")
         self.advanced_box.toggleButton().setToolTip("Show or hide advanced options.")
         self.advanced_box.toggled.connect(self._on_advanced_toggled)
@@ -857,17 +894,23 @@ class ImageTab(QWidget):
         advanced_content_layout.addLayout(self._build_advanced_form())
         self.advanced_box.addWidget(advanced_content)
         self.advanced_box.collapse()
-        left_layout.addWidget(self.advanced_box)
+        controls_layout.addWidget(self.advanced_box)
+        controls_layout.addWidget(actions)
+        controls_layout.addStretch()
 
-        left_layout.addWidget(actions)
-        left_layout.addStretch()
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setWidget(controls)
+        left_layout.addWidget(left_scroll, 1)
 
         preview_card = QFrame()
         preview_card.setObjectName("panelCard")
         preview_layout = QVBoxLayout(preview_card)
         preview_layout.setContentsMargins(16, 16, 16, 16)
         preview_layout.setSpacing(8)
-        preview_layout.addWidget(_section_label("Preview"))
+        preview_layout.addWidget(_section_label("Original image"))
+        self.preview_meta = _muted_label(_preview_meta_text(self._input_size))
+        preview_layout.addWidget(self.preview_meta)
         self.preview = PreviewLabel()
         self.preview.set_image_path(self.input_path)
         preview_layout.addWidget(self.preview, 1)
@@ -880,7 +923,15 @@ class ImageTab(QWidget):
         queue_layout.addWidget(_section_label("Queue"))
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Model", "Scale", "Output", "Status"])
-        self.table.horizontalHeader().setStretchLastSection(True)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 260)
+        self.table.setColumnWidth(1, 70)
+        self.table.setColumnWidth(3, 150)
         self.table.setAlternatingRowColors(True)
         self.table.setMaximumHeight(150)
         self.table.verticalHeader().setVisible(False)
@@ -891,8 +942,8 @@ class ImageTab(QWidget):
         right_layout = QVBoxLayout(right_stack)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(12)
-        right_layout.addWidget(preview_card, 5)
-        right_layout.addWidget(queue_card, 2)
+        right_layout.addWidget(preview_card, 1)
+        right_layout.addWidget(queue_card, 0)
 
         self.splitter = PaneSplitter()
         self.splitter.addWidget(left_card)
@@ -960,7 +1011,7 @@ class ImageTab(QWidget):
             denoise_strength=self.denoise_strength.value(),
             alpha_mode=self.alpha_mode.currentData(),
             device=self.device.currentData(),
-            output_format=self.output_format.currentData(),
+            output_format=_coerce_output_format(self.output_format.currentData()),
             quality=self.quality.value(),
             tile=self.tile.value(),
             strip_metadata=self.strip_metadata.isChecked(),
@@ -987,14 +1038,14 @@ class ImageTab(QWidget):
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(8)
 
-        self.face_enhance = QCheckBox("Enabled")
+        self.face_enhance = IndicatorCheckBox("Enabled")
         self.face_enhance.toggled.connect(self._update_advanced_summary)
 
         self.denoise_strength = QDoubleSpinBox()
         self.denoise_strength.setRange(0.0, 1.0)
         self.denoise_strength.setSingleStep(0.1)
         self.denoise_strength.setDecimals(2)
-        self.denoise_strength.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.denoise_strength.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.denoise_strength.valueChanged.connect(self._update_advanced_summary)
 
         self.alpha_mode = QComboBox()
@@ -1004,18 +1055,18 @@ class ImageTab(QWidget):
 
         self.output_format = QComboBox()
         for fmt in OutputFormat:
-            self.output_format.addItem(fmt.value.upper(), fmt)
+            self.output_format.addItem(fmt.value.upper(), fmt.value)
         self.output_format.currentIndexChanged.connect(self._update_advanced_summary)
 
         self.quality = QSpinBox()
         self.quality.setRange(0, 100)
-        self.quality.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.quality.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.quality.valueChanged.connect(self._update_advanced_summary)
 
         self.tile = QSpinBox()
         self.tile.setRange(0, 4096)
         self.tile.setSingleStep(64)
-        self.tile.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.tile.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.tile.valueChanged.connect(self._update_advanced_summary)
 
         self.device = QComboBox()
@@ -1025,7 +1076,7 @@ class ImageTab(QWidget):
         self.device.addItem("CPU", "cpu")
         self.device.currentIndexChanged.connect(self._update_advanced_summary)
 
-        self.strip_metadata = QCheckBox("Enabled")
+        self.strip_metadata = IndicatorCheckBox("Enabled")
         self.strip_metadata.toggled.connect(self._update_advanced_summary)
 
         self.target_profile = QComboBox()
@@ -1045,17 +1096,21 @@ class ImageTab(QWidget):
         form.addRow("Quality", self.quality)
         form.addRow("", _muted_label("Used for JPG and WebP. Ignored for PNG."))
         form.addRow("Tile size", self.tile)
+        form.addRow("", _muted_label("0 uses the whole image. Raise this only if memory is tight."))
         form.addRow("Device", self.device)
+        form.addRow("", _muted_label("Auto is best for most people."))
         form.addRow("Strip metadata", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
-        form.addRow("", restore)
+        form.addRow("", _button_row(restore))
         return form
 
     def _apply_advanced(self, settings: AdvancedSettings) -> None:
         self.face_enhance.setChecked(settings.face_enhance)
         self.denoise_strength.setValue(settings.denoise_strength)
         self.alpha_mode.setCurrentIndex(self.alpha_mode.findData(settings.alpha_mode))
-        self.output_format.setCurrentIndex(self.output_format.findData(settings.output_format))
+        self.output_format.setCurrentIndex(
+            self.output_format.findData(_coerce_output_format(settings.output_format).value)
+        )
         self.quality.setValue(settings.quality)
         self.tile.setValue(settings.tile)
         self.device.setCurrentIndex(self.device.findData(settings.device))
@@ -1099,7 +1154,11 @@ class ImageTab(QWidget):
         self.retry_button.setEnabled(any(job.status == "failed" for job in self.jobs))
 
     def _enqueue_selected(self) -> None:
-        self.enqueue_requested.emit(self, self._selected_models(), self.current_scale())
+        models = self._selected_models()
+        if not models:
+            self._update_action_buttons()
+            return
+        self.enqueue_requested.emit(self, models, self.current_scale())
 
     def _enqueue_all_models(self) -> None:
         self.enqueue_requested.emit(self, list(UPSCALE_MODELS), self.current_scale())
@@ -1120,7 +1179,6 @@ class MainWindow(QMainWindow):
         self.resize(1260, 860)
         self.setAcceptDrops(True)
         self._build_ui()
-        self.statusBar().showMessage("Drop image files here, or open them from the header.")
         LOGGER.info(
             "Loaded config path=%s values=%s",
             CONFIG_PATH,
@@ -1188,17 +1246,8 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(12)
 
-        title_box = QWidget()
-        title_layout = QVBoxLayout(title_box)
-        title_layout.setContentsMargins(0, 0, 0, 0)
-        title_layout.setSpacing(2)
-
         title = QLabel("PixelUp")
         title.setObjectName("windowTitle")
-        subtitle = QLabel("Queue Real-ESRGAN runs with a simple desktop workflow.")
-        subtitle.setObjectName("dialogSubtitle")
-        title_layout.addWidget(title)
-        title_layout.addWidget(subtitle)
 
         open_button = QPushButton("Open images…")
         open_button.setObjectName("primaryButton")
@@ -1220,8 +1269,8 @@ class MainWindow(QMainWindow):
         action_layout.addWidget(settings_button)
         action_layout.addWidget(about_button)
 
-        layout.addWidget(title_box, 1)
-        layout.addWidget(action_row, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(title, 1, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(action_row, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return card
 
     def _open_dialog(self) -> None:
@@ -1250,7 +1299,6 @@ class MainWindow(QMainWindow):
                     tab._default_advanced = _advanced_defaults(self.config)
                     tab._update_advanced_summary()
             self._schedule()
-            self.statusBar().showMessage("Settings saved.", 3000)
             return
         LOGGER.info("Closed settings dialog without saving")
 
@@ -1486,13 +1534,13 @@ class SettingsDialog(QDialog):
 
         self.concurrent = QSpinBox()
         self.concurrent.setRange(1, 8)
-        self.concurrent.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.concurrent.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.concurrent.setValue(config.max_concurrent_jobs)
 
-        self.close_tabs = QCheckBox("Close tabs after all jobs succeed")
+        self.close_tabs = IndicatorCheckBox("Close tabs after all jobs succeed")
         self.close_tabs.setChecked(config.close_tab_on_success)
 
-        self.auto_download = QCheckBox("Download missing models automatically")
+        self.auto_download = IndicatorCheckBox("Download missing models automatically")
         self.auto_download.setChecked(config.auto_download)
 
         general_form.addRow("Concurrent jobs", self.concurrent)
@@ -1510,24 +1558,32 @@ class SettingsDialog(QDialog):
 
         self.quality = QSpinBox()
         self.quality.setRange(0, 100)
-        self.quality.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.quality.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.quality.setValue(config.quality)
 
         self.tile = QSpinBox()
         self.tile.setRange(0, 4096)
         self.tile.setSingleStep(64)
-        self.tile.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.tile.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.tile.setValue(config.tile)
 
         self.device = QComboBox()
-        self.device.addItems(["auto", "mps", "cuda", "cpu"])
-        self.device.setCurrentText(config.device)
+        self.device.addItem("Auto", "auto")
+        self.device.addItem("MPS", "mps")
+        self.device.addItem("CUDA", "cuda")
+        self.device.addItem("CPU", "cpu")
+        self.device.setCurrentIndex(self.device.findData(config.device))
 
         defaults_form.addRow("Output format", self.format)
         defaults_form.addRow("Quality", self.quality)
         defaults_form.addRow("", _muted_label("Used for JPG and WebP. Ignored for PNG."))
-        defaults_form.addRow("Tile size", self.tile)
-        defaults_form.addRow("Device", self.device)
+        defaults_form.addRow(_field_label("Tile size", self._show_tile_help), self.tile)
+        defaults_form.addRow(
+            "",
+            _muted_label("0 uses the whole image. Raise this only if memory is tight."),
+        )
+        defaults_form.addRow(_field_label("Device", self._show_device_help), self.device)
+        defaults_form.addRow("", _muted_label("Auto is best for most people."))
         defaults_card.layout().addLayout(defaults_form)
 
         layout.addWidget(general_card)
@@ -1556,7 +1612,7 @@ class SettingsDialog(QDialog):
             output_format=OutputFormat(self.format.currentText().lower()),
             quality=self.quality.value(),
             tile=self.tile.value(),
-            device=self.device.currentText(),
+            device=self.device.currentData(),
             auto_download=self.auto_download.isChecked(),
         )
 
@@ -1568,14 +1624,46 @@ class SettingsDialog(QDialog):
         self.format.setCurrentText(defaults.output_format.value.upper())
         self.quality.setValue(defaults.quality)
         self.tile.setValue(defaults.tile)
-        self.device.setCurrentText(defaults.device)
+        self.device.setCurrentIndex(self.device.findData(defaults.device))
+
+    def _show_tile_help(self) -> None:
+        HelpDialog(
+            "Tile size",
+            [
+                "Tile size controls whether PixelUp splits a large image into smaller pieces "
+                "before running the AI model.",
+                "0 means no tiling: PixelUp processes the whole image at once. This is usually "
+                "best because it avoids seams between tiles.",
+                "If an upscale fails because memory is tight, try a tile size such as 256 or "
+                "512. Smaller tiles use less memory, but may be slower.",
+                "If you are not troubleshooting a memory problem, leave this at 0.",
+            ],
+            self,
+        ).exec()
+
+    def _show_device_help(self) -> None:
+        HelpDialog(
+            "Device",
+            [
+                "Device controls where the AI model runs.",
+                "Auto is recommended. PixelUp lets the underlying AI stack choose the best "
+                "available option.",
+                "MPS uses Apple GPU acceleration on supported Macs. It is usually faster than "
+                "CPU on Apple Silicon, but some model operations may still fall back internally.",
+                "CUDA uses an NVIDIA GPU on systems where the CUDA-enabled PyTorch stack is "
+                "available.",
+                "CPU is the compatibility option. It is slower, but useful when GPU acceleration "
+                "is unavailable or unreliable.",
+            ],
+            self,
+        ).exec()
 
 
 class AboutDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("About PixelUp")
-        self.resize(520, 320)
+        self.resize(520, 360)
         self.setModal(True)
 
         root = QWidget()
@@ -1584,15 +1672,14 @@ class AboutDialog(QDialog):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
-        title = QLabel("PixelUp")
+        title = QLabel("About PixelUp")
         title.setObjectName("windowTitle")
-        subtitle = QLabel("Simple Real-ESRGAN desktop upscaler")
-        subtitle.setObjectName("dialogSubtitle")
         layout.addWidget(title)
-        layout.addWidget(subtitle)
 
-        info_card = _section_card("App")
-        info_layout = QVBoxLayout()
+        info_card = QFrame()
+        info_card.setObjectName("sectionCard")
+        info_layout = QVBoxLayout(info_card)
+        info_layout.setContentsMargins(18, 18, 18, 18)
         info_layout.setSpacing(8)
         name = QLabel("PixelUp")
         name.setObjectName("windowTitle")
@@ -1600,19 +1687,31 @@ class AboutDialog(QDialog):
         version = QLabel(f"Version {__version__}")
         version.setObjectName("dialogSubtitle")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        copy = QLabel("A simple desktop app for trying Real-ESRGAN models on local images.")
+        copy = QLabel("Upscale local images with Real-ESRGAN in a simple desktop workflow.")
         copy.setObjectName("mutedText")
         copy.setAlignment(Qt.AlignmentFlag.AlignCenter)
         copy.setWordWrap(True)
+        links = QWidget()
+        links_layout = QHBoxLayout(links)
+        links_layout.setContentsMargins(0, 4, 0, 0)
+        links_layout.setSpacing(10)
+        github_button = QPushButton("GitHub")
+        github_button.clicked.connect(lambda: _open_url(PROJECT_URL))
+        issues_button = QPushButton("Report issue")
+        issues_button.clicked.connect(lambda: _open_url(ISSUES_URL))
+        links_layout.addStretch()
+        links_layout.addWidget(github_button)
+        links_layout.addWidget(issues_button)
+        links_layout.addStretch()
         meta = QLabel("© 2026 Yoshinao Inoguchi · MIT License")
         meta.setObjectName("mutedText")
         meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info_layout.addWidget(name)
         info_layout.addWidget(version)
         info_layout.addWidget(copy)
+        info_layout.addWidget(links)
         info_layout.addSpacing(4)
         info_layout.addWidget(meta)
-        info_card.layout().addLayout(info_layout)
         layout.addWidget(info_card)
         layout.addStretch()
 
@@ -1620,6 +1719,60 @@ class AboutDialog(QDialog):
         buttons.rejected.connect(self.reject)
         buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.accept)
         layout.addWidget(buttons)
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.addWidget(root)
+
+
+class HelpDialog(QDialog):
+    def __init__(
+        self,
+        title_text: str,
+        paragraphs: list[str],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title_text)
+        self.resize(520, 380)
+        self.setModal(True)
+
+        root = QWidget()
+        root.setObjectName("dialogRoot")
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel(title_text)
+        title.setObjectName("windowTitle")
+        layout.addWidget(title)
+
+        card = QFrame()
+        card.setObjectName("sectionCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(18, 18, 18, 18)
+        card_layout.setSpacing(10)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(10)
+        for paragraph in paragraphs:
+            label = _muted_label(paragraph)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            content_layout.addWidget(label)
+        content_layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(240)
+        scroll.setWidget(content)
+        card_layout.addWidget(scroll)
+        layout.addWidget(card)
+        layout.addStretch()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.accept)
+        layout.addWidget(buttons)
+
         shell = QVBoxLayout(self)
         shell.setContentsMargins(0, 0, 0, 0)
         shell.addWidget(root)
@@ -1673,6 +1826,33 @@ def _section_label(text: str) -> QLabel:
     return label
 
 
+def _field_label(text: str, on_help: Callable[[], None]) -> QWidget:
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(6)
+    label = QLabel(text)
+    button = QToolButton()
+    button.setObjectName("helpButton")
+    button.setText("?")
+    button.setToolTip(f"What does {text.lower()} mean?")
+    button.clicked.connect(on_help)
+    layout.addWidget(label)
+    layout.addWidget(button)
+    layout.addStretch()
+    return container
+
+
+def _button_row(button: QPushButton) -> QWidget:
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    layout.addWidget(button)
+    layout.addStretch()
+    return container
+
+
 def _muted_label(text: str) -> QLabel:
     label = QLabel(text)
     label.setObjectName("mutedText")
@@ -1688,37 +1868,6 @@ def _section_card(title: str) -> QFrame:
     layout.setSpacing(10)
     layout.addWidget(_section_label(title))
     return card
-
-
-def _tabs_empty_state() -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(0)
-    layout.addStretch()
-
-    card = QFrame()
-    card.setObjectName("panelCard")
-    card_layout = QVBoxLayout(card)
-    card_layout.setContentsMargins(28, 28, 28, 28)
-    card_layout.setSpacing(8)
-
-    title = QLabel("Open an image to start")
-    title.setObjectName("windowTitle")
-    title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    subtitle = _muted_label(
-        "Preview, model selection, advanced options, and the queue will appear here."
-    )
-    subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    hint = _muted_label("Use the Open Images button above, or drop files into the window.")
-    hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    card_layout.addWidget(title)
-    card_layout.addWidget(subtitle)
-    card_layout.addWidget(hint)
-
-    layout.addWidget(card, 0, Qt.AlignmentFlag.AlignCenter)
-    layout.addStretch()
-    return page
 
 
 def _elided_label(
@@ -1749,13 +1898,35 @@ def _download_text(model: str, done: int, total: int | None) -> str:
     return f"download {model}"
 
 
+def _safe_image_size(path: Path) -> tuple[int, int] | None:
+    try:
+        return read_image_size(path) if path.exists() else None
+    except PixelupError:
+        return None
+
+
+def _preview_meta_text(size: tuple[int, int] | None) -> str:
+    if size is None:
+        return "Size: unavailable"
+    width, height = size
+    return f"Size: {width} × {height}"
+
+
+def _coerce_output_format(value: OutputFormat | str | object) -> OutputFormat:
+    if isinstance(value, OutputFormat):
+        return value
+    if isinstance(value, str):
+        return OutputFormat(value)
+    raise ValueError(f"Unsupported output format: {value!r}")
+
+
 def _advanced_log_payload(settings: AdvancedSettings) -> dict[str, object]:
     return {
         "face_enhance": settings.face_enhance,
         "denoise_strength": settings.denoise_strength,
         "alpha_mode": settings.alpha_mode,
         "device": settings.device,
-        "output_format": settings.output_format.value,
+        "output_format": _coerce_output_format(settings.output_format).value,
         "quality": settings.quality,
         "tile": settings.tile,
         "strip_metadata": settings.strip_metadata,
@@ -1798,6 +1969,11 @@ def _reveal_in_file_browser(path: Path) -> None:
         target = target.parent
     if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
         raise RuntimeError(f"Could not reveal path: {target}")
+
+
+def _open_url(url: str) -> None:
+    if not QDesktopServices.openUrl(QUrl(url)):
+        raise RuntimeError(f"Could not open URL: {url}")
 
 
 def main() -> int:
