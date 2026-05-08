@@ -1,7 +1,7 @@
 # PixelUp
 
-PixelUp is a simple PySide6 desktop app for trying Real-ESRGAN upscale models on
-image files.
+PixelUp is a simple PySide6 desktop app for upscaling local image files with
+Real-ESRGAN models.
 
 The app is intentionally small: open or drag image files into the window, enqueue
 one or more model runs per tab, and let the global queue process them. Each tab is
@@ -13,8 +13,10 @@ one unique input path. Opening the same path focuses its existing tab.
 - Wrapped tab chips with truncated labels
 - Drag-and-drop image opening
 - Per-tab queue
-- "Try all models" button
+- "Enqueue all models" button
 - Collapsed per-tab advanced options with restore-defaults support
+- Original image preview with size label
+- Help dialogs for advanced settings
 - Configurable global job concurrency, defaulting to 1
 - Output files written next to the source image
 - Sidecar JSON metadata for every successful output
@@ -76,7 +78,7 @@ absolute paths, parent directories, usernames, model directories, or temp paths.
 
 ## Models
 
-"Try all models" enqueues these upscale models:
+"Enqueue all models" uses these upscale models:
 
 ```text
 realesr-general-x4v3

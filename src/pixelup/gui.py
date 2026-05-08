@@ -322,10 +322,13 @@ class JobWorker(QObject):
             result = run_upscale(
                 options,
                 resolve_runtime_dirs(),
-                on_progress=lambda phase: self.signals.progress.emit(self.job.id, phase),
+                on_progress=lambda phase: self.signals.progress.emit(
+                    self.job.id,
+                    _progress_text(phase),
+                ),
                 on_tile=lambda done, total: self.signals.progress.emit(
                     self.job.id,
-                    f"tile {done}/{total}",
+                    _tile_progress_text(done, total),
                 ),
                 on_download=lambda model, done, total: self.signals.progress.emit(
                     self.job.id,
@@ -348,7 +351,7 @@ class JobWorker(QObject):
                 sidecar,
                 warnings,
             )
-            self.signals.finished.emit(self.job.id, True, "done", result, warnings)
+            self.signals.finished.emit(self.job.id, True, "Done", result, warnings)
         except PixelupError as exc:
             LOGGER.warning(
                 "Job %s failed message=%s warnings=%s details=%s",
@@ -674,14 +677,8 @@ class WrappedTabs(QWidget):
         self._tab_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._tab_row = QWidget()
         self._flow = FlowLayout(self._tab_row, spacing=8)
-        self._tab_scroll = QScrollArea()
-        self._tab_scroll.setWidget(self._tab_row)
-        self._tab_scroll.setWidgetResizable(True)
-        self._tab_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._tab_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._tab_scroll.setMaximumHeight(116)
         tab_layout.addWidget(self._tab_hint)
-        tab_layout.addWidget(self._tab_scroll)
+        tab_layout.addWidget(self._tab_row)
 
         self._stack = QStackedWidget()
 
@@ -779,7 +776,7 @@ class WrappedTabs(QWidget):
 
     def _update_empty_state(self) -> None:
         has_tabs = bool(self._entries)
-        self._tab_scroll.setVisible(has_tabs)
+        self._tab_row.setVisible(has_tabs)
         self._tab_hint.setVisible(not has_tabs)
 
 
@@ -800,6 +797,7 @@ class ImageTab(QWidget):
         self.jobs: list[Job] = []
         self._rows_by_job: dict[int, int] = {}
         self._default_advanced = defaults
+        self._advanced_initialized = False
         self._input_size = _safe_image_size(input_path)
 
         self.model_rows: dict[str, ModelOptionRow] = {}
@@ -881,8 +879,8 @@ class ImageTab(QWidget):
             collapsedIcon="▸",
         )
         self.advanced_box.setObjectName("sectionCard")
-        self.advanced_box.layout().setContentsMargins(12, 8, 12, 8)
-        self.advanced_box.layout().setSpacing(6)
+        self.advanced_box.layout().setContentsMargins(12, 6, 12, 4)
+        self.advanced_box.layout().setSpacing(4)
         self.advanced_box.toggleButton().setObjectName("advancedToggle")
         self.advanced_box.toggleButton().setToolTip("Show or hide advanced options.")
         self.advanced_box.toggled.connect(self._on_advanced_toggled)
@@ -1019,8 +1017,13 @@ class ImageTab(QWidget):
         )
 
     def set_default_advanced(self, defaults: AdvancedSettings) -> None:
-        current = self.current_advanced() if hasattr(self, "face_enhance") else defaults
-        old_defaults = getattr(self, "_default_advanced", defaults)
+        if not self._advanced_initialized:
+            self._default_advanced = defaults
+            self._apply_advanced(defaults)
+            self._advanced_initialized = True
+            return
+        current = self.current_advanced()
+        old_defaults = self._default_advanced
         self._default_advanced = defaults
         if current == old_defaults:
             self._apply_advanced(defaults)
@@ -1512,11 +1515,11 @@ class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(540, 460)
         self.setModal(True)
 
         root = QWidget()
         root.setObjectName("dialogRoot")
+        root.setMinimumWidth(540)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
@@ -1588,7 +1591,6 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(general_card)
         layout.addWidget(defaults_card)
-        layout.addStretch()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -1603,6 +1605,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(buttons)
         shell = QVBoxLayout(self)
         shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
         shell.addWidget(root)
 
     def config(self) -> AppConfig:
@@ -1663,11 +1666,11 @@ class AboutDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("About PixelUp")
-        self.resize(520, 360)
         self.setModal(True)
 
         root = QWidget()
         root.setObjectName("dialogRoot")
+        root.setMinimumWidth(520)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
@@ -1713,7 +1716,6 @@ class AboutDialog(QDialog):
         info_layout.addSpacing(4)
         info_layout.addWidget(meta)
         layout.addWidget(info_card)
-        layout.addStretch()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -1721,6 +1723,7 @@ class AboutDialog(QDialog):
         layout.addWidget(buttons)
         shell = QVBoxLayout(self)
         shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
         shell.addWidget(root)
 
 
@@ -1733,11 +1736,11 @@ class HelpDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title_text)
-        self.resize(520, 380)
         self.setModal(True)
 
         root = QWidget()
         root.setObjectName("dialogRoot")
+        root.setMinimumWidth(520)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
@@ -1766,7 +1769,6 @@ class HelpDialog(QDialog):
         scroll.setWidget(content)
         card_layout.addWidget(scroll)
         layout.addWidget(card)
-        layout.addStretch()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -1775,6 +1777,7 @@ class HelpDialog(QDialog):
 
         shell = QVBoxLayout(self)
         shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
         shell.addWidget(root)
 
 
@@ -1894,8 +1897,22 @@ def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
 
 def _download_text(model: str, done: int, total: int | None) -> str:
     if total:
-        return f"download {model} {done * 100 // total}%"
-    return f"download {model}"
+        return f"Downloading {model} ({done * 100 // total}%)"
+    return f"Downloading {model}"
+
+
+def _progress_text(phase: str) -> str:
+    match phase:
+        case "upscale":
+            return "Upscaling image"
+        case "encode":
+            return "Saving output"
+        case _:
+            return phase.replace("-", " ").replace("_", " ").capitalize()
+
+
+def _tile_progress_text(done: int, total: int) -> str:
+    return f"Processing tiles {done}/{total}"
 
 
 def _safe_image_size(path: Path) -> tuple[int, int] | None:
