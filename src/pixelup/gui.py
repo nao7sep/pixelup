@@ -966,15 +966,16 @@ class ImageTab(QWidget):
             self.table.setItem(row, 0, _item(job.model, tooltip=job.model))
             self.table.setItem(row, 1, _item(f"{job.scale}x"))
             self.table.setItem(row, 2, _item(job.output_path.name, tooltip=str(job.output_path)))
-            self.table.setItem(row, 3, _item(job.status))
+            self.table.setItem(row, 3, _item(_status_text(job.status)))
         self._update_action_buttons()
 
     def update_job(self, job: Job) -> None:
         row = self._rows_by_job[job.id]
         self.table.item(row, 2).setText(job.output_path.name)
         self.table.item(row, 2).setToolTip(str(job.output_path))
-        self.table.item(row, 3).setText(job.message or job.status)
-        tooltip = "\n".join(job.warnings) if job.warnings else (job.message or job.status)
+        status_text = job.message or _status_text(job.status)
+        self.table.item(row, 3).setText(status_text)
+        tooltip = "\n".join(job.warnings) if job.warnings else status_text
         self.table.item(row, 3).setToolTip(tooltip)
         color = {
             "pending": QColor("#eef5ff"),
@@ -1413,7 +1414,7 @@ class MainWindow(QMainWindow):
 
     def _start_job(self, tab: ImageTab, job: Job) -> None:
         job.status = "running"
-        job.message = "running"
+        job.message = "Starting"
         tab.update_job(job)
         self._update_tab_state(tab)
         self._active_jobs += 1
@@ -1849,7 +1850,7 @@ def _field_label(text: str, on_help: Callable[[], None]) -> QWidget:
 def _button_row(button: QPushButton) -> QWidget:
     container = QWidget()
     layout = QHBoxLayout(container)
-    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setContentsMargins(0, 0, 0, 8)
     layout.setSpacing(0)
     layout.addWidget(button)
     layout.addStretch()
@@ -1913,6 +1914,15 @@ def _progress_text(phase: str) -> str:
 
 def _tile_progress_text(done: int, total: int) -> str:
     return f"Processing tiles {done}/{total}"
+
+
+def _status_text(status: str) -> str:
+    return {
+        "pending": "Pending",
+        "running": "Running",
+        "succeeded": "Done",
+        "failed": "Failed",
+    }.get(status, status.replace("-", " ").replace("_", " ").capitalize())
 
 
 def _safe_image_size(path: Path) -> tuple[int, int] | None:

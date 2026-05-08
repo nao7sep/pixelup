@@ -66,7 +66,7 @@ For example:
 
 ```text
 a-realesr-general-x4v3-4x.png
-a-realesr-general-x4v3-4x.pixelup.json
+a-realesr-general-x4v3-4x.json
 ```
 
 Model names are lowercased and underscores become hyphens. If the output filename

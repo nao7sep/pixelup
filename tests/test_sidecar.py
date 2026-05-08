@@ -54,7 +54,7 @@ def test_sidecar_omits_private_paths(tmp_path: Path) -> None:
 
     payload = json.loads(path.read_text())
     serialized = json.dumps(payload)
-    assert path.name == "source-realesr-general-x4v3-4x.pixelup.json"
+    assert path.name == "source-realesr-general-x4v3-4x.json"
     assert payload["input"]["filename"] == "source.png"
     assert payload["output"]["filename"] == "source-realesr-general-x4v3-4x.png"
     assert str(tmp_path) not in serialized

@@ -19,7 +19,7 @@ def write_sidecar(
     result: dict[str, object],
     warnings: list[str],
 ) -> Path:
-    sidecar_path = output_path.with_suffix(".pixelup.json")
+    sidecar_path = output_path.with_suffix(".json")
     payload = {
         "schema_version": SCHEMA_VERSION,
         "app": {
