@@ -10,7 +10,6 @@ def test_app_config_round_trips_json(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     config = AppConfig(
         max_concurrent_jobs=3,
-        close_tab_on_success=False,
         output_format=OutputFormat.WEBP,
         quality=82,
         tile=512,

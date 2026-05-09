@@ -14,7 +14,6 @@ CONFIG_PATH = resolve_state_dir() / "config.json"
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     max_concurrent_jobs: int = 1
-    close_tab_on_success: bool = True
     output_format: OutputFormat = OutputFormat.PNG
     quality: int = 95
     tile: int = 0
@@ -30,7 +29,6 @@ def load_app_config(path: Path = CONFIG_PATH) -> AppConfig:
         raise ValueError(f"PixelUp config must be a JSON object: {path}")
     return AppConfig(
         max_concurrent_jobs=max(1, int(data.get("max_concurrent_jobs", 1))),
-        close_tab_on_success=bool(data.get("close_tab_on_success", True)),
         output_format=OutputFormat(str(data.get("output_format", OutputFormat.PNG.value))),
         quality=min(100, max(0, int(data.get("quality", 95)))),
         tile=max(0, int(data.get("tile", 0))),
@@ -47,7 +45,6 @@ def save_app_config(config: AppConfig, path: Path = CONFIG_PATH) -> None:
 def _to_json(config: AppConfig) -> dict[str, Any]:
     return {
         "auto_download": config.auto_download,
-        "close_tab_on_success": config.close_tab_on_success,
         "device": config.device,
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "output_format": config.output_format.value,

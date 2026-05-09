@@ -3,30 +3,29 @@
 PixelUp is a simple PySide6 desktop app for upscaling local image files with
 Real-ESRGAN models.
 
-The app is intentionally small: open or drag image files into the window, enqueue
-one or more model runs per tab, and let the global queue process them. Each tab is
-one unique input path. Opening the same path focuses its existing tab.
+The app is intentionally small: open or drag image files into the window, select
+an image from the list, choose models and parameters, and let the global queue
+process the work. Opening the same path focuses its existing image row.
 
 ## Features
 
-- Tab per input image
-- Wrapped tab chips with truncated labels
+- Image list for open input files
 - Drag-and-drop image opening
-- Per-tab queue
-- "Enqueue all models" button
-- Collapsed per-tab advanced options with restore-defaults support
-- Original image preview with size label
-- Help dialogs for advanced settings
+- Shared model selection
+- Always-visible parameters with restore-defaults support
+- Selected image preview with size label
+- Global queue for all images
+- Queue selected image with selected or all models
+- Queue all images with selected or all models
 - Configurable global job concurrency, defaulting to 1
 - Output files written next to the source image
 - Sidecar JSON metadata for every successful output
 - Automatic model download when enabled
 - Retry failed jobs
-- Cancel pending and running jobs from a per-tab Cancel queue button
+- Cancel pending and running jobs
 - Confirmation prompt before quitting with open images
 - Proper Settings and About dialogs
 - Session log file per app launch
-- Optional close-tab-on-success behavior, enabled by default
 
 ## Installation
 
@@ -80,7 +79,8 @@ absolute paths, parent directories, usernames, model directories, or temp paths.
 
 ## Models
 
-"Enqueue all models" uses these upscale models:
+"Queue all images with all models" and "Queue selected image with all models" use
+these upscale models:
 
 ```text
 realesr-general-x4v3
@@ -115,7 +115,6 @@ The settings dialog writes:
 ```json
 {
   "auto_download": true,
-  "close_tab_on_success": true,
   "device": "auto",
   "max_concurrent_jobs": 1,
   "output_format": "png",
