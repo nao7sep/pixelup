@@ -38,7 +38,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QSplitter,
@@ -206,8 +205,8 @@ class PreviewLabel(QLabel):
         super().__init__("No image selected")
         self._source: QPixmap | None = None
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumHeight(320)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setFixedSize(112, 112)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def clear_image(self) -> None:
         self._source = None
@@ -239,6 +238,30 @@ class PreviewLabel(QLabel):
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
+
+
+class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event: object) -> None:
+        if self.hasFocus():
+            super().wheelEvent(event)  # type: ignore[arg-type]
+            return
+        event.ignore()  # type: ignore[attr-defined]
+
+
+class NoWheelSpinBox(QSpinBox):
+    def wheelEvent(self, event: object) -> None:
+        if self.hasFocus():
+            super().wheelEvent(event)  # type: ignore[arg-type]
+            return
+        event.ignore()  # type: ignore[attr-defined]
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    def wheelEvent(self, event: object) -> None:
+        if self.hasFocus():
+            super().wheelEvent(event)  # type: ignore[arg-type]
+            return
+        event.ignore()  # type: ignore[attr-defined]
 
 
 class MainWindow(QMainWindow):
@@ -372,7 +395,7 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._build_image_panel())
         splitter.addWidget(self._build_work_panel())
-        splitter.setSizes([320, 940])
+        splitter.setSizes([340, 1180])
         root_layout.addWidget(splitter, 1)
         self.setCentralWidget(root)
 
@@ -428,56 +451,58 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.open_images_button)
         button_layout.addWidget(self.remove_image_button)
         layout.addWidget(button_row)
+
+        layout.addWidget(self._build_selected_image_group())
         return group
 
     def _build_work_panel(self) -> QWidget:
         container = QWidget()
-        layout = QVBoxLayout(container)
+        layout = QGridLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
 
-        top_splitter = QSplitter(Qt.Orientation.Horizontal)
-        top_splitter.setChildrenCollapsible(False)
-        top_splitter.addWidget(self._build_preview_panel())
-        top_splitter.addWidget(self._build_controls_panel())
-        top_splitter.setSizes([620, 320])
-
-        layout.addWidget(top_splitter, 3)
-        layout.addWidget(self._build_queue_panel(), 2)
+        layout.addWidget(self._build_models_group(), 0, 0)
+        layout.addWidget(self._build_parameters_group(), 0, 1)
+        layout.addWidget(self._build_actions_group(), 0, 2)
+        layout.addWidget(self._build_queue_panel(), 1, 0, 1, 3)
+        layout.setColumnStretch(0, 2)
+        layout.setColumnStretch(1, 3)
+        layout.setColumnStretch(2, 2)
+        layout.setRowStretch(0, 0)
+        layout.setRowStretch(1, 1)
         return container
 
-    def _build_preview_panel(self) -> QWidget:
+    def _build_selected_image_group(self) -> QWidget:
         group = QGroupBox("Selected image")
-        layout = QVBoxLayout(group)
+        layout = QHBoxLayout(group)
+        layout.setSpacing(8)
+        self.preview = PreviewLabel()
+
+        details = QWidget()
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(4)
         self.selected_name = QLabel("No image selected")
         self.selected_name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.selected_path = QLabel("")
         self.selected_path.setWordWrap(True)
         self.selected_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.selected_size = QLabel("")
-        self.preview = PreviewLabel()
-        layout.addWidget(self.selected_name)
-        layout.addWidget(self.selected_path)
-        layout.addWidget(self.selected_size)
-        layout.addWidget(self.preview, 1)
-        return group
+        details_layout.addWidget(self.selected_name)
+        details_layout.addWidget(self.selected_path)
+        details_layout.addWidget(self.selected_size)
+        details_layout.addStretch()
 
-    def _build_controls_panel(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setSpacing(8)
-        layout.addWidget(self._build_models_group())
-        layout.addWidget(self._build_parameters_group())
-        layout.addWidget(self._build_actions_group())
-        layout.addStretch()
-        scroll.setWidget(container)
-        return scroll
+        layout.addWidget(self.preview)
+        layout.addWidget(details, 1)
+        group.setMaximumHeight(160)
+        return group
 
     def _build_models_group(self) -> QWidget:
         group = QGroupBox("Models")
         layout = QVBoxLayout(group)
+        layout.setSpacing(4)
         self.model_checks: dict[str, QCheckBox] = {}
         for model in UPSCALE_MODELS:
             checkbox = QCheckBox(model)
@@ -485,11 +510,14 @@ class MainWindow(QMainWindow):
             checkbox.toggled.connect(self._update_action_buttons)
             self.model_checks[model] = checkbox
             layout.addWidget(checkbox)
+        layout.addStretch()
+        group.setMinimumWidth(260)
         return group
 
     def _build_parameters_group(self) -> QWidget:
         group = QGroupBox("Parameters")
         form = QFormLayout(group)
+        form.setSpacing(6)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         scale_row = QWidget()
@@ -506,30 +534,30 @@ class MainWindow(QMainWindow):
         scale_layout.addStretch()
 
         self.face_enhance = QCheckBox("Enable")
-        self.denoise_strength = QDoubleSpinBox()
+        self.denoise_strength = NoWheelDoubleSpinBox()
         self.denoise_strength.setRange(0.0, 1.0)
         self.denoise_strength.setSingleStep(0.1)
         self.denoise_strength.setDecimals(2)
         self.denoise_strength.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
-        self.alpha_mode = QComboBox()
+        self.alpha_mode = NoWheelComboBox()
         self.alpha_mode.addItem("Real-ESRGAN", "realesrgan")
         self.alpha_mode.addItem("Bicubic", "bicubic")
 
-        self.output_format = QComboBox()
+        self.output_format = NoWheelComboBox()
         for fmt in OutputFormat:
             self.output_format.addItem(fmt.value.upper(), fmt.value)
 
-        self.quality = QSpinBox()
+        self.quality = NoWheelSpinBox()
         self.quality.setRange(0, 100)
         self.quality.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
-        self.tile = QSpinBox()
+        self.tile = NoWheelSpinBox()
         self.tile.setRange(0, 4096)
         self.tile.setSingleStep(64)
         self.tile.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
-        self.device = QComboBox()
+        self.device = NoWheelComboBox()
         self.device.addItem("Auto", "auto")
         self.device.addItem("MPS", "mps")
         self.device.addItem("CUDA", "cuda")
@@ -537,7 +565,7 @@ class MainWindow(QMainWindow):
 
         self.strip_metadata = QCheckBox("Enable")
 
-        self.target_profile = QComboBox()
+        self.target_profile = NoWheelComboBox()
         self.target_profile.addItem("Default", None)
         self.target_profile.addItem("sRGB", "srgb")
         self.target_profile.addItem("Display P3", "p3")
@@ -557,11 +585,13 @@ class MainWindow(QMainWindow):
         form.addRow("Strip metadata", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
         form.addRow("", restore)
+        group.setMinimumWidth(320)
         return group
 
     def _build_actions_group(self) -> QWidget:
         group = QGroupBox("Queue actions")
         layout = QGridLayout(group)
+        layout.setVerticalSpacing(6)
         self.queue_selected_button = QPushButton("Queue selected image")
         self.queue_selected_button.clicked.connect(self._queue_selected_image)
         self.queue_selected_all_models_button = QPushButton("Queue selected image with all models")
@@ -581,6 +611,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.queue_all_all_models_button, 3, 0)
         layout.addWidget(self.retry_button, 4, 0)
         layout.addWidget(self.cancel_button, 5, 0)
+        layout.setRowStretch(6, 1)
+        group.setMinimumWidth(250)
         return group
 
     def _build_queue_panel(self) -> QWidget:
