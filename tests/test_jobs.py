@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+from itertools import count
+from pathlib import Path
+
+from pixelup.app_config import AppConfig
+from pixelup.jobs import (
+    AdvancedSettings,
+    Job,
+    advanced_defaults,
+    advanced_log_payload,
+    coerce_output_format,
+    create_jobs,
+    retry_failed_jobs,
+)
+from pixelup.paths import OutputFormat
+
+
+def test_coerce_output_format_accepts_string_values() -> None:
+    assert coerce_output_format("png") == OutputFormat.PNG
+    assert coerce_output_format("jpg") == OutputFormat.JPG
+
+
+def test_advanced_log_payload_accepts_string_backed_output_format() -> None:
+    payload = advanced_log_payload(AdvancedSettings(output_format="webp"))  # type: ignore[arg-type]
+
+    assert payload["output_format"] == "webp"
+
+
+def test_advanced_defaults_come_from_app_config() -> None:
+    settings = advanced_defaults(
+        AppConfig(
+            output_format=OutputFormat.WEBP,
+            quality=82,
+            tile=256,
+            device="cpu",
+        )
+    )
+
+    assert settings.output_format == OutputFormat.WEBP
+    assert settings.quality == 82
+    assert settings.tile == 256
+    assert settings.device == "cpu"
+
+
+def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
+    first = tmp_path / "a.png"
+    second = tmp_path / "b.png"
+    first.write_bytes(b"")
+    second.write_bytes(b"")
+
+    jobs = create_jobs(
+        input_paths=[first, second],
+        models=["realesr-general-x4v3", "RealESRGAN_x4plus"],
+        scale=4,
+        advanced=AdvancedSettings(output_format=OutputFormat.PNG),
+        existing_jobs=[],
+        auto_download=True,
+        job_ids=count(1),
+    )
+
+    assert [(job.id, job.input_path, job.model) for job in jobs] == [
+        (1, first, "realesr-general-x4v3"),
+        (2, first, "RealESRGAN_x4plus"),
+        (3, second, "realesr-general-x4v3"),
+        (4, second, "RealESRGAN_x4plus"),
+    ]
+    assert all(job.auto_download for job in jobs)
+    assert {job.output_path.name for job in jobs} == {
+        "a-realesr-general-x4v3-4x.png",
+        "a-realesrgan-x4plus-4x.png",
+        "b-realesr-general-x4v3-4x.png",
+        "b-realesrgan-x4plus-4x.png",
+    }
+
+
+def test_create_jobs_reserves_existing_output_paths(tmp_path: Path) -> None:
+    source = tmp_path / "a.png"
+    source.write_bytes(b"")
+    existing = Job(
+        id=1,
+        input_path=source,
+        model="realesr-general-x4v3",
+        scale=4,
+        output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
+        advanced=AdvancedSettings(),
+        auto_download=True,
+    )
+
+    jobs = create_jobs(
+        input_paths=[source],
+        models=["realesr-general-x4v3"],
+        scale=4,
+        advanced=AdvancedSettings(output_format=OutputFormat.PNG),
+        existing_jobs=[existing],
+        auto_download=True,
+        job_ids=count(2),
+    )
+
+    assert jobs[0].output_path.name == "a-realesr-general-x4v3-4x-2.png"
+
+
+def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
+    source = tmp_path / "a.png"
+    source.write_bytes(b"")
+    succeeded = Job(
+        id=1,
+        input_path=source,
+        model="realesr-general-x4v3",
+        scale=4,
+        output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
+        advanced=AdvancedSettings(),
+        auto_download=True,
+        status="succeeded",
+    )
+    failed = Job(
+        id=2,
+        input_path=source,
+        model="realesr-general-x4v3",
+        scale=4,
+        output_path=tmp_path / "old.png",
+        advanced=AdvancedSettings(),
+        auto_download=True,
+        status="failed",
+        message="bad",
+        warnings=["warning"],
+    )
+
+    assert retry_failed_jobs([succeeded, failed]) == [2]
+    assert failed.status == "pending"
+    assert failed.message == ""
+    assert failed.warnings == []
+    assert failed.output_path.name == "a-realesr-general-x4v3-4x-2.png"

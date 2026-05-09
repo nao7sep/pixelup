@@ -3,22 +3,20 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
 from itertools import count
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (
     QCloseEvent,
     QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
     QGuiApplication,
-    QPixmap,
+    QWheelEvent,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -31,14 +29,11 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
-    QLayout,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -52,11 +47,24 @@ from pixelup.app_config import CONFIG_PATH, AppConfig, load_app_config, save_app
 from pixelup.config import resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import read_image_size, register_image_plugins
+from pixelup.jobs import (
+    AdvancedSettings,
+    ImageEntry,
+    Job,
+    advanced_defaults,
+    advanced_log_payload,
+    coerce_output_format,
+    config_log_payload,
+    create_jobs,
+    job_log_payload,
+    options_for_job,
+    retry_failed_jobs,
+)
 from pixelup.models import KNOWN_MODELS
-from pixelup.paths import OutputFormat, default_output_path
+from pixelup.paths import OutputFormat
 from pixelup.session_log import configure_session_logging, get_logger
 from pixelup.sidecar import write_sidecar
-from pixelup.upscale import UpscaleOptions, run_upscale
+from pixelup.upscale import run_upscale
 
 LOGGER = get_logger()
 PROJECT_URL = "https://github.com/nao7sep/pixelup"
@@ -81,39 +89,6 @@ KNOWN_MODEL_NAMES = {model.name for model in KNOWN_MODELS}
 UPSCALE_MODELS = tuple(name for name in MODEL_ORDER if name in KNOWN_MODEL_NAMES)
 
 
-@dataclass(frozen=True, slots=True)
-class AdvancedSettings:
-    face_enhance: bool = False
-    denoise_strength: float = 0.5
-    alpha_mode: str = "realesrgan"
-    device: str = "auto"
-    output_format: OutputFormat = OutputFormat.PNG
-    quality: int = 95
-    tile: int = 0
-    strip_metadata: bool = False
-    target_profile: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ImageEntry:
-    input_path: Path
-    input_size: tuple[int, int] | None
-
-
-@dataclass(slots=True)
-class Job:
-    id: int
-    input_path: Path
-    model: str
-    scale: int
-    output_path: Path
-    advanced: AdvancedSettings
-    auto_download: bool
-    status: str = "pending"
-    message: str = ""
-    warnings: list[str] = field(default_factory=list)
-
-
 class JobSignals(QObject):
     progress = Signal(int, str)
     finished = Signal(int, bool, str, object, object)
@@ -135,9 +110,9 @@ class JobWorker(QObject):
     @Slot()
     def run(self) -> None:
         warnings: list[str] = []
-        LOGGER.info("Starting job %s details=%s", self.job.id, _job_log_payload(self.job))
+        LOGGER.info("Starting job %s details=%s", self.job.id, job_log_payload(self.job))
         try:
-            options = _options_for_job(self.job)
+            options = options_for_job(self.job)
             result = run_upscale(
                 options,
                 resolve_runtime_dirs(),
@@ -188,80 +163,40 @@ class JobWorker(QObject):
                 self.job.id,
                 exc.message,
                 warnings,
-                _job_log_payload(self.job),
+                job_log_payload(self.job),
             )
             self.signals.finished.emit(self.job.id, False, exc.message, {}, warnings)
         except Exception as exc:
             LOGGER.exception(
                 "Job %s failed unexpectedly details=%s",
                 self.job.id,
-                _job_log_payload(self.job),
+                job_log_payload(self.job),
             )
             self.signals.finished.emit(self.job.id, False, f"Unexpected error: {exc}", {}, warnings)
 
 
-class PreviewLabel(QLabel):
-    def __init__(self) -> None:
-        super().__init__("No image selected")
-        self._source: QPixmap | None = None
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedSize(112, 112)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-
-    def clear_image(self) -> None:
-        self._source = None
-        self.setPixmap(QPixmap())
-        self.setText("No image selected")
-
-    def set_image_path(self, path: Path) -> None:
-        pixmap = QPixmap(str(path))
-        self._source = pixmap if not pixmap.isNull() else None
-        self._update_pixmap()
-
-    def resizeEvent(self, event: object) -> None:
-        self._update_pixmap()
-        super().resizeEvent(event)
-
-    def _update_pixmap(self) -> None:
-        if self._source is None:
-            self.setPixmap(QPixmap())
-            self.setText("Preview unavailable")
-            return
-        size = self.contentsRect().size() - QSize(4, 4)
-        if size.width() <= 0 or size.height() <= 0:
-            return
-        self.setText("")
-        self.setPixmap(
-            self._source.scaled(
-                size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
-
-
 class NoWheelComboBox(QComboBox):
-    def wheelEvent(self, event: object) -> None:
+    def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
-            super().wheelEvent(event)  # type: ignore[arg-type]
+            super().wheelEvent(event)
             return
-        event.ignore()  # type: ignore[attr-defined]
+        event.ignore()
 
 
 class NoWheelSpinBox(QSpinBox):
-    def wheelEvent(self, event: object) -> None:
+    def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
-            super().wheelEvent(event)  # type: ignore[arg-type]
+            super().wheelEvent(event)
             return
-        event.ignore()  # type: ignore[attr-defined]
+        event.ignore()
 
 
 class NoWheelDoubleSpinBox(QDoubleSpinBox):
-    def wheelEvent(self, event: object) -> None:
+    def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
-            super().wheelEvent(event)  # type: ignore[arg-type]
+            super().wheelEvent(event)
             return
-        event.ignore()  # type: ignore[attr-defined]
+        event.ignore()
 
 
 class MainWindow(QMainWindow):
@@ -283,7 +218,7 @@ class MainWindow(QMainWindow):
         self.resize(1260, 860)
         self.setAcceptDrops(True)
         self._build_ui()
-        self._apply_advanced(_advanced_defaults(self.config))
+        self._apply_advanced(advanced_defaults(self.config))
         self._update_selected_image()
         self._update_action_buttons()
 
@@ -295,7 +230,7 @@ class MainWindow(QMainWindow):
         LOGGER.info(
             "Loaded config path=%s values=%s",
             CONFIG_PATH,
-            _config_log_payload(self.config),
+            config_log_payload(self.config),
         )
 
     def _on_commit_data_request(self, _manager: object) -> None:
@@ -387,26 +322,19 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(10, 10, 10, 10)
-        root_layout.setSpacing(8)
         root_layout.addWidget(self._build_header())
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._build_image_panel())
         splitter.addWidget(self._build_work_panel())
-        splitter.setSizes([340, 1180])
         root_layout.addWidget(splitter, 1)
         self.setCentralWidget(root)
 
     def _build_header(self) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
 
         title = QLabel("PixelUp")
-        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         open_button = QPushButton("Open images...")
         open_button.clicked.connect(self._open_dialog)
@@ -418,6 +346,7 @@ class MainWindow(QMainWindow):
         about_button.clicked.connect(self._about_dialog)
 
         layout.addWidget(title)
+        layout.addStretch()
         layout.addWidget(open_button)
         layout.addWidget(logs_button)
         layout.addWidget(settings_button)
@@ -433,17 +362,11 @@ class MainWindow(QMainWindow):
         self.image_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.image_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.image_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.image_table.verticalHeader().setVisible(False)
-        image_header = self.image_table.horizontalHeader()
-        image_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        image_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        image_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.image_table.itemSelectionChanged.connect(self._update_selected_image)
         layout.addWidget(self.image_table, 1)
 
         button_row = QWidget()
         button_layout = QHBoxLayout(button_row)
-        button_layout.setContentsMargins(0, 0, 0, 0)
         self.open_images_button = QPushButton("Open...")
         self.open_images_button.clicked.connect(self._open_dialog)
         self.remove_image_button = QPushButton("Remove")
@@ -458,51 +381,30 @@ class MainWindow(QMainWindow):
     def _build_work_panel(self) -> QWidget:
         container = QWidget()
         layout = QGridLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
 
         layout.addWidget(self._build_models_group(), 0, 0)
         layout.addWidget(self._build_parameters_group(), 0, 1)
         layout.addWidget(self._build_actions_group(), 0, 2)
         layout.addWidget(self._build_queue_panel(), 1, 0, 1, 3)
-        layout.setColumnStretch(0, 2)
-        layout.setColumnStretch(1, 3)
-        layout.setColumnStretch(2, 2)
-        layout.setRowStretch(0, 0)
-        layout.setRowStretch(1, 1)
         return container
 
     def _build_selected_image_group(self) -> QWidget:
         group = QGroupBox("Selected image")
-        layout = QHBoxLayout(group)
-        layout.setSpacing(8)
-        self.preview = PreviewLabel()
-
-        details = QWidget()
-        details_layout = QVBoxLayout(details)
-        details_layout.setContentsMargins(0, 0, 0, 0)
-        details_layout.setSpacing(4)
+        layout = QVBoxLayout(group)
         self.selected_name = QLabel("No image selected")
         self.selected_name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.selected_path = QLabel("")
         self.selected_path.setWordWrap(True)
         self.selected_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.selected_size = QLabel("")
-        details_layout.addWidget(self.selected_name)
-        details_layout.addWidget(self.selected_path)
-        details_layout.addWidget(self.selected_size)
-        details_layout.addStretch()
-
-        layout.addWidget(self.preview)
-        layout.addWidget(details, 1)
-        group.setMaximumHeight(160)
+        layout.addWidget(self.selected_name)
+        layout.addWidget(self.selected_path)
+        layout.addWidget(self.selected_size)
         return group
 
     def _build_models_group(self) -> QWidget:
         group = QGroupBox("Models")
         layout = QVBoxLayout(group)
-        layout.setSpacing(4)
         self.model_checks: dict[str, QCheckBox] = {}
         for model in UPSCALE_MODELS:
             checkbox = QCheckBox(model)
@@ -511,18 +413,14 @@ class MainWindow(QMainWindow):
             self.model_checks[model] = checkbox
             layout.addWidget(checkbox)
         layout.addStretch()
-        group.setMinimumWidth(260)
         return group
 
     def _build_parameters_group(self) -> QWidget:
         group = QGroupBox("Parameters")
         form = QFormLayout(group)
-        form.setSpacing(6)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         scale_row = QWidget()
         scale_layout = QHBoxLayout(scale_row)
-        scale_layout.setContentsMargins(0, 0, 0, 0)
         self.scale_group = QButtonGroup(self)
         self.scale_2 = QRadioButton("2x")
         self.scale_4 = QRadioButton("4x")
@@ -538,7 +436,6 @@ class MainWindow(QMainWindow):
         self.denoise_strength.setRange(0.0, 1.0)
         self.denoise_strength.setSingleStep(0.1)
         self.denoise_strength.setDecimals(2)
-        self.denoise_strength.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
         self.alpha_mode = NoWheelComboBox()
         self.alpha_mode.addItem("Real-ESRGAN", "realesrgan")
@@ -550,12 +447,10 @@ class MainWindow(QMainWindow):
 
         self.quality = NoWheelSpinBox()
         self.quality.setRange(0, 100)
-        self.quality.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
         self.tile = NoWheelSpinBox()
         self.tile.setRange(0, 4096)
         self.tile.setSingleStep(64)
-        self.tile.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
         self.device = NoWheelComboBox()
         self.device.addItem("Auto", "auto")
@@ -585,13 +480,11 @@ class MainWindow(QMainWindow):
         form.addRow("Strip metadata", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
         form.addRow("", restore)
-        group.setMinimumWidth(320)
         return group
 
     def _build_actions_group(self) -> QWidget:
         group = QGroupBox("Queue actions")
         layout = QGridLayout(group)
-        layout.setVerticalSpacing(6)
         self.queue_selected_button = QPushButton("Queue selected image")
         self.queue_selected_button.clicked.connect(self._queue_selected_image)
         self.queue_selected_all_models_button = QPushButton("Queue selected image with all models")
@@ -611,8 +504,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.queue_all_all_models_button, 3, 0)
         layout.addWidget(self.retry_button, 4, 0)
         layout.addWidget(self.cancel_button, 5, 0)
-        layout.setRowStretch(6, 1)
-        group.setMinimumWidth(250)
         return group
 
     def _build_queue_panel(self) -> QWidget:
@@ -622,17 +513,6 @@ class MainWindow(QMainWindow):
         self.queue_table.setHorizontalHeaderLabels(["Image", "Model", "Scale", "Output", "Status"])
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.queue_table.verticalHeader().setVisible(False)
-        header = self.queue_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
-        widths = _queue_column_widths(self.queue_table.fontMetrics())
-        self.queue_table.setColumnWidth(0, 160)
-        self.queue_table.setColumnWidth(1, widths["model"])
-        self.queue_table.setColumnWidth(4, widths["status"])
         layout.addWidget(self.queue_table)
         return group
 
@@ -646,17 +526,17 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self.config, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             previous_config = self.config
-            previous_defaults = _advanced_defaults(self.config)
+            previous_defaults = advanced_defaults(self.config)
             self.config = dialog.config()
             save_app_config(self.config)
             LOGGER.info(
                 "Saved settings path=%s previous=%s current=%s",
                 CONFIG_PATH,
-                _config_log_payload(previous_config),
-                _config_log_payload(self.config),
+                config_log_payload(previous_config),
+                config_log_payload(self.config),
             )
             if self.current_advanced() == previous_defaults:
-                self._apply_advanced(_advanced_defaults(self.config))
+                self._apply_advanced(advanced_defaults(self.config))
             self._schedule()
             return
         LOGGER.info("Closed settings dialog without saving")
@@ -706,7 +586,6 @@ class MainWindow(QMainWindow):
             self.selected_name.setText("No image selected")
             self.selected_path.setText("")
             self.selected_size.setText("")
-            self.preview.clear_image()
             self.remove_image_button.setEnabled(False)
             self._update_action_buttons()
             return
@@ -714,7 +593,6 @@ class MainWindow(QMainWindow):
         self.selected_name.setText(path.name)
         self.selected_path.setText(str(path))
         self.selected_size.setText(f"Size: {_image_size_text(entry.input_size)}")
-        self.preview.set_image_path(path)
         self.remove_image_button.setEnabled(not self._has_active_jobs(path))
         self._update_action_buttons()
 
@@ -756,7 +634,7 @@ class MainWindow(QMainWindow):
             denoise_strength=self.denoise_strength.value(),
             alpha_mode=self.alpha_mode.currentData(),
             device=self.device.currentData(),
-            output_format=_coerce_output_format(self.output_format.currentData()),
+            output_format=coerce_output_format(self.output_format.currentData()),
             quality=self.quality.value(),
             tile=self.tile.value(),
             strip_metadata=self.strip_metadata.isChecked(),
@@ -768,7 +646,7 @@ class MainWindow(QMainWindow):
         self.denoise_strength.setValue(settings.denoise_strength)
         self.alpha_mode.setCurrentIndex(self.alpha_mode.findData(settings.alpha_mode))
         self.output_format.setCurrentIndex(
-            self.output_format.findData(_coerce_output_format(settings.output_format).value)
+            self.output_format.findData(coerce_output_format(settings.output_format).value)
         )
         self.quality.setValue(settings.quality)
         self.tile.setValue(settings.tile)
@@ -777,9 +655,9 @@ class MainWindow(QMainWindow):
         self.target_profile.setCurrentIndex(self.target_profile.findData(settings.target_profile))
 
     def _restore_advanced_defaults(self) -> None:
-        defaults = _advanced_defaults(self.config)
+        defaults = advanced_defaults(self.config)
         self._apply_advanced(defaults)
-        LOGGER.info("Restored parameter defaults defaults=%s", _advanced_log_payload(defaults))
+        LOGGER.info("Restored parameter defaults defaults=%s", advanced_log_payload(defaults))
 
     def _queue_selected_image(self) -> None:
         self._enqueue_jobs(self._selected_paths(), self._selected_models(), self._current_scale())
@@ -801,44 +679,25 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "PixelUp", "Choose at least one model.")
             return
         advanced = self.current_advanced()
-        reserved_by_input: dict[Path, set[Path]] = defaultdict(set)
-        for job in self.jobs:
-            reserved_by_input[job.input_path].add(job.output_path)
-
-        new_jobs: list[Job] = []
-        for input_path in input_paths:
-            reserved = reserved_by_input[input_path]
-            for model in models:
-                model_advanced = _advanced_for_model(advanced, model)
-                output_path = default_output_path(
-                    input_path,
-                    model=model,
-                    scale=scale,
-                    output_format=model_advanced.output_format,
-                    reserved=reserved,
-                )
-                reserved.add(output_path)
-                new_jobs.append(
-                    Job(
-                        id=next(self._job_ids),
-                        input_path=input_path,
-                        model=model,
-                        scale=scale,
-                        output_path=output_path,
-                        advanced=model_advanced,
-                        auto_download=self.config.auto_download,
-                    )
-                )
+        new_jobs = create_jobs(
+            input_paths=input_paths,
+            models=models,
+            scale=scale,
+            advanced=advanced,
+            existing_jobs=self.jobs,
+            auto_download=self.config.auto_download,
+            job_ids=self._job_ids,
+        )
         LOGGER.info(
             "Accepted enqueue request inputs=%s models=%s scale=%s advanced=%s auto_download=%s",
             [str(path) for path in input_paths],
             models,
             scale,
-            _advanced_log_payload(advanced),
+            advanced_log_payload(advanced),
             self.config.auto_download,
         )
         for job in new_jobs:
-            LOGGER.info("Queued job %s details=%s", job.id, _job_log_payload(job))
+            LOGGER.info("Queued job %s details=%s", job.id, job_log_payload(job))
         self.jobs.extend(new_jobs)
         self._add_queue_rows(new_jobs)
         self._refresh_image_job_summaries()
@@ -890,28 +749,11 @@ class MainWindow(QMainWindow):
         self._update_action_buttons()
 
     def _retry_failed(self) -> None:
-        reserved_by_input: dict[Path, set[Path]] = defaultdict(set)
+        retried_jobs = retry_failed_jobs(self.jobs)
+        retried = set(retried_jobs)
         for job in self.jobs:
-            if job.status != "failed":
-                reserved_by_input[job.input_path].add(job.output_path)
-        retried_jobs: list[int] = []
-        for job in self.jobs:
-            if job.status != "failed":
-                continue
-            reserved = reserved_by_input[job.input_path]
-            job.output_path = default_output_path(
-                job.input_path,
-                model=job.model,
-                scale=job.scale,
-                output_format=job.advanced.output_format,
-                reserved=reserved,
-            )
-            reserved.add(job.output_path)
-            job.status = "pending"
-            job.message = ""
-            job.warnings = []
-            self._update_job(job)
-            retried_jobs.append(job.id)
+            if job.id in retried:
+                self._update_job(job)
         if retried_jobs:
             LOGGER.info("Retrying failed jobs job_ids=%s", retried_jobs)
             self._refresh_image_job_summaries()
@@ -1063,14 +905,12 @@ class SettingsDialog(QDialog):
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
 
         general_group = QGroupBox("General")
         general_form = QFormLayout(general_group)
 
         self.concurrent = QSpinBox()
         self.concurrent.setRange(1, 8)
-        self.concurrent.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.concurrent.setValue(config.max_concurrent_jobs)
 
         self.auto_download = QCheckBox("Download missing models automatically")
@@ -1088,13 +928,11 @@ class SettingsDialog(QDialog):
 
         self.quality = QSpinBox()
         self.quality.setRange(0, 100)
-        self.quality.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.quality.setValue(config.quality)
 
         self.tile = QSpinBox()
         self.tile.setRange(0, 4096)
         self.tile.setSingleStep(64)
-        self.tile.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.tile.setValue(config.tile)
 
         self.device = QComboBox()
@@ -1149,11 +987,8 @@ class AboutDialog(QDialog):
 
         layout = QVBoxLayout(self)
         name = QLabel("PixelUp")
-        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version = QLabel(f"Version {__version__}")
-        version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         copy = QLabel("Upscale local images with Real-ESRGAN in a simple desktop workflow.")
-        copy.setAlignment(Qt.AlignmentFlag.AlignCenter)
         copy.setWordWrap(True)
 
         links = QWidget()
@@ -1168,7 +1003,6 @@ class AboutDialog(QDialog):
         links_layout.addStretch()
 
         meta = QLabel("(c) 2026 Yoshinao Inoguchi - MIT License")
-        meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -1180,48 +1014,6 @@ class AboutDialog(QDialog):
         layout.addWidget(links)
         layout.addWidget(meta)
         layout.addWidget(buttons)
-
-
-def _advanced_defaults(config: AppConfig) -> AdvancedSettings:
-    return AdvancedSettings(
-        device=config.device,
-        output_format=config.output_format,
-        quality=config.quality,
-        tile=config.tile,
-    )
-
-
-def _advanced_for_model(settings: AdvancedSettings, model: str) -> AdvancedSettings:
-    if model != "realesr-general-x4v3" and settings.denoise_strength != 1.0:
-        return replace(settings, denoise_strength=1.0)
-    return settings
-
-
-def _options_for_job(job: Job) -> UpscaleOptions:
-    return UpscaleOptions(
-        input_path=job.input_path,
-        output_arg=str(job.output_path),
-        model=job.model,
-        scale=job.scale,
-        tile=job.advanced.tile,
-        tile_pad=10,
-        pre_pad=0,
-        fp32=False,
-        face_enhance=job.advanced.face_enhance,
-        denoise_strength=job.advanced.denoise_strength,
-        alpha_mode=job.advanced.alpha_mode,
-        gpu_id=None,
-        device=job.advanced.device,
-        output_format=job.advanced.output_format,
-        quality=job.advanced.quality,
-        background="white",
-        strip_metadata=job.advanced.strip_metadata,
-        target_profile=job.advanced.target_profile,
-        overwrite=False,
-        auto_download=job.auto_download,
-        download_timeout=600,
-        lock_timeout=600,
-    )
 
 
 def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
@@ -1262,21 +1054,6 @@ def _status_text(status: str) -> str:
     }.get(status, status.replace("-", " ").replace("_", " ").capitalize())
 
 
-def _queue_column_widths(metrics: object) -> dict[str, int]:
-    longest_model = max(UPSCALE_MODELS, key=len) if UPSCALE_MODELS else "RealESRGAN_x4plus_anime_6B"
-    samples = {
-        "model": longest_model,
-        "scale": "4x",
-        "status": _tile_progress_text(9999, 9999),
-    }
-    padding = 32
-    floors = {"model": 180, "scale": 56, "status": 180}
-    return {
-        key: max(floors[key], metrics.horizontalAdvance(text) + padding)  # type: ignore[attr-defined]
-        for key, text in samples.items()
-    }
-
-
 def _safe_image_size(path: Path) -> tuple[int, int] | None:
     try:
         return read_image_size(path) if path.exists() else None
@@ -1289,50 +1066,6 @@ def _image_size_text(size: tuple[int, int] | None) -> str:
         return "unavailable"
     width, height = size
     return f"{width} x {height}"
-
-
-def _coerce_output_format(value: OutputFormat | str | object) -> OutputFormat:
-    if isinstance(value, OutputFormat):
-        return value
-    if isinstance(value, str):
-        return OutputFormat(value)
-    raise ValueError(f"Unsupported output format: {value!r}")
-
-
-def _advanced_log_payload(settings: AdvancedSettings) -> dict[str, object]:
-    return {
-        "face_enhance": settings.face_enhance,
-        "denoise_strength": settings.denoise_strength,
-        "alpha_mode": settings.alpha_mode,
-        "device": settings.device,
-        "output_format": _coerce_output_format(settings.output_format).value,
-        "quality": settings.quality,
-        "tile": settings.tile,
-        "strip_metadata": settings.strip_metadata,
-        "target_profile": settings.target_profile,
-    }
-
-
-def _config_log_payload(config: AppConfig) -> dict[str, object]:
-    return {
-        "max_concurrent_jobs": config.max_concurrent_jobs,
-        "output_format": config.output_format.value,
-        "quality": config.quality,
-        "tile": config.tile,
-        "device": config.device,
-        "auto_download": config.auto_download,
-    }
-
-
-def _job_log_payload(job: Job) -> dict[str, object]:
-    return {
-        "input_path": str(job.input_path),
-        "model": job.model,
-        "scale": job.scale,
-        "output_path": str(job.output_path),
-        "advanced": _advanced_log_payload(job.advanced),
-        "auto_download": job.auto_download,
-    }
 
 
 def _reveal_in_file_browser(path: Path) -> None:
