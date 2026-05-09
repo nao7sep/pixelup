@@ -5,12 +5,12 @@ from pathlib import Path
 
 from pixelup.app_config import AppConfig
 from pixelup.jobs import (
-    AdvancedSettings,
     Job,
-    advanced_defaults,
-    advanced_log_payload,
+    JobSettings,
     coerce_output_format,
     create_jobs,
+    job_settings_defaults,
+    job_settings_log_payload,
     retry_failed_jobs,
 )
 from pixelup.paths import OutputFormat
@@ -21,14 +21,14 @@ def test_coerce_output_format_accepts_string_values() -> None:
     assert coerce_output_format("jpg") == OutputFormat.JPG
 
 
-def test_advanced_log_payload_accepts_string_backed_output_format() -> None:
-    payload = advanced_log_payload(AdvancedSettings(output_format="webp"))  # type: ignore[arg-type]
+def test_job_settings_log_payload_accepts_string_backed_output_format() -> None:
+    payload = job_settings_log_payload(JobSettings(output_format="webp"))  # type: ignore[arg-type]
 
     assert payload["output_format"] == "webp"
 
 
-def test_advanced_defaults_come_from_app_config() -> None:
-    settings = advanced_defaults(
+def test_job_settings_defaults_come_from_app_config() -> None:
+    settings = job_settings_defaults(
         AppConfig(
             output_format=OutputFormat.WEBP,
             quality=82,
@@ -53,7 +53,7 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
         input_paths=[first, second],
         models=["realesr-general-x4v3", "RealESRGAN_x4plus"],
         scale=4,
-        advanced=AdvancedSettings(output_format=OutputFormat.PNG),
+        settings=JobSettings(output_format=OutputFormat.PNG),
         existing_jobs=[],
         auto_download=True,
         job_ids=count(1),
@@ -83,7 +83,7 @@ def test_create_jobs_reserves_existing_output_paths(tmp_path: Path) -> None:
         model="realesr-general-x4v3",
         scale=4,
         output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
-        advanced=AdvancedSettings(),
+        settings=JobSettings(),
         auto_download=True,
     )
 
@@ -91,7 +91,7 @@ def test_create_jobs_reserves_existing_output_paths(tmp_path: Path) -> None:
         input_paths=[source],
         models=["realesr-general-x4v3"],
         scale=4,
-        advanced=AdvancedSettings(output_format=OutputFormat.PNG),
+        settings=JobSettings(output_format=OutputFormat.PNG),
         existing_jobs=[existing],
         auto_download=True,
         job_ids=count(2),
@@ -109,7 +109,7 @@ def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
         model="realesr-general-x4v3",
         scale=4,
         output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
-        advanced=AdvancedSettings(),
+        settings=JobSettings(),
         auto_download=True,
         status="succeeded",
     )
@@ -119,7 +119,7 @@ def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
         model="realesr-general-x4v3",
         scale=4,
         output_path=tmp_path / "old.png",
-        advanced=AdvancedSettings(),
+        settings=JobSettings(),
         auto_download=True,
         status="failed",
         message="bad",

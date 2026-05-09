@@ -11,7 +11,7 @@ from pixelup.upscale import UpscaleOptions
 
 
 @dataclass(frozen=True, slots=True)
-class AdvancedSettings:
+class JobSettings:
     face_enhance: bool = False
     denoise_strength: float = 0.5
     alpha_mode: str = "realesrgan"
@@ -36,15 +36,15 @@ class Job:
     model: str
     scale: int
     output_path: Path
-    advanced: AdvancedSettings
+    settings: JobSettings
     auto_download: bool
     status: str = "pending"
     message: str = ""
     warnings: list[str] = field(default_factory=list)
 
 
-def advanced_defaults(config: AppConfig) -> AdvancedSettings:
-    return AdvancedSettings(
+def job_settings_defaults(config: AppConfig) -> JobSettings:
+    return JobSettings(
         device=config.device,
         output_format=config.output_format,
         quality=config.quality,
@@ -52,7 +52,7 @@ def advanced_defaults(config: AppConfig) -> AdvancedSettings:
     )
 
 
-def advanced_for_model(settings: AdvancedSettings, model: str) -> AdvancedSettings:
+def settings_for_model(settings: JobSettings, model: str) -> JobSettings:
     if model != "realesr-general-x4v3" and settings.denoise_strength != 1.0:
         return replace(settings, denoise_strength=1.0)
     return settings
@@ -63,7 +63,7 @@ def create_jobs(
     input_paths: list[Path],
     models: list[str],
     scale: int,
-    advanced: AdvancedSettings,
+    settings: JobSettings,
     existing_jobs: list[Job],
     auto_download: bool,
     job_ids: Iterator[int],
@@ -76,12 +76,12 @@ def create_jobs(
     for input_path in input_paths:
         reserved = reserved_by_input[input_path]
         for model in models:
-            model_advanced = advanced_for_model(advanced, model)
+            model_settings = settings_for_model(settings, model)
             output_path = default_output_path(
                 input_path,
                 model=model,
                 scale=scale,
-                output_format=model_advanced.output_format,
+                output_format=model_settings.output_format,
                 reserved=reserved,
             )
             reserved.add(output_path)
@@ -92,7 +92,7 @@ def create_jobs(
                     model=model,
                     scale=scale,
                     output_path=output_path,
-                    advanced=model_advanced,
+                    settings=model_settings,
                     auto_download=auto_download,
                 )
             )
@@ -114,7 +114,7 @@ def retry_failed_jobs(jobs: list[Job]) -> list[int]:
             job.input_path,
             model=job.model,
             scale=job.scale,
-            output_format=job.advanced.output_format,
+            output_format=job.settings.output_format,
             reserved=reserved,
         )
         reserved.add(job.output_path)
@@ -131,20 +131,20 @@ def options_for_job(job: Job) -> UpscaleOptions:
         output_arg=str(job.output_path),
         model=job.model,
         scale=job.scale,
-        tile=job.advanced.tile,
+        tile=job.settings.tile,
         tile_pad=10,
         pre_pad=0,
         fp32=False,
-        face_enhance=job.advanced.face_enhance,
-        denoise_strength=job.advanced.denoise_strength,
-        alpha_mode=job.advanced.alpha_mode,
+        face_enhance=job.settings.face_enhance,
+        denoise_strength=job.settings.denoise_strength,
+        alpha_mode=job.settings.alpha_mode,
         gpu_id=None,
-        device=job.advanced.device,
-        output_format=job.advanced.output_format,
-        quality=job.advanced.quality,
+        device=job.settings.device,
+        output_format=job.settings.output_format,
+        quality=job.settings.quality,
         background="white",
-        strip_metadata=job.advanced.strip_metadata,
-        target_profile=job.advanced.target_profile,
+        strip_metadata=job.settings.strip_metadata,
+        target_profile=job.settings.target_profile,
         overwrite=False,
         auto_download=job.auto_download,
         download_timeout=600,
@@ -160,7 +160,7 @@ def coerce_output_format(value: OutputFormat | str | object) -> OutputFormat:
     raise ValueError(f"Unsupported output format: {value!r}")
 
 
-def advanced_log_payload(settings: AdvancedSettings) -> dict[str, object]:
+def job_settings_log_payload(settings: JobSettings) -> dict[str, object]:
     return {
         "face_enhance": settings.face_enhance,
         "denoise_strength": settings.denoise_strength,
@@ -191,6 +191,6 @@ def job_log_payload(job: Job) -> dict[str, object]:
         "model": job.model,
         "scale": job.scale,
         "output_path": str(job.output_path),
-        "advanced": advanced_log_payload(job.advanced),
+        "settings": job_settings_log_payload(job.settings),
         "auto_download": job.auto_download,
     }

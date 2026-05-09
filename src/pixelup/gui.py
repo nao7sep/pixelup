@@ -6,7 +6,7 @@ from collections import defaultdict
 from itertools import count
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import Qt, QUrl, Slot
 from PySide6.QtGui import (
     QCloseEvent,
     QDesktopServices,
@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
-    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -45,26 +44,24 @@ from PySide6.QtWidgets import (
 from pixelup import __version__
 from pixelup.app_config import CONFIG_PATH, AppConfig, load_app_config, save_app_config
 from pixelup.config import resolve_runtime_dirs
-from pixelup.errors import ErrorCode, PixelupError
+from pixelup.errors import PixelupError
 from pixelup.imaging import read_image_size, register_image_plugins
 from pixelup.jobs import (
-    AdvancedSettings,
     ImageEntry,
     Job,
-    advanced_defaults,
-    advanced_log_payload,
+    JobSettings,
     coerce_output_format,
     config_log_payload,
     create_jobs,
     job_log_payload,
-    options_for_job,
+    job_settings_defaults,
+    job_settings_log_payload,
     retry_failed_jobs,
 )
 from pixelup.models import KNOWN_MODELS
 from pixelup.paths import OutputFormat
+from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, get_logger
-from pixelup.sidecar import write_sidecar
-from pixelup.upscale import run_upscale
 
 LOGGER = get_logger()
 PROJECT_URL = "https://github.com/nao7sep/pixelup"
@@ -77,102 +74,8 @@ MODEL_ORDER = (
     "RealESRGAN_x4plus_anime_6B",
     "realesr-animevideov3",
 )
-MODEL_DESCRIPTIONS = {
-    "realesr-general-x4v3": "Best default for mixed images.",
-    "RealESRGAN_x4plus": "General 4x with stronger detail enhancement.",
-    "RealESRNet_x4plus": "General 4x with a softer, less GAN-heavy look.",
-    "RealESRGAN_x2plus": "2x upscale when 4x is too much.",
-    "RealESRGAN_x4plus_anime_6B": "Best for anime and flat illustrations.",
-    "realesr-animevideov3": "Good for anime and video-frame style images.",
-}
 KNOWN_MODEL_NAMES = {model.name for model in KNOWN_MODELS}
 UPSCALE_MODELS = tuple(name for name in MODEL_ORDER if name in KNOWN_MODEL_NAMES)
-
-
-class JobSignals(QObject):
-    progress = Signal(int, str)
-    finished = Signal(int, bool, str, object, object)
-
-
-class JobWorker(QObject):
-    def __init__(self, job: Job) -> None:
-        super().__init__()
-        self.job = job
-        self.signals = JobSignals()
-        self._cancel_requested = False
-
-    def request_cancel(self) -> None:
-        self._cancel_requested = True
-
-    def _is_cancelled(self) -> bool:
-        return self._cancel_requested
-
-    @Slot()
-    def run(self) -> None:
-        warnings: list[str] = []
-        LOGGER.info("Starting job %s details=%s", self.job.id, job_log_payload(self.job))
-        try:
-            options = options_for_job(self.job)
-            result = run_upscale(
-                options,
-                resolve_runtime_dirs(),
-                on_progress=lambda phase: self.signals.progress.emit(
-                    self.job.id,
-                    _progress_text(phase),
-                ),
-                on_tile=lambda done, total: self.signals.progress.emit(
-                    self.job.id,
-                    _tile_progress_text(done, total),
-                ),
-                on_download=lambda model, done, total: self.signals.progress.emit(
-                    self.job.id,
-                    _download_text(model, done, total),
-                ),
-                on_warning=warnings.append,
-                should_cancel=self._is_cancelled,
-            )
-            sidecar = write_sidecar(
-                input_path=self.job.input_path,
-                output_path=self.job.output_path,
-                options=options,
-                result=result,
-                warnings=warnings,
-            )
-            result["sidecar"] = str(sidecar)
-            LOGGER.info(
-                "Finished job %s output=%s sidecar=%s warnings=%s",
-                self.job.id,
-                self.job.output_path,
-                sidecar,
-                warnings,
-            )
-            self.signals.finished.emit(self.job.id, True, "Done", result, warnings)
-        except PixelupError as exc:
-            if exc.code == ErrorCode.JOB_CANCELLED:
-                LOGGER.info("Job %s cancelled", self.job.id)
-                self.signals.finished.emit(
-                    self.job.id,
-                    False,
-                    "Cancelled",
-                    {"cancelled": True},
-                    warnings,
-                )
-                return
-            LOGGER.warning(
-                "Job %s failed message=%s warnings=%s details=%s",
-                self.job.id,
-                exc.message,
-                warnings,
-                job_log_payload(self.job),
-            )
-            self.signals.finished.emit(self.job.id, False, exc.message, {}, warnings)
-        except Exception as exc:
-            LOGGER.exception(
-                "Job %s failed unexpectedly details=%s",
-                self.job.id,
-                job_log_payload(self.job),
-            )
-            self.signals.finished.emit(self.job.id, False, f"Unexpected error: {exc}", {}, warnings)
 
 
 class NoWheelComboBox(QComboBox):
@@ -205,20 +108,21 @@ class MainWindow(QMainWindow):
         self.config = load_app_config()
         self.log_file = log_file
         self._job_ids = count(1)
-        self._threads: dict[int, tuple[QThread, JobWorker]] = {}
-        self._active_jobs = 0
         self._images_by_path: dict[Path, ImageEntry] = {}
         self._image_order: list[Path] = []
         self._image_rows: dict[Path, int] = {}
         self._queue_rows: dict[int, int] = {}
         self.jobs: list[Job] = []
+        self.runner = JobRunner(self.jobs, self)
+        self.runner.progress.connect(self._job_progress)
+        self.runner.finished.connect(self._job_finished)
         self._session_shutdown = False
 
         self.setWindowTitle("PixelUp")
         self.resize(1260, 860)
         self.setAcceptDrops(True)
         self._build_ui()
-        self._apply_advanced(advanced_defaults(self.config))
+        self._apply_job_settings(job_settings_defaults(self.config))
         self._update_selected_image()
         self._update_action_buttons()
 
@@ -241,11 +145,11 @@ class MainWindow(QMainWindow):
         is_saving_session = app.isSavingSession() if app is not None else False
         if self._session_shutdown or is_saving_session:
             LOGGER.info("Accepting close during session shutdown")
-            self._cleanup_workers_for_quit()
+            self.runner.cleanup_for_quit()
             event.accept()
             return
         if not self._images_by_path:
-            self._cleanup_workers_for_quit()
+            self.runner.cleanup_for_quit()
             event.accept()
             return
         active = sum(1 for job in self.jobs if job.status in {"pending", "running", "cancelling"})
@@ -263,32 +167,11 @@ class MainWindow(QMainWindow):
         )
         if choice == QMessageBox.StandardButton.Yes:
             LOGGER.info("User confirmed quit active_jobs=%s", active)
-            self._cleanup_workers_for_quit()
+            self.runner.cleanup_for_quit()
             event.accept()
         else:
             LOGGER.info("User cancelled quit")
             event.ignore()
-
-    def _cleanup_workers_for_quit(self) -> None:
-        if not self._threads:
-            return
-        entries = list(self._threads.values())
-        for _thread, worker in entries:
-            try:
-                worker.request_cancel()
-            except Exception:
-                pass
-            for signal in (worker.signals.progress, worker.signals.finished):
-                try:
-                    signal.disconnect()
-                except (RuntimeError, TypeError):
-                    pass
-        for thread, _worker in entries:
-            try:
-                thread.wait(2000)
-            except Exception:
-                pass
-        LOGGER.info("Cleaned up %s worker thread(s) for quit", len(entries))
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -324,10 +207,11 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(root)
         root_layout.addWidget(self._build_header())
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_image_panel())
-        splitter.addWidget(self._build_work_panel())
-        root_layout.addWidget(splitter, 1)
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.addWidget(self._build_image_panel())
+        content_layout.addWidget(self._build_work_panel())
+        root_layout.addWidget(content, 1)
         self.setCentralWidget(root)
 
     def _build_header(self) -> QWidget:
@@ -408,7 +292,6 @@ class MainWindow(QMainWindow):
         self.model_checks: dict[str, QCheckBox] = {}
         for model in UPSCALE_MODELS:
             checkbox = QCheckBox(model)
-            checkbox.setToolTip(MODEL_DESCRIPTIONS.get(model, ""))
             checkbox.toggled.connect(self._update_action_buttons)
             self.model_checks[model] = checkbox
             layout.addWidget(checkbox)
@@ -467,7 +350,7 @@ class MainWindow(QMainWindow):
         self.target_profile.addItem("Adobe RGB", "adobergb")
 
         restore = QPushButton("Restore defaults")
-        restore.clicked.connect(self._restore_advanced_defaults)
+        restore.clicked.connect(self._restore_job_settings_defaults)
 
         form.addRow("Scale", scale_row)
         form.addRow("Face enhancement", self.face_enhance)
@@ -526,7 +409,7 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self.config, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             previous_config = self.config
-            previous_defaults = advanced_defaults(self.config)
+            previous_defaults = job_settings_defaults(self.config)
             self.config = dialog.config()
             save_app_config(self.config)
             LOGGER.info(
@@ -535,9 +418,9 @@ class MainWindow(QMainWindow):
                 config_log_payload(previous_config),
                 config_log_payload(self.config),
             )
-            if self.current_advanced() == previous_defaults:
-                self._apply_advanced(advanced_defaults(self.config))
-            self._schedule()
+            if self.current_job_settings() == previous_defaults:
+                self._apply_job_settings(job_settings_defaults(self.config))
+            self.runner.schedule(self.config.max_concurrent_jobs)
             return
         LOGGER.info("Closed settings dialog without saving")
 
@@ -627,9 +510,9 @@ class MainWindow(QMainWindow):
     def _current_scale(self) -> int:
         return 2 if self.scale_2.isChecked() else 4
 
-    def current_advanced(self) -> AdvancedSettings:
+    def current_job_settings(self) -> JobSettings:
         profile = self.target_profile.currentData()
-        return AdvancedSettings(
+        return JobSettings(
             face_enhance=self.face_enhance.isChecked(),
             denoise_strength=self.denoise_strength.value(),
             alpha_mode=self.alpha_mode.currentData(),
@@ -641,7 +524,7 @@ class MainWindow(QMainWindow):
             target_profile=profile,
         )
 
-    def _apply_advanced(self, settings: AdvancedSettings) -> None:
+    def _apply_job_settings(self, settings: JobSettings) -> None:
         self.face_enhance.setChecked(settings.face_enhance)
         self.denoise_strength.setValue(settings.denoise_strength)
         self.alpha_mode.setCurrentIndex(self.alpha_mode.findData(settings.alpha_mode))
@@ -654,10 +537,10 @@ class MainWindow(QMainWindow):
         self.strip_metadata.setChecked(settings.strip_metadata)
         self.target_profile.setCurrentIndex(self.target_profile.findData(settings.target_profile))
 
-    def _restore_advanced_defaults(self) -> None:
-        defaults = advanced_defaults(self.config)
-        self._apply_advanced(defaults)
-        LOGGER.info("Restored parameter defaults defaults=%s", advanced_log_payload(defaults))
+    def _restore_job_settings_defaults(self) -> None:
+        defaults = job_settings_defaults(self.config)
+        self._apply_job_settings(defaults)
+        LOGGER.info("Restored parameter defaults defaults=%s", job_settings_log_payload(defaults))
 
     def _queue_selected_image(self) -> None:
         self._enqueue_jobs(self._selected_paths(), self._selected_models(), self._current_scale())
@@ -678,22 +561,22 @@ class MainWindow(QMainWindow):
         if not models:
             QMessageBox.information(self, "PixelUp", "Choose at least one model.")
             return
-        advanced = self.current_advanced()
+        settings = self.current_job_settings()
         new_jobs = create_jobs(
             input_paths=input_paths,
             models=models,
             scale=scale,
-            advanced=advanced,
+            settings=settings,
             existing_jobs=self.jobs,
             auto_download=self.config.auto_download,
             job_ids=self._job_ids,
         )
         LOGGER.info(
-            "Accepted enqueue request inputs=%s models=%s scale=%s advanced=%s auto_download=%s",
+            "Accepted enqueue request inputs=%s models=%s scale=%s settings=%s auto_download=%s",
             [str(path) for path in input_paths],
             models,
             scale,
-            advanced_log_payload(advanced),
+            job_settings_log_payload(settings),
             self.config.auto_download,
         )
         for job in new_jobs:
@@ -702,7 +585,7 @@ class MainWindow(QMainWindow):
         self._add_queue_rows(new_jobs)
         self._refresh_image_job_summaries()
         self._update_action_buttons()
-        self._schedule()
+        self.runner.schedule(self.config.max_concurrent_jobs)
 
     def _add_queue_rows(self, jobs: list[Job]) -> None:
         for job in jobs:
@@ -733,10 +616,7 @@ class MainWindow(QMainWindow):
                 self._update_job(job)
                 cancelled_pending.append(job.id)
             elif job.status == "running":
-                entry = self._threads.get(job.id)
-                if entry is not None:
-                    _, worker = entry
-                    worker.request_cancel()
+                self.runner.request_cancel(job.id)
                 job.status = "cancelling"
                 self._update_job(job)
                 signalled_running.append(job.id)
@@ -758,40 +638,7 @@ class MainWindow(QMainWindow):
             LOGGER.info("Retrying failed jobs job_ids=%s", retried_jobs)
             self._refresh_image_job_summaries()
             self._update_action_buttons()
-            self._schedule()
-
-    def _schedule(self) -> None:
-        limit = max(1, self.config.max_concurrent_jobs)
-        while self._active_jobs < limit:
-            job = self._next_pending_job()
-            if job is None:
-                return
-            self._start_job(job)
-
-    def _next_pending_job(self) -> Job | None:
-        for job in self.jobs:
-            if job.status == "pending":
-                return job
-        return None
-
-    def _start_job(self, job: Job) -> None:
-        job.status = "running"
-        job.message = "Starting"
-        self._update_job(job)
-        self._active_jobs += 1
-
-        thread = QThread(self)
-        worker = JobWorker(job)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.signals.progress.connect(self._job_progress)
-        worker.signals.finished.connect(self._job_finished)
-        worker.signals.finished.connect(thread.quit)
-        worker.signals.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda job_id=job.id: self._threads.pop(job_id, None))
-        self._threads[job.id] = (thread, worker)
-        thread.start()
+            self.runner.schedule(self.config.max_concurrent_jobs)
 
     @Slot(int, str)
     def _job_progress(self, job_id: int, message: str) -> None:
@@ -828,10 +675,8 @@ class MainWindow(QMainWindow):
         job.message = message
         job.warnings = list(warnings) if isinstance(warnings, list) else []
         self._update_job(job)
-        self._active_jobs = max(0, self._active_jobs - 1)
         self._refresh_image_job_summaries()
         self._update_action_buttons()
-        QTimer.singleShot(0, self._schedule)
 
     def _find_job(self, job_id: int) -> Job:
         for job in self.jobs:
@@ -1021,26 +866,6 @@ def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
     if tooltip:
         item.setToolTip(tooltip)
     return item
-
-
-def _download_text(model: str, done: int, total: int | None) -> str:
-    if total:
-        return f"{done * 100 // total}% - downloading {model}"
-    return f"Downloading {model}"
-
-
-def _progress_text(phase: str) -> str:
-    match phase:
-        case "upscale":
-            return "Upscaling"
-        case "encode":
-            return "Saving"
-        case _:
-            return phase.replace("-", " ").replace("_", " ").capitalize()
-
-
-def _tile_progress_text(done: int, total: int) -> str:
-    return f"Tiles {done}/{total} - processing"
 
 
 def _status_text(status: str) -> str:
