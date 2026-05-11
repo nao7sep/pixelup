@@ -200,4 +200,4 @@ def _progress_text(phase: str) -> str:
 
 
 def _tile_progress_text(done: int, total: int) -> str:
-    return f"Tiles {done}/{total} - processing"
+    return f"{done}/{total} tiles processed"

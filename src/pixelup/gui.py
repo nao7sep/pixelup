@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLayout,
     QMainWindow,
@@ -157,9 +158,9 @@ class MainWindow(QMainWindow):
             return
         active = sum(1 for job in self.jobs if job.status in {"pending", "running", "cancelling"})
         text = (
-            f"PixelUp has {active} running or pending job(s). Quit and abandon them?"
+            f"{active} {_plural(active, 'running or pending job')} will be abandoned. Quit PixelUp?"
             if active
-            else "PixelUp has open images. Quit anyway?"
+            else "Open images will be closed. Quit PixelUp?"
         )
         choice = QMessageBox.question(
             self,
@@ -256,6 +257,12 @@ class MainWindow(QMainWindow):
         self.image_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.image_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.image_table.itemSelectionChanged.connect(self._update_selected_image)
+        image_header = self.image_table.horizontalHeader()
+        image_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        image_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        image_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        image_header.resizeSection(1, 120)
+        image_header.resizeSection(2, 170)
         layout.addWidget(self.image_table, 1)
 
         button_row = QWidget()
@@ -441,6 +448,16 @@ class MainWindow(QMainWindow):
         self.queue_table.setHorizontalHeaderLabels(["Image", "Model", "Scale", "Output", "Status"])
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        queue_header = self.queue_table.horizontalHeader()
+        queue_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        queue_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        queue_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        queue_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        queue_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        queue_header.resizeSection(0, 180)
+        queue_header.resizeSection(1, 230)
+        queue_header.resizeSection(2, 70)
+        queue_header.resizeSection(4, 180)
         layout.addWidget(self.queue_table)
         return group
 
@@ -487,7 +504,7 @@ class MainWindow(QMainWindow):
             _item(entry.input_path.name, tooltip=str(entry.input_path)),
         )
         self.image_table.setItem(row, 1, _item(_image_size_text(entry.input_size)))
-        self.image_table.setItem(row, 2, _item("0 jobs"))
+        self.image_table.setItem(row, 2, _item("No jobs"))
 
     def _select_image(self, path: Path) -> None:
         row = self._image_rows.get(path)
@@ -532,7 +549,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "PixelUp",
-                "This image still has pending or running jobs.",
+                "Pending or running jobs still use this image.",
             )
             return
         row = self._image_rows.pop(path)
@@ -604,7 +621,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "PixelUp", "Open or select at least one image.")
             return
         if not models:
-            QMessageBox.information(self, "PixelUp", "Choose at least one model.")
+            QMessageBox.information(self, "PixelUp", "Select at least one model.")
             return
         settings = self.current_job_settings()
         new_jobs = create_jobs(
@@ -753,7 +770,7 @@ class MainWindow(QMainWindow):
             running = counts[path]["running"] + counts[path]["cancelling"]
             pending = counts[path]["pending"]
             if total == 0:
-                text = "0 jobs"
+                text = "No jobs"
             else:
                 parts = [f"{done}/{total} done"]
                 if failed:
@@ -914,6 +931,7 @@ class AboutDialog(QDialog):
         self.setModal(True)
 
         layout = QVBoxLayout(self)
+        _use_regular_spacing(layout)
         name = QLabel("PixelUp")
         version = QLabel(f"Version {__version__}")
         copy = QLabel("Upscale local images with Real-ESRGAN in a simple desktop workflow.")
@@ -921,6 +939,7 @@ class AboutDialog(QDialog):
 
         links = QWidget()
         links_layout = QHBoxLayout(links)
+        _use_regular_spacing(links_layout, margins=False)
         github_button = QPushButton("GitHub")
         github_button.clicked.connect(lambda: _open_url(PROJECT_URL))
         issues_button = QPushButton("Report issue")
@@ -980,6 +999,12 @@ def _image_size_text(size: tuple[int, int] | None) -> str:
         return "unavailable"
     width, height = size
     return f"{width} x {height}"
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    if count == 1:
+        return singular
+    return plural if plural is not None else f"{singular}s"
 
 
 def _reveal_in_file_browser(path: Path) -> None:

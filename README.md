@@ -4,7 +4,7 @@ PixelUp is a simple PySide6 desktop app for upscaling local image files with
 Real-ESRGAN models.
 
 The app is intentionally small: open or drag image files into the window, select
-an image from the list, choose models and parameters, and let the global queue
+an image from the list, select models and parameters, and let the global queue
 process the work. Opening the same path focuses its existing image row.
 
 ## Features
@@ -24,7 +24,7 @@ process the work. Opening the same path focuses its existing image row.
 - Retry failed jobs
 - Cancel pending and running jobs
 - Confirmation prompt before quitting with open images
-- Proper Settings and About dialogs
+- Settings and About dialogs
 - Session log file per app launch
 
 ## Installation
@@ -122,6 +122,10 @@ The settings dialog writes:
   "tile": 0
 }
 ```
+
+Quality applies to JPG and WebP outputs. PNG ignores quality. Tile size `0`
+processes the whole image, and smaller tiles can reduce memory pressure. Device
+`auto` lets Real-ESRGAN choose the best available backend.
 
 `PIXELUP_MODELS_DIR` and `PIXELUP_TEMP_DIR` can still override the runtime
 directories.
