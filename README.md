@@ -13,7 +13,7 @@ process the work. Opening the same path focuses its existing image row.
 - Drag-and-drop image opening
 - Shared model selection
 - Always-visible parameters with restore-defaults support
-- Selected image details with size label
+- Selected image preview
 - Global queue for all images
 - Queue selected image with selected or all models
 - Queue all images with selected or all models

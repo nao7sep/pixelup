@@ -13,6 +13,8 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QGuiApplication,
+    QPixmap,
+    QResizeEvent,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
@@ -104,6 +106,43 @@ class NoWheelDoubleSpinBox(QDoubleSpinBox):
             super().wheelEvent(event)
             return
         event.ignore()
+
+
+class ImagePreview(QLabel):
+    def __init__(self) -> None:
+        super().__init__("No image selected")
+        self._pixmap: QPixmap | None = None
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumSize(160, 120)
+
+    def set_image(self, path: Path | None) -> None:
+        if path is None:
+            self._pixmap = None
+            self.clear()
+            self.setText("No image selected")
+            return
+        pixmap = QPixmap(str(path))
+        self._pixmap = pixmap if not pixmap.isNull() else None
+        if self._pixmap is None:
+            self.clear()
+            self.setText("Preview unavailable")
+            return
+        self.setText("")
+        self._update_pixmap()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_pixmap()
+
+    def _update_pixmap(self) -> None:
+        if self._pixmap is None or self.width() <= 0 or self.height() <= 0:
+            return
+        scaled = self._pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
 
 
 class MainWindow(QMainWindow):
@@ -303,23 +342,11 @@ class MainWindow(QMainWindow):
         return column
 
     def _build_selected_image_group(self) -> QWidget:
-        group = QGroupBox("Selected image")
+        group = QGroupBox("Preview")
         layout = QVBoxLayout(group)
         _use_regular_spacing(layout)
-        self.selected_name = QLabel("No image selected")
-        self.selected_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.selected_name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.selected_path = QLabel("")
-        self.selected_path.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.selected_path.setWordWrap(True)
-        self.selected_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.selected_size = QLabel("")
-        self.selected_size.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addStretch()
-        layout.addWidget(self.selected_name)
-        layout.addWidget(self.selected_path)
-        layout.addWidget(self.selected_size)
-        layout.addStretch()
+        self.preview = ImagePreview()
+        layout.addWidget(self.preview, 1)
         return group
 
     def _build_models_group(self) -> QWidget:
@@ -528,16 +555,11 @@ class MainWindow(QMainWindow):
     def _update_selected_image(self) -> None:
         path = self._selected_path()
         if path is None:
-            self.selected_name.setText("No image selected")
-            self.selected_path.setText("")
-            self.selected_size.setText("")
+            self.preview.set_image(None)
             self.remove_image_button.setEnabled(False)
             self._update_action_buttons()
             return
-        entry = self._images_by_path[path]
-        self.selected_name.setText(path.name)
-        self.selected_path.setText(str(path))
-        self.selected_size.setText(f"Size: {_image_size_text(entry.input_size)}")
+        self.preview.set_image(path)
         self.remove_image_button.setEnabled(not self._has_active_jobs(path))
         self._update_action_buttons()
 
