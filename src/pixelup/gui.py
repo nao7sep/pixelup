@@ -30,11 +30,13 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QStyleFactory,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -76,6 +78,7 @@ MODEL_ORDER = (
 )
 KNOWN_MODEL_NAMES = {model.name for model in KNOWN_MODELS}
 UPSCALE_MODELS = tuple(name for name in MODEL_ORDER if name in KNOWN_MODEL_NAMES)
+REGULAR_SPACING = 10
 
 
 class NoWheelComboBox(QComboBox):
@@ -205,23 +208,21 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         root_layout = QVBoxLayout(root)
-        root_layout.addWidget(self._build_header())
+        _use_regular_spacing(root_layout)
 
         content = QWidget()
         content_layout = QHBoxLayout(content)
-        content_layout.addWidget(self._build_image_panel())
-        content_layout.addWidget(self._build_work_panel())
+        _use_regular_spacing(content_layout, margins=False)
+        content_layout.addWidget(self._build_image_panel(), 1)
+        content_layout.addWidget(self._build_work_panel(), 1)
         root_layout.addWidget(content, 1)
         self.setCentralWidget(root)
 
-    def _build_header(self) -> QWidget:
+    def _build_window_actions(self) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
+        _use_regular_spacing(layout, margins=False)
 
-        title = QLabel("PixelUp")
-
-        open_button = QPushButton("Open images...")
-        open_button.clicked.connect(self._open_dialog)
         logs_button = QPushButton("Reveal log")
         logs_button.clicked.connect(self._reveal_log_file)
         settings_button = QPushButton("Settings")
@@ -229,17 +230,25 @@ class MainWindow(QMainWindow):
         about_button = QPushButton("About")
         about_button.clicked.connect(self._about_dialog)
 
-        layout.addWidget(title)
         layout.addStretch()
-        layout.addWidget(open_button)
         layout.addWidget(logs_button)
         layout.addWidget(settings_button)
         layout.addWidget(about_button)
         return row
 
     def _build_image_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        _use_regular_spacing(layout, margins=False)
+
+        layout.addWidget(self._build_images_group(), 1)
+        layout.addWidget(self._build_selected_image_group(), 1)
+        return panel
+
+    def _build_images_group(self) -> QWidget:
         group = QGroupBox("Images")
         layout = QVBoxLayout(group)
+        _use_regular_spacing(layout)
 
         self.image_table = QTableWidget(0, 3)
         self.image_table.setHorizontalHeaderLabels(["Image", "Size", "Jobs"])
@@ -251,44 +260,65 @@ class MainWindow(QMainWindow):
 
         button_row = QWidget()
         button_layout = QHBoxLayout(button_row)
-        self.open_images_button = QPushButton("Open...")
+        _use_regular_spacing(button_layout, margins=False)
+        self.open_images_button = QPushButton("Open")
         self.open_images_button.clicked.connect(self._open_dialog)
         self.remove_image_button = QPushButton("Remove")
         self.remove_image_button.clicked.connect(self._remove_selected_image)
         button_layout.addWidget(self.open_images_button)
         button_layout.addWidget(self.remove_image_button)
         layout.addWidget(button_row)
-
-        layout.addWidget(self._build_selected_image_group())
         return group
 
     def _build_work_panel(self) -> QWidget:
         container = QWidget()
-        layout = QGridLayout(container)
+        layout = QVBoxLayout(container)
+        _use_regular_spacing(layout, margins=False)
 
-        layout.addWidget(self._build_models_group(), 0, 0)
-        layout.addWidget(self._build_parameters_group(), 0, 1)
-        layout.addWidget(self._build_actions_group(), 0, 2)
-        layout.addWidget(self._build_queue_panel(), 1, 0, 1, 3)
+        controls = QWidget()
+        controls_layout = QHBoxLayout(controls)
+        _use_regular_spacing(controls_layout, margins=False)
+        controls_layout.addWidget(self._build_models_group(), 0, Qt.AlignmentFlag.AlignTop)
+        controls_layout.addWidget(self._build_parameters_group(), 0, Qt.AlignmentFlag.AlignTop)
+        controls_layout.addWidget(self._build_action_column(), 0, Qt.AlignmentFlag.AlignTop)
+        controls_layout.addStretch()
+
+        layout.addWidget(controls)
+        layout.addWidget(self._build_queue_panel(), 1)
         return container
+
+    def _build_action_column(self) -> QWidget:
+        column = QWidget()
+        layout = QVBoxLayout(column)
+        _use_regular_spacing(layout, margins=False)
+        layout.addWidget(self._build_window_actions())
+        layout.addWidget(self._build_actions_group())
+        return column
 
     def _build_selected_image_group(self) -> QWidget:
         group = QGroupBox("Selected image")
         layout = QVBoxLayout(group)
+        _use_regular_spacing(layout)
         self.selected_name = QLabel("No image selected")
+        self.selected_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.selected_name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.selected_path = QLabel("")
+        self.selected_path.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.selected_path.setWordWrap(True)
         self.selected_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.selected_size = QLabel("")
+        self.selected_size.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch()
         layout.addWidget(self.selected_name)
         layout.addWidget(self.selected_path)
         layout.addWidget(self.selected_size)
+        layout.addStretch()
         return group
 
     def _build_models_group(self) -> QWidget:
         group = QGroupBox("Models")
         layout = QVBoxLayout(group)
+        _use_regular_spacing(layout)
         self.model_checks: dict[str, QCheckBox] = {}
         for model in UPSCALE_MODELS:
             checkbox = QCheckBox(model)
@@ -301,6 +331,9 @@ class MainWindow(QMainWindow):
     def _build_parameters_group(self) -> QWidget:
         group = QGroupBox("Parameters")
         form = QFormLayout(group)
+        _use_regular_spacing(form)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
 
         scale_row = QWidget()
         scale_layout = QHBoxLayout(scale_row)
@@ -310,11 +343,12 @@ class MainWindow(QMainWindow):
         self.scale_4.setChecked(True)
         self.scale_group.addButton(self.scale_2)
         self.scale_group.addButton(self.scale_4)
+        scale_layout.setContentsMargins(0, 0, 0, 0)
         scale_layout.addWidget(self.scale_2)
         scale_layout.addWidget(self.scale_4)
         scale_layout.addStretch()
 
-        self.face_enhance = QCheckBox("Enable")
+        self.face_enhance = QCheckBox("Face enhancement")
         self.denoise_strength = NoWheelDoubleSpinBox()
         self.denoise_strength.setRange(0.0, 1.0)
         self.denoise_strength.setSingleStep(0.1)
@@ -341,7 +375,7 @@ class MainWindow(QMainWindow):
         self.device.addItem("CUDA", "cuda")
         self.device.addItem("CPU", "cpu")
 
-        self.strip_metadata = QCheckBox("Enable")
+        self.strip_metadata = QCheckBox("Strip metadata")
 
         self.target_profile = NoWheelComboBox()
         self.target_profile.addItem("Default", None)
@@ -353,21 +387,22 @@ class MainWindow(QMainWindow):
         restore.clicked.connect(self._restore_job_settings_defaults)
 
         form.addRow("Scale", scale_row)
-        form.addRow("Face enhancement", self.face_enhance)
+        form.addRow("", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
         form.addRow("Alpha mode", self.alpha_mode)
         form.addRow("Output format", self.output_format)
         form.addRow("Quality", self.quality)
         form.addRow("Tile size", self.tile)
         form.addRow("Device", self.device)
-        form.addRow("Strip metadata", self.strip_metadata)
+        form.addRow("", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
         form.addRow("", restore)
         return group
 
     def _build_actions_group(self) -> QWidget:
         group = QGroupBox("Queue actions")
-        layout = QGridLayout(group)
+        layout = QVBoxLayout(group)
+        _use_regular_spacing(layout)
         self.queue_selected_button = QPushButton("Queue selected image")
         self.queue_selected_button.clicked.connect(self._queue_selected_image)
         self.queue_selected_all_models_button = QPushButton("Queue selected image with all models")
@@ -381,17 +416,27 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancel queue")
         self.cancel_button.clicked.connect(self._cancel_queue)
 
-        layout.addWidget(self.queue_selected_button, 0, 0)
-        layout.addWidget(self.queue_selected_all_models_button, 1, 0)
-        layout.addWidget(self.queue_all_selected_models_button, 2, 0)
-        layout.addWidget(self.queue_all_all_models_button, 3, 0)
-        layout.addWidget(self.retry_button, 4, 0)
-        layout.addWidget(self.cancel_button, 5, 0)
+        layout.addWidget(self.queue_selected_button, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(
+            self.queue_selected_all_models_button,
+            0,
+            Qt.AlignmentFlag.AlignLeft,
+        )
+        layout.addWidget(
+            self.queue_all_selected_models_button,
+            0,
+            Qt.AlignmentFlag.AlignLeft,
+        )
+        layout.addWidget(self.queue_all_all_models_button, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.retry_button, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addStretch()
         return group
 
     def _build_queue_panel(self) -> QWidget:
         group = QGroupBox("Queue")
         layout = QVBoxLayout(group)
+        _use_regular_spacing(layout)
         self.queue_table = QTableWidget(0, 5)
         self.queue_table.setHorizontalHeaderLabels(["Image", "Model", "Scale", "Output", "Status"])
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -750,9 +795,11 @@ class SettingsDialog(QDialog):
         self.setModal(True)
 
         layout = QVBoxLayout(self)
+        _use_regular_spacing(layout)
 
-        general_group = QGroupBox("General")
-        general_form = QFormLayout(general_group)
+        form_widget = QWidget()
+        form = QGridLayout(form_widget)
+        _use_regular_spacing(form)
 
         self.concurrent = QSpinBox()
         self.concurrent.setRange(1, 8)
@@ -760,12 +807,6 @@ class SettingsDialog(QDialog):
 
         self.auto_download = QCheckBox("Download missing models automatically")
         self.auto_download.setChecked(config.auto_download)
-
-        general_form.addRow("Concurrent jobs", self.concurrent)
-        general_form.addRow("", self.auto_download)
-
-        defaults_group = QGroupBox("Parameter defaults")
-        defaults_form = QFormLayout(defaults_group)
 
         self.format = QComboBox()
         self.format.addItems([item.value.upper() for item in OutputFormat])
@@ -787,10 +828,51 @@ class SettingsDialog(QDialog):
         self.device.addItem("CPU", "cpu")
         self.device.setCurrentIndex(self.device.findData(config.device))
 
-        defaults_form.addRow("Output format", self.format)
-        defaults_form.addRow("Quality", self.quality)
-        defaults_form.addRow("Tile size", self.tile)
-        defaults_form.addRow("Device", self.device)
+        row = 0
+        form.addWidget(QLabel("Concurrent jobs"), row, 0)
+        form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
+        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(self.auto_download, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
+        form.addWidget(QLabel("Output format"), row, 0)
+        form.addWidget(self.format, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
+        form.addWidget(QLabel("Quality"), row, 0)
+        form.addWidget(self.quality, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
+        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(
+            QLabel("Used for JPG and WebP. Ignored for PNG."),
+            row,
+            1,
+            Qt.AlignmentFlag.AlignLeft,
+        )
+        row += 1
+        form.addWidget(QLabel("Tile size"), row, 0)
+        form.addWidget(self.tile, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
+        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(
+            QLabel("0 processes the whole image. Increase if memory is limited."),
+            row,
+            1,
+            Qt.AlignmentFlag.AlignLeft,
+        )
+        row += 1
+        form.addWidget(QLabel("Device"), row, 0)
+        form.addWidget(self.device, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
+        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(
+            QLabel("Auto lets Real-ESRGAN choose the best available device."),
+            row,
+            1,
+            Qt.AlignmentFlag.AlignLeft,
+        )
+        form.setColumnStretch(0, 0)
+        form.setColumnStretch(1, 0)
+        form.setColumnStretch(2, 1)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -800,9 +882,10 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
-        layout.addWidget(general_group)
-        layout.addWidget(defaults_group)
+        layout.addWidget(form_widget, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(buttons)
+        self.adjustSize()
+        self.setMinimumSize(self.sizeHint())
 
     def config(self) -> AppConfig:
         return AppConfig(
@@ -868,6 +951,12 @@ def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
     return item
 
 
+def _use_regular_spacing(layout: QLayout, *, margins: bool = True) -> None:
+    margin = REGULAR_SPACING if margins else 0
+    layout.setContentsMargins(margin, margin, margin, margin)
+    layout.setSpacing(REGULAR_SPACING)
+
+
 def _status_text(status: str) -> str:
     return {
         "pending": "Pending",
@@ -917,6 +1006,8 @@ def main() -> int:
     log_file = configure_session_logging()
     runtime_dirs = resolve_runtime_dirs()
     app = QApplication(sys.argv)
+    if "Fusion" in QStyleFactory.keys():
+        app.setStyle("Fusion")
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
     LOGGER.info(

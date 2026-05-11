@@ -13,7 +13,7 @@ process the work. Opening the same path focuses its existing image row.
 - Drag-and-drop image opening
 - Shared model selection
 - Always-visible parameters with restore-defaults support
-- Selected image preview with size label
+- Selected image details with size label
 - Global queue for all images
 - Queue selected image with selected or all models
 - Queue all images with selected or all models
@@ -91,8 +91,8 @@ RealESRGAN_x4plus_anime_6B
 realesr-animevideov3
 ```
 
-`GFPGANv1.4` is kept as a face-enhancement helper model and is not part of "Try
-all models" in this simple GUI.
+`GFPGANv1.4` is kept as a face-enhancement helper model and is not part of "all
+models" queue actions in this simple GUI.
 
 ## Config
 
