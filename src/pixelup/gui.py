@@ -301,7 +301,7 @@ class MainWindow(QMainWindow):
         image_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         image_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         image_header.resizeSection(1, 120)
-        image_header.resizeSection(2, 170)
+        image_header.resizeSection(2, 320)
         layout.addWidget(self.image_table, 1)
 
         button_row = QWidget()
@@ -401,7 +401,7 @@ class MainWindow(QMainWindow):
 
         self.tile = NoWheelSpinBox()
         self.tile.setRange(0, 4096)
-        self.tile.setSingleStep(64)
+        self.tile.setSingleStep(256)
 
         self.device = NoWheelComboBox()
         self.device.addItem("Auto", "auto")
@@ -423,10 +423,12 @@ class MainWindow(QMainWindow):
         form.addRow("Scale", scale_row)
         form.addRow("", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
+        form.addRow("", QLabel("Applies only to realesr-general-x4v3."))
         form.addRow("Alpha mode", self.alpha_mode)
         form.addRow("Output format", self.output_format)
         form.addRow("Quality", self.quality)
         form.addRow("Tile size", self.tile)
+        form.addRow("", QLabel("If memory is limited, try 512 before 256."))
         form.addRow("Device", self.device)
         form.addRow("", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
@@ -789,18 +791,20 @@ class MainWindow(QMainWindow):
             total = counts[path]["total"]
             done = counts[path]["succeeded"]
             failed = counts[path]["failed"]
-            running = counts[path]["running"] + counts[path]["cancelling"]
-            pending = counts[path]["pending"]
+            cancelled = counts[path]["cancelled"]
+            queued = counts[path]["pending"] + counts[path]["running"] + counts[path]["cancelling"]
             if total == 0:
                 text = "No jobs"
             else:
-                parts = [f"{done}/{total} done"]
+                parts = []
+                if done:
+                    parts.append(f"{done} done")
                 if failed:
                     parts.append(f"{failed} failed")
-                if running:
-                    parts.append(f"{running} running")
-                if pending:
-                    parts.append(f"{pending} pending")
+                if cancelled:
+                    parts.append(f"{cancelled} cancelled")
+                if queued:
+                    parts.append(f"{queued} queued")
                 text = ", ".join(parts)
             self.image_table.item(row, 2).setText(text)
         self._update_selected_image()
@@ -857,7 +861,7 @@ class SettingsDialog(QDialog):
 
         self.tile = QSpinBox()
         self.tile.setRange(0, 4096)
-        self.tile.setSingleStep(64)
+        self.tile.setSingleStep(256)
         self.tile.setValue(config.tile)
 
         self.device = QComboBox()
@@ -893,7 +897,7 @@ class SettingsDialog(QDialog):
         row += 1
         form.addWidget(QLabel(""), row, 0)
         form.addWidget(
-            QLabel("0 processes the whole image. Increase if memory is limited."),
+            QLabel("0 processes the whole image. If memory is limited, try 512 before 256."),
             row,
             1,
             Qt.AlignmentFlag.AlignLeft,

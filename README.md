@@ -11,6 +11,7 @@ process the work. Opening the same path focuses its existing image row.
 
 - Image list for open input files
 - Drag-and-drop image opening
+- Per-image job summaries for done, failed, cancelled, and queued work
 - Shared model selection
 - Always-visible parameters with restore-defaults support
 - Selected image preview
@@ -77,6 +78,59 @@ The sidecar JSON is meant for replication. It stores the model, scale, safe
 options, input fingerprint, dimensions, and output filename. It does not store
 absolute paths, parent directories, usernames, model directories, or temp paths.
 
+## Workflow
+
+The image list shows each input image, its size, and a compact job summary. Job
+summary items are omitted when their count is zero, and appear as comma-separated
+values such as:
+
+```text
+2 done, 1 failed, 1 cancelled, 3 queued
+```
+
+The preview area displays the selected original image and scales it to fit the
+available space while preserving its aspect ratio.
+
+## Parameters
+
+Scale chooses the final output size, not always the model's native scale. Most
+bundled models are native `4x`; when you choose `2x`, Real-ESRGAN still uses the
+model and then rescales to the requested final size. `RealESRGAN_x2plus` is the
+only bundled model trained for native `2x` output.
+
+Face enhancement runs GFPGAN after upscaling. It can improve recognizable faces,
+but it may change facial details, so leave it off for images where identity or
+texture must stay untouched.
+
+Denoise controls noise removal for `realesr-general-x4v3` only. `0` keeps more
+noise, `1` removes more noise, and `0.5` is the upstream Real-ESRGAN default.
+Other models ignore this control.
+
+Alpha mode controls how transparent pixels are upscaled when the input image has
+an alpha channel. `Real-ESRGAN` uses the model for transparency. `Bicubic` uses a
+standard image-scaling method and can be a safer fallback for edges or masks.
+
+Output format chooses the file type for generated images. PNG is lossless. JPG
+and WebP use the Quality value.
+
+Quality applies only to JPG and WebP. Higher values preserve more detail and
+make larger files. PNG ignores this setting.
+
+Tile size controls memory use during inference. `0` processes the whole image
+and is the best default when it fits in memory. If memory is limited, try larger
+tiles first; `512` and `256` are good fallback candidates.
+
+Device chooses the compute backend. `Auto` lets Real-ESRGAN choose the best
+available backend. Use CPU only when GPU/MPS/CUDA backends fail or are not
+available.
+
+Strip metadata removes embedded metadata from outputs. If it is off, PixelUp
+keeps or writes an ICC profile when possible.
+
+Target profile converts output color to a known profile. `Default` preserves the
+normal PixelUp behavior. Use `sRGB`, `Display P3`, or `Adobe RGB` when you need a
+specific output color space.
+
 ## Models
 
 "Queue all images with all models" and "Queue selected image with all models" use
@@ -124,8 +178,9 @@ The settings dialog writes:
 ```
 
 Quality applies to JPG and WebP outputs. PNG ignores quality. Tile size `0`
-processes the whole image, and smaller tiles can reduce memory pressure. Device
-`auto` lets Real-ESRGAN choose the best available backend.
+processes the whole image. If memory is limited, try larger tiles first; `512`
+and `256` are good fallback candidates. Device `auto` lets Real-ESRGAN choose
+the best available backend.
 
 `PIXELUP_MODELS_DIR` and `PIXELUP_TEMP_DIR` can still override the runtime
 directories.
