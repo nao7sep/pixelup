@@ -80,23 +80,41 @@ def default_output_path(
     directory = (output_dir or input_path.parent).expanduser().resolve()
     stem = f"{input_path.stem}-{model_filename_token(model)}-{scale}x"
     suffix = "." + ("jpg" if output_format == OutputFormat.JPG else output_format.value)
-    return collision_safe_path(directory / f"{stem}{suffix}", reserved=reserved)
+    return collision_safe_path(
+        directory / f"{stem}{suffix}",
+        reserved=reserved,
+        companion_suffixes=(".json",),
+    )
 
 
-def collision_safe_path(path: Path, *, reserved: set[Path] | None = None) -> Path:
+def collision_safe_path(
+    path: Path,
+    *,
+    reserved: set[Path] | None = None,
+    companion_suffixes: tuple[str, ...] = (),
+) -> Path:
     used = {item.expanduser().resolve() for item in (reserved or set())}
     candidate = path.expanduser().resolve()
-    if not candidate.exists() and candidate not in used:
+    if _bundle_is_free(candidate, companion_suffixes, used):
         return candidate
     for index in range(2, 10000):
         numbered = candidate.with_name(f"{candidate.stem}-{index}{candidate.suffix}")
-        if not numbered.exists() and numbered not in used:
+        if _bundle_is_free(numbered, companion_suffixes, used):
             return numbered
     raise PixelupError(
         ErrorCode.OUTPUT_EXISTS,
         "Could not find an unused output filename.",
         details={"output": str(path)},
     )
+
+
+def _bundle_is_free(
+    candidate: Path,
+    companion_suffixes: tuple[str, ...],
+    used: set[Path],
+) -> bool:
+    paths = [candidate, *(candidate.with_suffix(suffix) for suffix in companion_suffixes)]
+    return all(not path.exists() and path not in used for path in paths)
 
 
 def model_filename_token(model: str) -> str:

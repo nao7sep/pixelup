@@ -74,6 +74,37 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
     }
 
 
+def test_create_jobs_separates_sidecars_across_output_formats(tmp_path: Path) -> None:
+    # Same image + model + scale, different output formats — the two jobs share
+    # the default stem, so a single sidecar JSON would overwrite. The planner
+    # must give them distinct stems.
+    source = tmp_path / "a.png"
+    source.write_bytes(b"")
+    png_job = Job(
+        id=1,
+        input_path=source,
+        model="realesr-general-x4v3",
+        scale=4,
+        output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
+        settings=JobSettings(output_format=OutputFormat.PNG),
+        auto_download=True,
+    )
+
+    jobs = create_jobs(
+        input_paths=[source],
+        models=["realesr-general-x4v3"],
+        scale=4,
+        settings=JobSettings(output_format=OutputFormat.JPG),
+        existing_jobs=[png_job],
+        auto_download=True,
+        job_ids=count(2),
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].output_path.with_suffix(".json") != png_job.output_path.with_suffix(".json")
+    assert jobs[0].output_path.name == "a-realesr-general-x4v3-4x-2.jpg"
+
+
 def test_create_jobs_reserves_existing_output_paths(tmp_path: Path) -> None:
     source = tmp_path / "a.png"
     source.write_bytes(b"")

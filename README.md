@@ -71,8 +71,9 @@ a-realesr-general-x4v3-4x.png
 a-realesr-general-x4v3-4x.json
 ```
 
-Model names are lowercased and underscores become hyphens. If the output filename
-already exists, PixelUp appends `-2`, `-3`, and so on before the extension.
+Model names are lowercased and underscores become hyphens. If the output image
+or its sidecar JSON already exists at the chosen stem, PixelUp appends `-2`,
+`-3`, and so on before the extension so the image and sidecar stay paired.
 
 The sidecar JSON is meant for replication. It stores the model, scale, safe
 options, input fingerprint, dimensions, and output filename. It does not store

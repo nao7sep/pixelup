@@ -208,7 +208,7 @@ def download_model_info(
         return _download_result(info, target, "present")
 
     lock = FileLock(str(locks_dir / f"{_lock_name(info.name)}.lock"))
-    _acquire_download_lock(lock, info.name, lock_timeout, on_waiting)
+    _acquire_download_lock(lock, info.name, lock_timeout, on_waiting, should_cancel)
     try:
         if _model_file_is_valid(target, info):
             return _download_result(info, target, "present")
@@ -306,6 +306,7 @@ def _acquire_download_lock(
     model: str,
     lock_timeout: int,
     on_waiting: WaitingCallback | None,
+    should_cancel: CancelCheck | None = None,
 ) -> None:
     start = time.monotonic()
     if lock_timeout == 0:
@@ -319,6 +320,8 @@ def _acquire_download_lock(
                 details={"model": model, "lock_timeout": lock_timeout},
             ) from exc
     while True:
+        if should_cancel and should_cancel():
+            raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
         elapsed = time.monotonic() - start
         remaining = lock_timeout - elapsed
         if remaining <= 0:

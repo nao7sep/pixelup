@@ -70,7 +70,7 @@ def create_jobs(
 ) -> list[Job]:
     reserved_by_input: dict[Path, set[Path]] = defaultdict(set)
     for job in existing_jobs:
-        reserved_by_input[job.input_path].add(job.output_path)
+        _reserve_output_bundle(reserved_by_input[job.input_path], job.output_path)
 
     jobs: list[Job] = []
     for input_path in input_paths:
@@ -84,7 +84,7 @@ def create_jobs(
                 output_format=model_settings.output_format,
                 reserved=reserved,
             )
-            reserved.add(output_path)
+            _reserve_output_bundle(reserved, output_path)
             jobs.append(
                 Job(
                     id=next(job_ids),
@@ -103,7 +103,7 @@ def retry_failed_jobs(jobs: list[Job]) -> list[int]:
     reserved_by_input: dict[Path, set[Path]] = defaultdict(set)
     for job in jobs:
         if job.status != "failed":
-            reserved_by_input[job.input_path].add(job.output_path)
+            _reserve_output_bundle(reserved_by_input[job.input_path], job.output_path)
 
     retried: list[int] = []
     for job in jobs:
@@ -117,12 +117,17 @@ def retry_failed_jobs(jobs: list[Job]) -> list[int]:
             output_format=job.settings.output_format,
             reserved=reserved,
         )
-        reserved.add(job.output_path)
+        _reserve_output_bundle(reserved, job.output_path)
         job.status = "pending"
         job.message = ""
         job.warnings = []
         retried.append(job.id)
     return retried
+
+
+def _reserve_output_bundle(reserved: set[Path], output_path: Path) -> None:
+    reserved.add(output_path)
+    reserved.add(output_path.with_suffix(".json"))
 
 
 def options_for_job(job: Job) -> UpscaleOptions:

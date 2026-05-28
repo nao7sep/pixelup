@@ -77,6 +77,44 @@ def test_download_model_info_skips_valid_existing_file(tmp_path: Path) -> None:
     assert target.read_bytes() == b"existing"
 
 
+def test_download_model_info_cancels_while_waiting_for_lock(tmp_path: Path) -> None:
+    # When the download lock is held by another process and the caller signals
+    # cancellation, the wait must abort with JOB_CANCELLED instead of blocking
+    # for the full lock_timeout.
+    source = tmp_path / "source.pth"
+    source.write_bytes(b"downloaded weights")
+    models_dir = tmp_path / "models"
+    locks_dir = models_dir / ".locks"
+    locks_dir.mkdir(parents=True)
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        source.resolve().as_uri(),
+        expected_size=source.stat().st_size,
+    )
+    cancel_after = 2
+    calls = {"count": 0}
+
+    def should_cancel() -> bool:
+        calls["count"] += 1
+        return calls["count"] >= cancel_after
+
+    lock = FileLock(str(locks_dir / "local-model.lock"))
+    with lock.acquire(timeout=1):
+        with pytest.raises(PixelupError) as excinfo:
+            download_model_info(
+                models_dir,
+                info,
+                download_timeout=10,
+                lock_timeout=600,
+                should_cancel=should_cancel,
+            )
+
+    assert excinfo.value.code == "job_cancelled"
+    assert not (models_dir / "local-model.pth").exists()
+
+
 def test_download_model_info_lock_timeout_leaves_existing_state(tmp_path: Path) -> None:
     source = tmp_path / "source.pth"
     source.write_bytes(b"downloaded weights")
