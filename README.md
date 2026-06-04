@@ -51,9 +51,7 @@ helpers:
 
 ```text
 scripts/run.command
-scripts/update-packages.command
 scripts/run.ps1
-scripts/update-packages.ps1
 ```
 
 ## Output Files

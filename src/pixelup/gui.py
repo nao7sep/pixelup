@@ -61,6 +61,7 @@ from pixelup.jobs import (
     job_log_payload,
     job_settings_defaults,
     job_settings_log_payload,
+    job_status_summary,
     retry_failed_jobs,
 )
 from pixelup.models import KNOWN_MODELS
@@ -782,31 +783,12 @@ class MainWindow(QMainWindow):
         self.queue_table.item(row, 4).setToolTip(tooltip)
 
     def _refresh_image_job_summaries(self) -> None:
-        counts: dict[Path, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        statuses_by_input: dict[Path, list[str]] = defaultdict(list)
         for job in self.jobs:
-            counts[job.input_path]["total"] += 1
-            counts[job.input_path][job.status] += 1
+            statuses_by_input[job.input_path].append(job.status)
         for path in self._image_order:
             row = self._image_rows[path]
-            total = counts[path]["total"]
-            done = counts[path]["succeeded"]
-            failed = counts[path]["failed"]
-            cancelled = counts[path]["cancelled"]
-            queued = counts[path]["pending"] + counts[path]["running"] + counts[path]["cancelling"]
-            if total == 0:
-                text = "No jobs"
-            else:
-                parts = []
-                if done:
-                    parts.append(f"{done} done")
-                if failed:
-                    parts.append(f"{failed} failed")
-                if cancelled:
-                    parts.append(f"{cancelled} cancelled")
-                if queued:
-                    parts.append(f"{queued} queued")
-                text = ", ".join(parts)
-            self.image_table.item(row, 2).setText(text)
+            self.image_table.item(row, 2).setText(job_status_summary(statuses_by_input[path]))
         self._update_selected_image()
 
     def _has_active_jobs(self, path: Path) -> bool:

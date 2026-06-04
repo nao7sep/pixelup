@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -188,6 +188,27 @@ def config_log_payload(config: AppConfig) -> dict[str, object]:
         "device": config.device,
         "auto_download": config.auto_download,
     }
+
+
+def job_status_summary(statuses: Iterable[str]) -> str:
+    counts: dict[str, int] = defaultdict(int)
+    total = 0
+    for status in statuses:
+        total += 1
+        counts[status] += 1
+    if total == 0:
+        return "No jobs"
+    queued = counts["pending"] + counts["running"] + counts["cancelling"]
+    parts: list[str] = []
+    if counts["succeeded"]:
+        parts.append(f"{counts['succeeded']} done")
+    if counts["failed"]:
+        parts.append(f"{counts['failed']} failed")
+    if counts["cancelled"]:
+        parts.append(f"{counts['cancelled']} cancelled")
+    if queued:
+        parts.append(f"{queued} queued")
+    return ", ".join(parts)
 
 
 def job_log_payload(job: Job) -> dict[str, object]:

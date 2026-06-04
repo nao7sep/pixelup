@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -32,3 +33,37 @@ def test_invalid_config_shape_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         load_app_config(path)
+
+
+def test_load_app_config_clamps_out_of_range_values(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"max_concurrent_jobs": 0, "quality": 250, "tile": -5}),
+        encoding="utf-8",
+    )
+
+    config = load_app_config(path)
+
+    assert config.max_concurrent_jobs == 1
+    assert config.quality == 100
+    assert config.tile == 0
+
+
+def test_load_app_config_clamps_low_quality(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"quality": -10}), encoding="utf-8")
+
+    assert load_app_config(path).quality == 0
+
+
+def test_load_app_config_coerces_numeric_strings(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"max_concurrent_jobs": "4", "tile": "256"}),
+        encoding="utf-8",
+    )
+
+    config = load_app_config(path)
+
+    assert config.max_concurrent_jobs == 4
+    assert config.tile == 256
