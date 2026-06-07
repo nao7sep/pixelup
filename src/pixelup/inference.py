@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import importlib
 import math
-import sys
+import threading
 import warnings
 from collections.abc import Callable, Mapping
 from contextlib import redirect_stderr, redirect_stdout
@@ -20,6 +19,14 @@ from pixelup.models import model_file
 ProgressCallback = Callable[[str], None]
 TileCallback = Callable[[int, int], None]
 CancelCheck = Callable[[], bool]
+
+# GFPGANer hardcodes the facexlib model directory when it builds its
+# FaceRestoreHelper, so the only way to point face-detection and parsing
+# weights at the PixelUp models directory is to substitute the
+# FaceRestoreHelper symbol GFPGANer reads during construction. That
+# substitution mutates a module global, so it is held only for the duration
+# of construction and serialized across worker threads.
+_GFPGAN_HELPER_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +170,6 @@ def _create_upsampler(
     on_tile: TileCallback | None = None,
     should_cancel: CancelCheck | None = None,
 ) -> Any:
-    _install_torchvision_functional_tensor_compat()
     try:
         from realesrgan import RealESRGANer
     except ImportError as exc:
@@ -251,7 +257,6 @@ def _tile_reporting_upsampler_class(base: type) -> type:
 
 
 def _build_network(spec: ModelArchitectureSpec) -> Any:
-    _install_torchvision_functional_tensor_compat()
     if spec.kind == "rrdb":
         try:
             from basicsr.archs.rrdbnet_arch import RRDBNet
@@ -278,7 +283,6 @@ def _run_face_enhance(
     *,
     torch_device: Any,
 ) -> Any:
-    _install_torchvision_functional_tensor_compat()
     try:
         import gfpgan.utils as gfpgan_utils
         from facexlib.utils.face_restoration_helper import FaceRestoreHelper
@@ -294,32 +298,64 @@ def _run_face_enhance(
             kwargs["model_rootpath"] = str(config.models_dir)
             super().__init__(*args, **kwargs)
 
-    original_helper = gfpgan_utils.FaceRestoreHelper
-    gfpgan_utils.FaceRestoreHelper = _PixelupFaceRestoreHelper
-    try:
-        with (
-            redirect_stdout(StringIO()),
-            redirect_stderr(StringIO()),
-            warnings.catch_warnings(),
-        ):
-            warnings.simplefilter("ignore")
-            face_enhancer = GFPGANer(
-                model_path=str(model_file(config.models_dir, "GFPGANv1.4")),
-                upscale=config.scale,
-                arch="clean",
-                channel_multiplier=2,
-                bg_upsampler=upsampler,
-                device=torch_device,
-            )
-            _, _, output = face_enhancer.enhance(
-                image,
-                has_aligned=False,
-                only_center_face=False,
-                paste_back=True,
-            )
-    finally:
-        gfpgan_utils.FaceRestoreHelper = original_helper
+    face_enhancer = _build_face_enhancer(
+        gfpgan_utils,
+        GFPGANer,
+        _PixelupFaceRestoreHelper,
+        config,
+        upsampler,
+        torch_device,
+    )
+    # enhance() is NOT wrapped in redirect_stdout/redirect_stderr. This runs on
+    # a worker thread that can execute concurrently with other jobs, and
+    # redirecting the process-global streams here would race with them and leave
+    # sys.stdout/sys.stderr pointing at a dead buffer. The plain upscale path
+    # likewise does not suppress enhance() output, and surfacing it lets GFPGAN's
+    # own inference-failure message through.
+    _, _, output = face_enhancer.enhance(
+        image,
+        has_aligned=False,
+        only_center_face=False,
+        paste_back=True,
+    )
     return output
+
+
+def _build_face_enhancer(
+    gfpgan_utils: Any,
+    gfpganer_cls: Any,
+    helper_cls: type,
+    config: InferenceConfig,
+    upsampler: Any,
+    torch_device: Any,
+) -> Any:
+    # The helper substitution and its matching restore must happen as one atomic
+    # step: GFPGANer reads gfpgan.utils.FaceRestoreHelper while it builds its own
+    # face helper, so the lock keeps a concurrent face-enhance job from
+    # constructing against a half-applied or already-restored global. This
+    # serialized window is also the only place it is safe to silence the noisy
+    # model-loading output, since redirecting the process-global stdout/stderr is
+    # only race-free while the lock is held.
+    with _GFPGAN_HELPER_LOCK:
+        original_helper = gfpgan_utils.FaceRestoreHelper
+        gfpgan_utils.FaceRestoreHelper = helper_cls
+        try:
+            with (
+                redirect_stdout(StringIO()),
+                redirect_stderr(StringIO()),
+                warnings.catch_warnings(),
+            ):
+                warnings.simplefilter("ignore")
+                return gfpganer_cls(
+                    model_path=str(model_file(config.models_dir, "GFPGANv1.4")),
+                    upscale=config.scale,
+                    arch="clean",
+                    channel_multiplier=2,
+                    bg_upsampler=upsampler,
+                    device=torch_device,
+                )
+        finally:
+            gfpgan_utils.FaceRestoreHelper = original_helper
 
 
 def _read_input_image(path: Path) -> Any:
@@ -414,18 +450,6 @@ def _missing_inference_dependency(package: str, exc: ImportError) -> PixelupErro
         f"Inference dependency '{package}' is not installed.",
         details={"dependency": package, "reason": str(exc)},
     )
-
-
-def _install_torchvision_functional_tensor_compat() -> None:
-    module_name = "torchvision.transforms.functional_tensor"
-    if module_name in sys.modules:
-        return
-    try:
-        sys.modules[module_name] = importlib.import_module(
-            "torchvision.transforms._functional_tensor"
-        )
-    except ImportError:
-        return
 
 
 def _is_out_of_memory(exc: RuntimeError) -> bool:

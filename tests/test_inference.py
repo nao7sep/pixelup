@@ -1,11 +1,18 @@
 import sys
+import threading
+import time
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
 from pixelup.errors import PixelupError
-from pixelup.inference import ModelArchitectureSpec, _build_network, model_architecture_spec
+from pixelup.inference import (
+    InferenceConfig,
+    ModelArchitectureSpec,
+    _build_network,
+    model_architecture_spec,
+)
 from pixelup.upscale import count_tiles
 
 
@@ -147,53 +154,26 @@ def test_build_network_rejects_unknown_architecture() -> None:
     assert excinfo.value.details == {"kind": "custom"}
 
 
-def test_torchvision_functional_tensor_compat_alias(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pixelup.inference import _install_torchvision_functional_tensor_compat
-
-    monkeypatch.delitem(sys.modules, "torchvision.transforms.functional_tensor", raising=False)
-
-    _install_torchvision_functional_tensor_compat()
-
-    assert "torchvision.transforms.functional_tensor" in sys.modules
-    assert hasattr(sys.modules["torchvision.transforms.functional_tensor"], "rgb_to_grayscale")
-
-
-def test_face_enhance_uses_models_dir_for_helper_models_and_suppresses_output(
-    tmp_path: Path,
+def _install_fake_gfpgan(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    from pixelup.inference import InferenceConfig, _run_face_enhance
+    *,
+    gfpganer_cls: type,
+    helper_cls: type,
+) -> ModuleType:
+    """Install fake gfpgan/facexlib modules and return the gfpgan.utils module.
 
-    helper_roots: list[str] = []
-    devices: list[object] = []
-
-    class FakeFaceRestoreHelper:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            helper_roots.append(str(kwargs["model_rootpath"]))
-            print("helper stdout leak")
-
-    class FakeGFPGANer:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            import gfpgan.utils as gfpgan_utils
-
-            devices.append(kwargs["device"])
-            gfpgan_utils.FaceRestoreHelper(model_rootpath="gfpgan/weights")
-            print("init stdout leak")
-
-        def enhance(self, *args: object, **kwargs: object) -> tuple[None, None, str]:
-            print("enhance stdout leak")
-            return None, None, "enhanced"
-
+    Production reads gfpgan.utils.FaceRestoreHelper while building the enhancer,
+    so the returned module is the global the substitution targets.
+    """
     gfpgan_module = ModuleType("gfpgan")
     gfpgan_utils_module = ModuleType("gfpgan.utils")
     facexlib_module = ModuleType("facexlib")
     facexlib_utils_module = ModuleType("facexlib.utils")
     face_helper_module = ModuleType("facexlib.utils.face_restoration_helper")
-    gfpgan_module.GFPGANer = FakeGFPGANer
+    gfpgan_module.GFPGANer = gfpganer_cls
     gfpgan_module.utils = gfpgan_utils_module
-    gfpgan_utils_module.FaceRestoreHelper = FakeFaceRestoreHelper
-    face_helper_module.FaceRestoreHelper = FakeFaceRestoreHelper
+    gfpgan_utils_module.FaceRestoreHelper = helper_cls
+    face_helper_module.FaceRestoreHelper = helper_cls
 
     monkeypatch.setitem(sys.modules, "gfpgan", gfpgan_module)
     monkeypatch.setitem(sys.modules, "gfpgan.utils", gfpgan_utils_module)
@@ -204,10 +184,13 @@ def test_face_enhance_uses_models_dir_for_helper_models_and_suppresses_output(
         "facexlib.utils.face_restoration_helper",
         face_helper_module,
     )
+    return gfpgan_utils_module
 
-    config = InferenceConfig(
-        input_path=tmp_path / "input.png",
-        models_dir=tmp_path / "models",
+
+def _face_enhance_config(models_dir: Path) -> InferenceConfig:
+    return InferenceConfig(
+        input_path=models_dir / "input.png",
+        models_dir=models_dir,
         model="realesr-general-x4v3",
         scale=4,
         tile=0,
@@ -221,10 +204,216 @@ def test_face_enhance_uses_models_dir_for_helper_models_and_suppresses_output(
         device="cpu",
     )
 
+
+def test_face_enhance_uses_models_dir_and_suppresses_only_construction_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from pixelup.inference import _run_face_enhance
+
+    helper_roots: list[str] = []
+    devices: list[object] = []
+
+    class FakeFaceRestoreHelper:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            helper_roots.append(str(kwargs["model_rootpath"]))
+            print("helper construction output")
+
+    class FakeGFPGANer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            import gfpgan.utils as gfpgan_utils
+
+            devices.append(kwargs["device"])
+            gfpgan_utils.FaceRestoreHelper(model_rootpath="gfpgan/weights")
+            print("gfpganer construction output")
+
+        def enhance(self, *args: object, **kwargs: object) -> tuple[None, None, str]:
+            print("enhance progress output")
+            return None, None, "enhanced"
+
+    gfpgan_utils_module = _install_fake_gfpgan(
+        monkeypatch,
+        gfpganer_cls=FakeGFPGANer,
+        helper_cls=FakeFaceRestoreHelper,
+    )
+    config = _face_enhance_config(tmp_path / "models")
+
     result = _run_face_enhance(config, object(), object(), torch_device="pixelup-device")
 
     assert result == "enhanced"
     assert helper_roots == [str(tmp_path / "models")]
     assert devices == ["pixelup-device"]
     assert gfpgan_utils_module.FaceRestoreHelper is FakeFaceRestoreHelper
-    assert capsys.readouterr().out == ""
+    captured = capsys.readouterr().out
+    # Construction runs inside the serialized lock window, so its output is
+    # suppressed there. enhance() runs on the worker thread without redirecting
+    # the shared streams, so its output is surfaced like the plain upscale path.
+    assert "helper construction output" not in captured
+    assert "gfpganer construction output" not in captured
+    assert "enhance progress output" in captured
+
+
+def test_face_enhance_propagates_enhance_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup.inference import _GFPGAN_HELPER_LOCK, _run_face_enhance
+
+    class FakeFaceRestoreHelper:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    class FakeGFPGANer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            import gfpgan.utils as gfpgan_utils
+
+            gfpgan_utils.FaceRestoreHelper(model_rootpath="gfpgan/weights")
+
+        def enhance(self, *args: object, **kwargs: object) -> tuple[None, None, str]:
+            raise RuntimeError("enhance failed")
+
+    gfpgan_utils_module = _install_fake_gfpgan(
+        monkeypatch,
+        gfpganer_cls=FakeGFPGANer,
+        helper_cls=FakeFaceRestoreHelper,
+    )
+    config = _face_enhance_config(tmp_path / "models")
+
+    # An enhance() failure must surface rather than being swallowed by a stream
+    # redirect; the construction lock and global must already be unwound by then.
+    with pytest.raises(RuntimeError, match="enhance failed"):
+        _run_face_enhance(config, object(), object(), torch_device="cpu")
+
+    assert gfpgan_utils_module.FaceRestoreHelper is FakeFaceRestoreHelper
+    assert not _GFPGAN_HELPER_LOCK.locked()
+
+
+def test_face_enhance_holds_helper_lock_during_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup.inference import _GFPGAN_HELPER_LOCK, _run_face_enhance
+
+    locked_during_construction: list[bool] = []
+
+    class FakeFaceRestoreHelper:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    class FakeGFPGANer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            import gfpgan.utils as gfpgan_utils
+
+            locked_during_construction.append(_GFPGAN_HELPER_LOCK.locked())
+            gfpgan_utils.FaceRestoreHelper(model_rootpath="gfpgan/weights")
+
+        def enhance(self, *args: object, **kwargs: object) -> tuple[None, None, str]:
+            return None, None, "enhanced"
+
+    gfpgan_utils_module = _install_fake_gfpgan(
+        monkeypatch,
+        gfpganer_cls=FakeGFPGANer,
+        helper_cls=FakeFaceRestoreHelper,
+    )
+    config = _face_enhance_config(tmp_path / "models")
+
+    result = _run_face_enhance(config, object(), object(), torch_device="cpu")
+
+    assert result == "enhanced"
+    assert locked_during_construction == [True]
+    assert not _GFPGAN_HELPER_LOCK.locked()
+    assert gfpgan_utils_module.FaceRestoreHelper is FakeFaceRestoreHelper
+
+
+def test_face_enhance_restores_helper_global_when_construction_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup.inference import _GFPGAN_HELPER_LOCK, _run_face_enhance
+
+    class FakeFaceRestoreHelper:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    class FailingGFPGANer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("construction failed")
+
+    gfpgan_utils_module = _install_fake_gfpgan(
+        monkeypatch,
+        gfpganer_cls=FailingGFPGANer,
+        helper_cls=FakeFaceRestoreHelper,
+    )
+    config = _face_enhance_config(tmp_path / "models")
+
+    with pytest.raises(RuntimeError, match="construction failed"):
+        _run_face_enhance(config, object(), object(), torch_device="cpu")
+
+    assert gfpgan_utils_module.FaceRestoreHelper is FakeFaceRestoreHelper
+    assert not _GFPGAN_HELPER_LOCK.locked()
+
+
+def test_face_enhance_construction_is_serialized_across_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup.inference import _GFPGAN_HELPER_LOCK, _run_face_enhance
+
+    thread_count = 6
+    recorded: list[str] = []
+    recorded_lock = threading.Lock()
+    start = threading.Barrier(thread_count)
+
+    class FakeFaceRestoreHelper:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            with recorded_lock:
+                recorded.append(str(kwargs["model_rootpath"]))
+
+    class FakeGFPGANer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            import gfpgan.utils as gfpgan_utils
+
+            # Widen the window between the global substitution and the read it
+            # guards. Without the lock, overlapping threads would observe each
+            # other's substitution and record the wrong models directory.
+            time.sleep(0.01)
+            gfpgan_utils.FaceRestoreHelper(model_rootpath="gfpgan/weights")
+
+        def enhance(self, *args: object, **kwargs: object) -> tuple[None, None, str]:
+            return None, None, "enhanced"
+
+    _install_fake_gfpgan(
+        monkeypatch,
+        gfpganer_cls=FakeGFPGANer,
+        helper_cls=FakeFaceRestoreHelper,
+    )
+
+    models_dirs = [tmp_path / f"models-{index}" for index in range(thread_count)]
+    expected = sorted(str(path) for path in models_dirs)
+    errors: list[BaseException] = []
+
+    def worker(models_dir: Path) -> None:
+        try:
+            # Bounded wait: if the lock ever regressed into a deadlock, fail the
+            # test fast instead of hanging the whole suite on the barrier.
+            start.wait(timeout=30)
+            _run_face_enhance(
+                _face_enhance_config(models_dir),
+                object(),
+                object(),
+                torch_device="cpu",
+            )
+        except BaseException as exc:  # surface thread failures to the test thread
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(path,)) for path in models_dirs]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert not any(thread.is_alive() for thread in threads), "worker thread hung"
+    assert errors == []
+    assert sorted(recorded) == expected
+    assert not _GFPGAN_HELPER_LOCK.locked()
