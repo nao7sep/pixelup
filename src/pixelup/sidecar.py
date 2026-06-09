@@ -26,7 +26,7 @@ def write_sidecar(
             "name": "pixelup",
             "version": __version__,
         },
-        "created_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "created_at_utc": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "status": "success",
         "input": {
             "filename": input_path.name,
