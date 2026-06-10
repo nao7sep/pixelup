@@ -30,6 +30,7 @@ from pixelup.paths import (
     infer_output_format,
     resolve_output_path,
 )
+from pixelup.session_log import log
 
 StartCallback = Callable[["UpscalePlan", int], None]
 ProgressCallback = Callable[[str], None]
@@ -143,7 +144,20 @@ def run_upscale(
         runtime_dirs,
         check_model=not options.auto_download,
     )
+    log.info(
+        "upscale.planned",
+        input=str(plan.input_path),
+        output=str(plan.output_path),
+        model=plan.model,
+        scale=plan.scale,
+        input_size=list(plan.input_size),
+        output_size=list(plan.output_size),
+        output_format=plan.output_format.value,
+        device=plan.device,
+        auto_download=options.auto_download,
+    )
     for warning in plan_warnings(options, plan):
+        log.warning("upscale.warning", input=str(plan.input_path), text=warning)
         if on_warning:
             on_warning(warning)
     if on_start:
@@ -165,6 +179,7 @@ def run_upscale(
                 should_cancel=should_cancel,
             )
 
+    inference_started = time.perf_counter()
     output_array = run_inference(
         InferenceConfig(
             input_path=plan.input_path,
@@ -184,6 +199,13 @@ def run_upscale(
         on_progress=on_progress,
         on_tile=on_tile,
         should_cancel=should_cancel,
+    )
+    log.info(
+        "upscale.inference_done",
+        model=options.model,
+        device=plan.device,
+        face_enhance=options.face_enhance,
+        duration_ms=round((time.perf_counter() - inference_started) * 1000),
     )
     if should_cancel and should_cancel():
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")

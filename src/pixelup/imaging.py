@@ -14,6 +14,7 @@ from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageEr
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
 from pixelup.paths import OutputFormat
+from pixelup.session_log import log
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +87,10 @@ def load_source_metadata(path: Path) -> SourceMetadata:
             icc_profile = image.info.get("icc_profile")
             exif = image.info.get("exif")
             xmp = image.info.get("xmp")
-    except (OSError, UnidentifiedImageError):
+    except (OSError, UnidentifiedImageError) as exc:
+        # Source metadata is optional; an unreadable header is not a failure of
+        # the upscale. Note it at debug for diagnosis without alarming a run.
+        log.debug("metadata.read_failed", input=str(path), reason=str(exc))
         return SourceMetadata()
     return SourceMetadata(
         icc_profile=icc_profile if isinstance(icc_profile, bytes) else None,

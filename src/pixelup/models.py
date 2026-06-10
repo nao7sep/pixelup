@@ -14,6 +14,7 @@ from uuid import uuid4
 from filelock import FileLock, Timeout
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.session_log import log
 
 DownloadCallback = Callable[[str, int, int | None], None]
 WaitingCallback = Callable[[str, float], None]
@@ -213,6 +214,7 @@ def download_model_info(
         if _model_file_is_valid(target, info):
             return _download_result(info, target, "present")
         temp_path = models_dir / f".{info.filename}.{os.getpid()}.{uuid4().hex}.tmp"
+        log.info("model.download_started", model=info.name, url=info.url)
         try:
             _download_to_temp(
                 info,
@@ -223,11 +225,29 @@ def download_model_info(
             )
             verify_model_file(temp_path, info)
             os.replace(temp_path, target)
-        except PixelupError:
+        except PixelupError as exc:
             temp_path.unlink(missing_ok=True)
+            # A cancellation is not a download failure; the job-level log records
+            # it. Any other PixelupError here is a real failure (e.g. the
+            # downloaded file failed verification) and gets a terminal event so
+            # every model.download_started has a matching outcome.
+            if exc.code != ErrorCode.JOB_CANCELLED:
+                log.warning(
+                    "model.download_failed",
+                    model=info.name,
+                    url=info.url,
+                    code=exc.code.value,
+                    reason=exc.message,
+                )
             raise
         except (HTTPError, URLError, TimeoutError, OSError) as exc:
             temp_path.unlink(missing_ok=True)
+            log.warning(
+                "model.download_failed",
+                model=info.name,
+                url=info.url,
+                reason=str(exc),
+            )
             raise PixelupError(
                 ErrorCode.MODEL_DOWNLOAD_FAILED,
                 f"Could not download model '{info.name}'.",
@@ -235,7 +255,9 @@ def download_model_info(
             ) from exc
     finally:
         lock.release()
-    return _download_result(info, target, "downloaded")
+    result = _download_result(info, target, "downloaded")
+    log.info("model.download_finished", model=info.name, size_bytes=result["size_bytes"])
+    return result
 
 
 def verify_model_file(path: Path, info: ModelInfo | None = None) -> dict[str, object]:

@@ -5,11 +5,9 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from pixelup.config import resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.jobs import Job, job_log_payload, options_for_job
-from pixelup.session_log import get_logger
+from pixelup.session_log import log
 from pixelup.sidecar import write_sidecar
 from pixelup.upscale import run_upscale
-
-LOGGER = get_logger()
 
 
 class JobSignals(QObject):
@@ -33,7 +31,7 @@ class JobWorker(QObject):
     @Slot()
     def run(self) -> None:
         warnings: list[str] = []
-        LOGGER.info("Starting job %s details=%s", self.job.id, job_log_payload(self.job))
+        log.info("job.started", job_id=self.job.id, details=job_log_payload(self.job))
         try:
             options = options_for_job(self.job)
             result = run_upscale(
@@ -62,17 +60,17 @@ class JobWorker(QObject):
                 warnings=warnings,
             )
             result["sidecar"] = str(sidecar)
-            LOGGER.info(
-                "Finished job %s output=%s sidecar=%s warnings=%s",
-                self.job.id,
-                self.job.output_path,
-                sidecar,
-                warnings,
+            log.info(
+                "job.finished",
+                job_id=self.job.id,
+                output=str(self.job.output_path),
+                sidecar=str(sidecar),
+                warnings=warnings,
             )
             self.signals.finished.emit(self.job.id, True, "Done", result, warnings)
         except PixelupError as exc:
             if exc.code == ErrorCode.JOB_CANCELLED:
-                LOGGER.info("Job %s cancelled", self.job.id)
+                log.info("job.cancelled", job_id=self.job.id)
                 self.signals.finished.emit(
                     self.job.id,
                     False,
@@ -81,19 +79,20 @@ class JobWorker(QObject):
                     warnings,
                 )
                 return
-            LOGGER.warning(
-                "Job %s failed message=%s warnings=%s details=%s",
-                self.job.id,
-                exc.message,
-                warnings,
-                job_log_payload(self.job),
+            log.warning(
+                "job.failed",
+                job_id=self.job.id,
+                code=exc.code.value,
+                reason=exc.message,
+                warnings=warnings,
+                details=job_log_payload(self.job),
             )
             self.signals.finished.emit(self.job.id, False, exc.message, {}, warnings)
         except Exception as exc:
-            LOGGER.exception(
-                "Job %s failed unexpectedly details=%s",
-                self.job.id,
-                job_log_payload(self.job),
+            log.exception(
+                "job.failed_unexpectedly",
+                job_id=self.job.id,
+                details=job_log_payload(self.job),
             )
             self.signals.finished.emit(self.job.id, False, f"Unexpected error: {exc}", {}, warnings)
 
@@ -131,18 +130,20 @@ class JobRunner(QObject):
             try:
                 worker.request_cancel()
             except Exception:
-                pass
+                log.debug("quit.cancel_request_failed", job_id=worker.job.id)
             for signal in (worker.signals.progress, worker.signals.finished):
                 try:
                     signal.disconnect()
                 except (RuntimeError, TypeError):
+                    # Expected during teardown: a signal may already be
+                    # disconnected or its sender gone. Noise, not an incident.
                     pass
-        for thread, _worker in entries:
+        for thread, worker in entries:
             try:
                 thread.wait(2000)
             except Exception:
-                pass
-        LOGGER.info("Cleaned up %s worker thread(s) for quit", len(entries))
+                log.debug("quit.thread_wait_failed", job_id=worker.job.id)
+        log.info("quit.workers_cleaned", count=len(entries))
 
     def _next_pending_job(self) -> Job | None:
         for job in self._jobs:

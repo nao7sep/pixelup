@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pixelup import __version__
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import (
     CONFIG_PATH,
@@ -67,7 +68,7 @@ from pixelup.jobs import (
 )
 from pixelup.models import KNOWN_MODELS
 from pixelup.runner import JobRunner
-from pixelup.session_log import configure_session_logging, get_logger
+from pixelup.session_log import configure_session_logging, log
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.ui_common import use_regular_spacing
 from pixelup.widgets import (
@@ -78,7 +79,6 @@ from pixelup.widgets import (
     output_format_combo,
 )
 
-LOGGER = get_logger()
 MODEL_ORDER = (
     "realesr-general-x4v3",
     "RealESRGAN_x4plus",
@@ -157,10 +157,10 @@ class MainWindow(QMainWindow):
             commit = getattr(app, "commitDataRequest", None)
             if commit is not None:
                 commit.connect(self._on_commit_data_request)
-        LOGGER.info(
-            "Loaded config path=%s values=%s",
-            CONFIG_PATH,
-            config_log_payload(self.config),
+        log.info(
+            "config.loaded",
+            path=str(CONFIG_PATH),
+            values=config_log_payload(self.config),
         )
 
     def _on_commit_data_request(self, _manager: object) -> None:
@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
         app = QGuiApplication.instance()
         is_saving_session = app.isSavingSession() if app is not None else False
         if self._session_shutdown or is_saving_session:
-            LOGGER.info("Accepting close during session shutdown")
+            log.info("quit.session_shutdown")
             self.runner.cleanup_for_quit()
             event.accept()
             return
@@ -188,11 +188,11 @@ class MainWindow(QMainWindow):
         confirm.setDefaultButton(cancel_button)
         confirm.exec()
         if confirm.clickedButton() is quit_button:
-            LOGGER.info("User confirmed quit active_jobs=%s", active)
+            log.info("quit.confirmed", active_jobs=active)
             self.runner.cleanup_for_quit()
             event.accept()
         else:
-            LOGGER.info("User cancelled quit")
+            log.info("quit.cancelled")
             event.ignore()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -204,21 +204,21 @@ class MainWindow(QMainWindow):
         self.open_paths(paths)
 
     def open_paths(self, paths: list[Path]) -> None:
-        LOGGER.info("Open requested paths=%s", [str(path) for path in paths])
+        log.info("open.requested", paths=[str(path) for path in paths])
         selected: Path | None = None
         for path in paths:
             resolved = path.expanduser().resolve()
             if not resolved.is_file():
-                LOGGER.warning("Ignored non-file open request path=%s resolved=%s", path, resolved)
+                log.warning("open.ignored_non_file", path=str(path), resolved=str(resolved))
                 continue
             if resolved not in self._images_by_path:
                 entry = ImageEntry(resolved, _safe_image_size(resolved))
                 self._images_by_path[resolved] = entry
                 self._image_order.append(resolved)
                 self._add_image_row(entry)
-                LOGGER.info("Added image input=%s size=%s", resolved, entry.input_size)
+                log.info("image.added", input=str(resolved), size=entry.input_size)
             else:
-                LOGGER.info("Focused existing image input=%s", resolved)
+                log.info("image.focused_existing", input=str(resolved))
             selected = resolved
         if selected is not None:
             self._select_image(selected)
@@ -470,36 +470,36 @@ class MainWindow(QMainWindow):
 
     def _open_dialog(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, "Open images")
-        LOGGER.info("Open dialog returned count=%s", len(files))
+        log.info("open.dialog_returned", count=len(files))
         self.open_paths([Path(file) for file in files])
 
     def _settings_dialog(self) -> None:
-        LOGGER.info("Opened settings dialog")
+        log.info("settings.dialog_opened")
         dialog = SettingsDialog(self.config, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             previous_config = self.config
             previous_defaults = job_settings_defaults(self.config)
             self.config = dialog.config()
             save_app_config(self.config)
-            LOGGER.info(
-                "Saved settings path=%s previous=%s current=%s",
-                CONFIG_PATH,
-                config_log_payload(previous_config),
-                config_log_payload(self.config),
+            log.info(
+                "settings.saved",
+                path=str(CONFIG_PATH),
+                previous=config_log_payload(previous_config),
+                current=config_log_payload(self.config),
             )
             if self.current_job_settings() == previous_defaults:
                 self._apply_job_settings(job_settings_defaults(self.config))
             self.runner.schedule(self.config.max_concurrent_jobs)
             return
-        LOGGER.info("Closed settings dialog without saving")
+        log.info("settings.dialog_cancelled")
 
     def _about_dialog(self) -> None:
-        LOGGER.info("Opened about dialog")
+        log.info("about.dialog_opened")
         AboutDialog(self).exec()
 
     def _reveal_log_file(self) -> None:
         _reveal_in_file_browser(self.log_file)
-        LOGGER.info("Revealed log file %s", self.log_file)
+        log.info("log.revealed", log_file=str(self.log_file))
 
     def _add_image_row(self, entry: ImageEntry) -> None:
         row = self.image_table.rowCount()
@@ -559,7 +559,7 @@ class MainWindow(QMainWindow):
         self._images_by_path.pop(path, None)
         self._image_order = [item for item in self._image_order if item != path]
         self._rebuild_image_rows()
-        LOGGER.info("Removed image input=%s", path)
+        log.info("image.removed", input=str(path))
         self._update_selected_image()
         self._update_action_buttons()
 
@@ -604,7 +604,7 @@ class MainWindow(QMainWindow):
     def _restore_job_settings_defaults(self) -> None:
         defaults = job_settings_defaults(self.config)
         self._apply_job_settings(defaults)
-        LOGGER.info("Restored parameter defaults defaults=%s", job_settings_log_payload(defaults))
+        log.info("parameters.restored_defaults", defaults=job_settings_log_payload(defaults))
 
     def _queue_selected_image(self) -> None:
         self._enqueue_jobs(self._selected_paths(), self._selected_models(), self._current_scale())
@@ -635,16 +635,16 @@ class MainWindow(QMainWindow):
             auto_download=self.config.auto_download,
             job_ids=self._job_ids,
         )
-        LOGGER.info(
-            "Accepted enqueue request inputs=%s models=%s scale=%s settings=%s auto_download=%s",
-            [str(path) for path in input_paths],
-            models,
-            scale,
-            job_settings_log_payload(settings),
-            self.config.auto_download,
+        log.info(
+            "enqueue.requested",
+            inputs=[str(path) for path in input_paths],
+            models=models,
+            scale=scale,
+            settings=job_settings_log_payload(settings),
+            auto_download=self.config.auto_download,
         )
         for job in new_jobs:
-            LOGGER.info("Queued job %s details=%s", job.id, job_log_payload(job))
+            log.info("job.queued", job_id=job.id, details=job_log_payload(job))
         self.jobs.extend(new_jobs)
         self._add_queue_rows(new_jobs)
         self._refresh_image_job_summaries()
@@ -684,10 +684,10 @@ class MainWindow(QMainWindow):
                 job.status = "cancelling"
                 self._update_job(job)
                 signalled_running.append(job.id)
-        LOGGER.info(
-            "Cancel queue cancelled_pending=%s signalled_running=%s",
-            cancelled_pending,
-            signalled_running,
+        log.info(
+            "queue.cancelled",
+            cancelled_pending=cancelled_pending,
+            signalled_running=signalled_running,
         )
         self._refresh_image_job_summaries()
         self._update_action_buttons()
@@ -699,7 +699,7 @@ class MainWindow(QMainWindow):
             if job.id in retried:
                 self._update_job(job)
         if retried_jobs:
-            LOGGER.info("Retrying failed jobs job_ids=%s", retried_jobs)
+            log.info("jobs.retried", job_ids=retried_jobs)
             self._refresh_image_job_summaries()
             self._update_action_buttons()
             self.runner.schedule(self.config.max_concurrent_jobs)
@@ -708,13 +708,13 @@ class MainWindow(QMainWindow):
     def _job_progress(self, job_id: int, message: str) -> None:
         job = self._find_job(job_id)
         if message != job.message:
-            LOGGER.info(
-                "Job %s progress input=%s model=%s output=%s message=%s",
-                job.id,
-                job.input_path,
-                job.model,
-                job.output_path,
-                message,
+            log.debug(
+                "job.progress",
+                job_id=job.id,
+                input=str(job.input_path),
+                model=job.model,
+                output=str(job.output_path),
+                text=message,
             )
         job.message = message
         self._update_job(job)
@@ -858,16 +858,17 @@ def main() -> int:
         app.setStyle("Fusion")
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
-    LOGGER.info(
-        "PixelUp started python=%s platform=%s log_file=%s runtime_dirs=%s argv=%s",
-        sys.version.split()[0],
-        sys.platform,
-        log_file,
-        {
+    log.info(
+        "app.started",
+        version=__version__,
+        python=sys.version.split()[0],
+        platform=sys.platform,
+        log_file=str(log_file),
+        runtime_dirs={
             "models_dir": str(runtime_dirs.models_dir),
             "temp_dir": str(runtime_dirs.temp_dir),
         },
-        sys.argv[1:],
+        argv=sys.argv[1:],
     )
 
     window = MainWindow(log_file=log_file)

@@ -26,7 +26,7 @@ process the work. Opening the same path focuses its existing image row.
 - Cancel pending and running jobs
 - Confirmation prompt before quitting with open images
 - Settings (`Cmd/Ctrl+,`) and About dialogs
-- Session log file per app launch
+- Session log file per app launch (JSON Lines)
 
 ## Installation
 
@@ -196,8 +196,16 @@ Each app launch creates a session log file using a UTC filename:
 ~/.pixelup/logs/yyyymmdd-hhmmss-utc.log
 ```
 
-Log entries also use UTC, but in ISO-style timestamps, and include settings
-changes, queue decisions, job progress, warnings, outputs, and sidecar paths.
+Each line is a single JSON object (JSON Lines), so the log is machine-parseable.
+Every line carries a UTC ISO-8601 millisecond `time`, a `level`
+(`debug`/`info`/`warn`/`error`), a short `message` event name, and structured
+fields. Logged events cover startup, settings changes, queue decisions, the
+upscale plan and inference timing, warnings, job outcomes, and unhandled
+exceptions. Logs are never auto-deleted.
+
+`debug` entries are for developers and are not written on a normal run; set
+`PIXELUP_DEBUG=1` to enable them. If the log file cannot be opened, logging falls
+back to stderr instead of blocking the launch.
 
 ## Development
 
