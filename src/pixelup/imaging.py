@@ -183,7 +183,7 @@ def _flatten_alpha(image: Image.Image, background: str) -> Image.Image:
     except ValueError as exc:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "--background is not a valid Pillow color.",
+            "Background is not a valid color.",
             details={"background": background},
         ) from exc
     rgba = image.convert("RGBA")
@@ -274,7 +274,7 @@ def _profile_bytes(name: str) -> bytes:
     except ValueError as exc:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "--target-profile must be one of 'srgb', 'p3', or 'adobergb'.",
+            "Target profile must be one of sRGB, Display P3, or Adobe RGB.",
         ) from exc
     except (OSError, ImageCms.PyCMSError) as exc:
         raise PixelupError(

@@ -184,9 +184,9 @@ def download_model_info(
     should_cancel: CancelCheck | None = None,
 ) -> dict[str, object]:
     if download_timeout <= 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--download-timeout must be positive.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Download timeout must be positive.")
     if lock_timeout < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--lock-timeout must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Lock timeout must be 0 or greater.")
     if info.url is None:
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,

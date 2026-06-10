@@ -237,45 +237,45 @@ def run_upscale(
 
 def validate_options(options: UpscaleOptions) -> None:
     if options.scale not in {2, 4}:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--scale must be 2 or 4.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Scale must be 2x or 4x.")
     if options.tile < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--tile must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Tile size must be 0 or greater.")
     if options.tile_pad < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--tile-pad must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Tile padding must be 0 or greater.")
     if options.pre_pad < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--pre-pad must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Pre-padding must be 0 or greater.")
     if not 0 <= options.denoise_strength <= 1:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "--denoise-strength must be between 0 and 1.",
+            "Denoise strength must be between 0 and 1.",
         )
     if options.denoise_strength != 1.0 and options.model != "realesr-general-x4v3":
         raise PixelupError(
             ErrorCode.DENOISE_STRENGTH_UNSUPPORTED,
-            "--denoise-strength is only valid with model 'realesr-general-x4v3'.",
+            "Denoise strength applies only to the 'realesr-general-x4v3' model.",
             details={"model": options.model, "denoise_strength": options.denoise_strength},
         )
     if options.alpha_mode not in {"realesrgan", "bicubic"}:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "--alpha-mode must be 'realesrgan' or 'bicubic'.",
+            "Alpha mode must be Real-ESRGAN or Bicubic.",
         )
     if not 0 <= options.quality <= 100:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--quality must be between 0 and 100.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Quality must be between 0 and 100.")
     if options.target_profile not in {None, "srgb", "p3", "adobergb"}:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "--target-profile must be one of 'srgb', 'p3', or 'adobergb'.",
+            "Target profile must be one of sRGB, Display P3, or Adobe RGB.",
         )
     if options.device not in DEVICE_VALUES:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "--device must be one of 'auto', 'mps', 'cuda', or 'cpu'.",
+            "Device must be one of Auto, MPS, CUDA, or CPU.",
         )
     if options.download_timeout <= 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--download-timeout must be positive.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Download timeout must be positive.")
     if options.lock_timeout < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "--lock-timeout must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Lock timeout must be 0 or greater.")
 
 
 def required_model_names(options: UpscaleOptions) -> list[str]:
@@ -305,7 +305,7 @@ def plan_warnings(options: UpscaleOptions, plan: UpscalePlan) -> list[str]:
     if native_scale != options.scale:
         warnings.append(
             f"Model '{options.model}' is trained for {native_scale}x, "
-            f"but --scale is {options.scale}x; Real-ESRGAN will rescale the output."
+            f"but the selected scale is {options.scale}x; Real-ESRGAN will rescale the output."
         )
     return warnings
 
@@ -345,7 +345,7 @@ def validate_output_path(path: Path, *, overwrite: bool) -> None:
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
             "Output file already exists.",
-            hint="Use --overwrite to replace the existing file.",
+            hint="Remove the existing file, then retry the job.",
             details={"output": str(path)},
         )
     if not os.access(parent, os.W_OK):
@@ -386,5 +386,5 @@ def resolve_device(device: str, gpu_id: int | None) -> str:
         return "cuda"
     raise PixelupError(
         ErrorCode.INVALID_ARGUMENT,
-        "--device must be one of 'auto', 'mps', 'cuda', or 'cpu'.",
+        "Device must be one of Auto, MPS, CUDA, or CPU.",
     )

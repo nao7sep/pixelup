@@ -252,7 +252,7 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
     )
 
     assert warnings == [
-        "Model 'RealESRGAN_x2plus' is trained for 2x, but --scale is 4x; "
+        "Model 'RealESRGAN_x2plus' is trained for 2x, but the selected scale is 4x; "
         "Real-ESRGAN will rescale the output."
     ]
 

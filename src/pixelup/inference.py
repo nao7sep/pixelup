@@ -90,7 +90,7 @@ def run_inference(
             raise PixelupError(
                 ErrorCode.OUT_OF_MEMORY,
                 "Inference ran out of memory.",
-                hint="Try a smaller --tile value such as --tile 512.",
+                hint="Try a smaller tile size, such as 512.",
             ) from exc
         raise PixelupError(
             ErrorCode.INTERNAL_ERROR,
@@ -424,7 +424,7 @@ def _torch_device(torch: Any, device: str, gpu_id: int | None) -> Any:
         return torch.device("cpu")
     raise PixelupError(
         ErrorCode.INVALID_ARGUMENT,
-        "--device must be one of 'auto', 'mps', 'cuda', or 'cpu'.",
+        "Device must be one of Auto, MPS, CUDA, or CPU.",
     )
 
 

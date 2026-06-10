@@ -74,6 +74,32 @@ def test_validate_options_rejects_bad_values(overrides: dict[str, object], code:
     with pytest.raises(PixelupError) as exc_info:
         validate_options(make_options(**overrides))
     assert exc_info.value.code == code
+    # Messages surface verbatim in the GUI queue, so they must reference the
+    # on-screen control rather than a non-existent CLI flag.
+    assert "--" not in exc_info.value.message
+    assert exc_info.value.hint is None or "--" not in exc_info.value.hint
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_message"),
+    [
+        ({"scale": 3}, "Scale must be 2x or 4x."),
+        ({"tile": -1}, "Tile size must be 0 or greater."),
+        ({"quality": 101}, "Quality must be between 0 and 100."),
+        ({"device": "vulkan"}, "Device must be one of Auto, MPS, CUDA, or CPU."),
+        (
+            {"target_profile": "rec2020"},
+            "Target profile must be one of sRGB, Display P3, or Adobe RGB.",
+        ),
+        ({"alpha_mode": "nearest"}, "Alpha mode must be Real-ESRGAN or Bicubic."),
+    ],
+)
+def test_validate_options_uses_gui_neutral_messages(
+    overrides: dict[str, object], expected_message: str
+) -> None:
+    with pytest.raises(PixelupError) as exc_info:
+        validate_options(make_options(**overrides))
+    assert exc_info.value.message == expected_message
 
 
 def test_validate_options_allows_denoise_only_for_general_model() -> None:
