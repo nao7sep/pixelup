@@ -13,32 +13,26 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QGuiApplication,
+    QKeySequence,
     QPixmap,
     QResizeEvent,
-    QWheelEvent,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
     QCheckBox,
-    QComboBox,
     QDialog,
-    QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLayout,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QSpinBox,
     QStyleFactory,
     QTableWidget,
     QTableWidgetItem,
@@ -46,8 +40,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pixelup import __version__
-from pixelup.app_config import CONFIG_PATH, AppConfig, load_app_config, save_app_config
+from pixelup.about_dialog import AboutDialog
+from pixelup.app_config import (
+    CONFIG_PATH,
+    MAX_QUALITY,
+    MAX_TILE,
+    TILE_STEP,
+    load_app_config,
+    save_app_config,
+)
 from pixelup.config import resolve_runtime_dirs
 from pixelup.errors import PixelupError
 from pixelup.imaging import read_image_size, register_image_plugins
@@ -65,13 +66,19 @@ from pixelup.jobs import (
     retry_failed_jobs,
 )
 from pixelup.models import KNOWN_MODELS
-from pixelup.paths import OutputFormat
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, get_logger
+from pixelup.settings_dialog import SettingsDialog
+from pixelup.ui_common import use_regular_spacing
+from pixelup.widgets import (
+    NoWheelComboBox,
+    NoWheelDoubleSpinBox,
+    NoWheelSpinBox,
+    device_combo,
+    output_format_combo,
+)
 
 LOGGER = get_logger()
-PROJECT_URL = "https://github.com/nao7sep/pixelup"
-ISSUES_URL = "https://github.com/nao7sep/pixelup/issues"
 MODEL_ORDER = (
     "realesr-general-x4v3",
     "RealESRGAN_x4plus",
@@ -82,31 +89,6 @@ MODEL_ORDER = (
 )
 KNOWN_MODEL_NAMES = {model.name for model in KNOWN_MODELS}
 UPSCALE_MODELS = tuple(name for name in MODEL_ORDER if name in KNOWN_MODEL_NAMES)
-REGULAR_SPACING = 10
-
-
-class NoWheelComboBox(QComboBox):
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        if self.hasFocus():
-            super().wheelEvent(event)
-            return
-        event.ignore()
-
-
-class NoWheelSpinBox(QSpinBox):
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        if self.hasFocus():
-            super().wheelEvent(event)
-            return
-        event.ignore()
-
-
-class NoWheelDoubleSpinBox(QDoubleSpinBox):
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        if self.hasFocus():
-            super().wheelEvent(event)
-            return
-        event.ignore()
 
 
 class ImagePreview(QLabel):
@@ -197,19 +179,15 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         active = sum(1 for job in self.jobs if job.status in {"pending", "running", "cancelling"})
-        text = (
-            f"{active} {_plural(active, 'running or pending job')} will be abandoned. Quit PixelUp?"
-            if active
-            else "Open images will be closed. Quit PixelUp?"
-        )
-        choice = QMessageBox.question(
-            self,
-            "Quit PixelUp?",
-            text,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if choice == QMessageBox.StandardButton.Yes:
+        confirm = QMessageBox(self)
+        confirm.setIcon(QMessageBox.Icon.Warning)
+        confirm.setWindowTitle("Quit PixelUp?")
+        confirm.setText(_quit_confirmation_text(active))
+        quit_button = confirm.addButton("Quit", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_button = confirm.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        confirm.setDefaultButton(cancel_button)
+        confirm.exec()
+        if confirm.clickedButton() is quit_button:
             LOGGER.info("User confirmed quit active_jobs=%s", active)
             self.runner.cleanup_for_quit()
             event.accept()
@@ -249,11 +227,11 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         root_layout = QVBoxLayout(root)
-        _use_regular_spacing(root_layout)
+        use_regular_spacing(root_layout)
 
         content = QWidget()
         content_layout = QHBoxLayout(content)
-        _use_regular_spacing(content_layout, margins=False)
+        use_regular_spacing(content_layout, margins=False)
         content_layout.addWidget(self._build_image_panel(), 1)
         content_layout.addWidget(self._build_work_panel(), 1)
         root_layout.addWidget(content, 1)
@@ -262,12 +240,17 @@ class MainWindow(QMainWindow):
     def _build_window_actions(self) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
-        _use_regular_spacing(layout, margins=False)
+        use_regular_spacing(layout, margins=False)
 
         logs_button = QPushButton("Reveal log")
         logs_button.clicked.connect(self._reveal_log_file)
         settings_button = QPushButton("Settings")
         settings_button.clicked.connect(self._settings_dialog)
+        settings_shortcut = QKeySequence("Ctrl+,")
+        settings_button.setShortcut(settings_shortcut)
+        settings_button.setToolTip(
+            f"Settings ({settings_shortcut.toString(QKeySequence.SequenceFormat.NativeText)})"
+        )
         about_button = QPushButton("About")
         about_button.clicked.connect(self._about_dialog)
 
@@ -280,7 +263,7 @@ class MainWindow(QMainWindow):
     def _build_image_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        _use_regular_spacing(layout, margins=False)
+        use_regular_spacing(layout, margins=False)
 
         layout.addWidget(self._build_images_group(), 1)
         layout.addWidget(self._build_selected_image_group(), 1)
@@ -289,7 +272,7 @@ class MainWindow(QMainWindow):
     def _build_images_group(self) -> QWidget:
         group = QGroupBox("Images")
         layout = QVBoxLayout(group)
-        _use_regular_spacing(layout)
+        use_regular_spacing(layout)
 
         self.image_table = QTableWidget(0, 3)
         self.image_table.setHorizontalHeaderLabels(["Image", "Size", "Jobs"])
@@ -307,7 +290,7 @@ class MainWindow(QMainWindow):
 
         button_row = QWidget()
         button_layout = QHBoxLayout(button_row)
-        _use_regular_spacing(button_layout, margins=False)
+        use_regular_spacing(button_layout, margins=False)
         self.open_images_button = QPushButton("Open")
         self.open_images_button.clicked.connect(self._open_dialog)
         self.remove_image_button = QPushButton("Remove")
@@ -320,11 +303,11 @@ class MainWindow(QMainWindow):
     def _build_work_panel(self) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
-        _use_regular_spacing(layout, margins=False)
+        use_regular_spacing(layout, margins=False)
 
         controls = QWidget()
         controls_layout = QHBoxLayout(controls)
-        _use_regular_spacing(controls_layout, margins=False)
+        use_regular_spacing(controls_layout, margins=False)
         controls_layout.addWidget(self._build_models_group(), 0, Qt.AlignmentFlag.AlignTop)
         controls_layout.addWidget(self._build_parameters_group(), 0, Qt.AlignmentFlag.AlignTop)
         controls_layout.addWidget(self._build_action_column(), 0, Qt.AlignmentFlag.AlignTop)
@@ -337,7 +320,7 @@ class MainWindow(QMainWindow):
     def _build_action_column(self) -> QWidget:
         column = QWidget()
         layout = QVBoxLayout(column)
-        _use_regular_spacing(layout, margins=False)
+        use_regular_spacing(layout, margins=False)
         layout.addWidget(self._build_window_actions())
         layout.addWidget(self._build_actions_group())
         return column
@@ -345,7 +328,7 @@ class MainWindow(QMainWindow):
     def _build_selected_image_group(self) -> QWidget:
         group = QGroupBox("Preview")
         layout = QVBoxLayout(group)
-        _use_regular_spacing(layout)
+        use_regular_spacing(layout)
         self.preview = ImagePreview()
         layout.addWidget(self.preview, 1)
         return group
@@ -353,7 +336,7 @@ class MainWindow(QMainWindow):
     def _build_models_group(self) -> QWidget:
         group = QGroupBox("Models")
         layout = QVBoxLayout(group)
-        _use_regular_spacing(layout)
+        use_regular_spacing(layout)
         self.model_checks: dict[str, QCheckBox] = {}
         for model in UPSCALE_MODELS:
             checkbox = QCheckBox(model)
@@ -366,7 +349,7 @@ class MainWindow(QMainWindow):
     def _build_parameters_group(self) -> QWidget:
         group = QGroupBox("Parameters")
         form = QFormLayout(group)
-        _use_regular_spacing(form)
+        use_regular_spacing(form)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
 
@@ -393,22 +376,16 @@ class MainWindow(QMainWindow):
         self.alpha_mode.addItem("Real-ESRGAN", "realesrgan")
         self.alpha_mode.addItem("Bicubic", "bicubic")
 
-        self.output_format = NoWheelComboBox()
-        for fmt in OutputFormat:
-            self.output_format.addItem(fmt.value.upper(), fmt.value)
+        self.output_format = output_format_combo()
 
         self.quality = NoWheelSpinBox()
-        self.quality.setRange(0, 100)
+        self.quality.setRange(0, MAX_QUALITY)
 
         self.tile = NoWheelSpinBox()
-        self.tile.setRange(0, 4096)
-        self.tile.setSingleStep(256)
+        self.tile.setRange(0, MAX_TILE)
+        self.tile.setSingleStep(TILE_STEP)
 
-        self.device = NoWheelComboBox()
-        self.device.addItem("Auto", "auto")
-        self.device.addItem("MPS", "mps")
-        self.device.addItem("CUDA", "cuda")
-        self.device.addItem("CPU", "cpu")
+        self.device = device_combo()
 
         self.strip_metadata = QCheckBox("Strip metadata")
 
@@ -439,7 +416,7 @@ class MainWindow(QMainWindow):
     def _build_actions_group(self) -> QWidget:
         group = QGroupBox("Queue actions")
         layout = QVBoxLayout(group)
-        _use_regular_spacing(layout)
+        use_regular_spacing(layout)
         self.queue_selected_button = QPushButton("Queue selected image")
         self.queue_selected_button.clicked.connect(self._queue_selected_image)
         self.queue_selected_all_models_button = QPushButton("Queue selected image with all models")
@@ -473,7 +450,7 @@ class MainWindow(QMainWindow):
     def _build_queue_panel(self) -> QWidget:
         group = QGroupBox("Queue")
         layout = QVBoxLayout(group)
-        _use_regular_spacing(layout)
+        use_regular_spacing(layout)
         self.queue_table = QTableWidget(0, 5)
         self.queue_table.setHorizontalHeaderLabels(["Image", "Model", "Scale", "Output", "Status"])
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -813,175 +790,11 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(has_cancellable)
 
 
-class SettingsDialog(QDialog):
-    def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Settings")
-        self.setModal(True)
-
-        layout = QVBoxLayout(self)
-        _use_regular_spacing(layout)
-
-        form_widget = QWidget()
-        form = QGridLayout(form_widget)
-        _use_regular_spacing(form)
-
-        self.concurrent = QSpinBox()
-        self.concurrent.setRange(1, 8)
-        self.concurrent.setValue(config.max_concurrent_jobs)
-
-        self.auto_download = QCheckBox("Download missing models automatically")
-        self.auto_download.setChecked(config.auto_download)
-
-        self.format = QComboBox()
-        self.format.addItems([item.value.upper() for item in OutputFormat])
-        self.format.setCurrentText(config.output_format.value.upper())
-
-        self.quality = QSpinBox()
-        self.quality.setRange(0, 100)
-        self.quality.setValue(config.quality)
-
-        self.tile = QSpinBox()
-        self.tile.setRange(0, 4096)
-        self.tile.setSingleStep(256)
-        self.tile.setValue(config.tile)
-
-        self.device = QComboBox()
-        self.device.addItem("Auto", "auto")
-        self.device.addItem("MPS", "mps")
-        self.device.addItem("CUDA", "cuda")
-        self.device.addItem("CPU", "cpu")
-        self.device.setCurrentIndex(self.device.findData(config.device))
-
-        row = 0
-        form.addWidget(QLabel("Concurrent jobs"), row, 0)
-        form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel(""), row, 0)
-        form.addWidget(self.auto_download, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel("Output format"), row, 0)
-        form.addWidget(self.format, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel("Quality"), row, 0)
-        form.addWidget(self.quality, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel(""), row, 0)
-        form.addWidget(
-            QLabel("Used for JPG and WebP. Ignored for PNG."),
-            row,
-            1,
-            Qt.AlignmentFlag.AlignLeft,
-        )
-        row += 1
-        form.addWidget(QLabel("Tile size"), row, 0)
-        form.addWidget(self.tile, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel(""), row, 0)
-        form.addWidget(
-            QLabel("0 processes the whole image. If memory is limited, try 512 before 256."),
-            row,
-            1,
-            Qt.AlignmentFlag.AlignLeft,
-        )
-        row += 1
-        form.addWidget(QLabel("Device"), row, 0)
-        form.addWidget(self.device, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel(""), row, 0)
-        form.addWidget(
-            QLabel("Auto lets Real-ESRGAN choose the best available device."),
-            row,
-            1,
-            Qt.AlignmentFlag.AlignLeft,
-        )
-        form.setColumnStretch(0, 0)
-        form.setColumnStretch(1, 0)
-        form.setColumnStretch(2, 1)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        restore = buttons.addButton("Restore defaults", QDialogButtonBox.ButtonRole.ResetRole)
-        restore.clicked.connect(self._restore_defaults)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-
-        layout.addWidget(form_widget, 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(buttons)
-        self.adjustSize()
-        self.setMinimumSize(self.sizeHint())
-
-    def config(self) -> AppConfig:
-        return AppConfig(
-            max_concurrent_jobs=self.concurrent.value(),
-            output_format=OutputFormat(self.format.currentText().lower()),
-            quality=self.quality.value(),
-            tile=self.tile.value(),
-            device=self.device.currentData(),
-            auto_download=self.auto_download.isChecked(),
-        )
-
-    def _restore_defaults(self) -> None:
-        defaults = AppConfig()
-        self.concurrent.setValue(defaults.max_concurrent_jobs)
-        self.auto_download.setChecked(defaults.auto_download)
-        self.format.setCurrentText(defaults.output_format.value.upper())
-        self.quality.setValue(defaults.quality)
-        self.tile.setValue(defaults.tile)
-        self.device.setCurrentIndex(self.device.findData(defaults.device))
-
-
-class AboutDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("About PixelUp")
-        self.setModal(True)
-
-        layout = QVBoxLayout(self)
-        _use_regular_spacing(layout)
-        name = QLabel("PixelUp")
-        version = QLabel(f"Version {__version__}")
-        copy = QLabel("Upscale local images with Real-ESRGAN in a simple desktop workflow.")
-        copy.setWordWrap(True)
-
-        links = QWidget()
-        links_layout = QHBoxLayout(links)
-        _use_regular_spacing(links_layout, margins=False)
-        github_button = QPushButton("GitHub")
-        github_button.clicked.connect(lambda: _open_url(PROJECT_URL))
-        issues_button = QPushButton("Report issue")
-        issues_button.clicked.connect(lambda: _open_url(ISSUES_URL))
-        links_layout.addStretch()
-        links_layout.addWidget(github_button)
-        links_layout.addWidget(issues_button)
-        links_layout.addStretch()
-
-        meta = QLabel("(c) 2026 Yoshinao Inoguchi - MIT License")
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.accept)
-
-        layout.addWidget(name)
-        layout.addWidget(version)
-        layout.addWidget(copy)
-        layout.addWidget(links)
-        layout.addWidget(meta)
-        layout.addWidget(buttons)
-
-
 def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
     item = QTableWidgetItem(text)
     if tooltip:
         item.setToolTip(tooltip)
     return item
-
-
-def _use_regular_spacing(layout: QLayout, *, margins: bool = True) -> None:
-    margin = REGULAR_SPACING if margins else 0
-    layout.setContentsMargins(margin, margin, margin, margin)
-    layout.setSpacing(REGULAR_SPACING)
 
 
 def _status_text(status: str) -> str:
@@ -1015,6 +828,13 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
     return plural if plural is not None else f"{singular}s"
 
 
+def _quit_confirmation_text(active: int) -> str:
+    if not active:
+        return "Open images will be closed. Quit PixelUp?"
+    jobs = _plural(active, "active job")
+    return f"{active} {jobs} will be abandoned. Quit PixelUp?"
+
+
 def _reveal_in_file_browser(path: Path) -> None:
     target = path if path.exists() else path.parent
     if sys.platform == "darwin":
@@ -1027,11 +847,6 @@ def _reveal_in_file_browser(path: Path) -> None:
         target = target.parent
     if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
         raise RuntimeError(f"Could not reveal path: {target}")
-
-
-def _open_url(url: str) -> None:
-    if not QDesktopServices.openUrl(QUrl(url)):
-        raise RuntimeError(f"Could not open URL: {url}")
 
 
 def main() -> int:

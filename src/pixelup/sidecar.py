@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 from pixelup import __version__
+from pixelup.timestamps import utc_now_iso_ms
 from pixelup.upscale import UpscaleOptions
 
 SCHEMA_VERSION = 1
@@ -26,7 +26,7 @@ def write_sidecar(
             "name": "pixelup",
             "version": __version__,
         },
-        "created_at_utc": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "created_at_utc": utc_now_iso_ms(),
         "status": "success",
         "input": {
             "filename": input_path.name,

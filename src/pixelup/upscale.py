@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pixelup.config import RuntimeDirs
+from pixelup.devices import DEVICE_VALUES
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import (
     image_from_bgr_array,
@@ -244,7 +245,7 @@ def validate_options(options: UpscaleOptions) -> None:
             ErrorCode.INVALID_ARGUMENT,
             "--target-profile must be one of 'srgb', 'p3', or 'adobergb'.",
         )
-    if options.device not in {"auto", "mps", "cuda", "cpu"}:
+    if options.device not in DEVICE_VALUES:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
             "--device must be one of 'auto', 'mps', 'cuda', or 'cpu'.",

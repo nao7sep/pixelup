@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pixelup.config import resolve_state_dir
+from pixelup.timestamps import to_utc_iso_ms
 
 LOGGER_NAME = "pixelup"
 
@@ -17,8 +18,7 @@ class UtcIsoFormatter(logging.Formatter):
         datefmt: str | None = None,
     ) -> str:
         del datefmt
-        timestamp = datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds")
-        return timestamp.replace("+00:00", "Z")
+        return to_utc_iso_ms(datetime.fromtimestamp(record.created, UTC))
 
 
 def session_log_path(*, state_dir: Path | None = None, now: datetime | None = None) -> Path:

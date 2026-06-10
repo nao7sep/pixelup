@@ -25,7 +25,7 @@ process the work. Opening the same path focuses its existing image row.
 - Retry failed jobs
 - Cancel pending and running jobs
 - Confirmation prompt before quitting with open images
-- Settings and About dialogs
+- Settings (`Cmd/Ctrl+,`) and About dialogs
 - Session log file per app launch
 
 ## Installation
@@ -180,6 +180,12 @@ Quality applies to JPG and WebP outputs. PNG ignores quality. Tile size `0`
 processes the whole image. If memory is limited, try larger tiles first; `512`
 and `256` are good fallback candidates. Device `auto` lets Real-ESRGAN choose
 the best available backend.
+
+The config file is read tolerantly. If you hand-edit it, out-of-range numbers are
+clamped to their valid bounds (`max_concurrent_jobs` 1-8, `quality` 0-100, `tile`
+0-4096), and an unknown `device` or `output_format` falls back to its default
+(`auto` and `png`) instead of failing to launch. Saving from the settings dialog
+always rewrites valid values.
 
 `PIXELUP_MODELS_DIR` and `PIXELUP_TEMP_DIR` can still override the runtime
 directories.
