@@ -644,7 +644,7 @@ class MainWindow(QMainWindow):
             auto_download=self.config.auto_download,
         )
         for job in new_jobs:
-            log.info("job.queued", job_id=job.id, details=job_log_payload(job))
+            log.debug("job.queued", job_id=job.id, details=job_log_payload(job))
         self.jobs.extend(new_jobs)
         self._add_queue_rows(new_jobs)
         self._refresh_image_job_summaries()
