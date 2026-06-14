@@ -12,6 +12,7 @@ from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 
+from pixelup.devices import resolve_device, to_torch_device
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import register_image_plugins
 from pixelup.models import model_file
@@ -114,12 +115,14 @@ def _run_inference(
 ) -> Any:
     _check_cancelled(should_cancel)
     _emit(on_progress, "load_model")
-    torch = _import_torch()
+    _import_torch()  # surface a friendly error if torch is not installed
     image = _read_input_image(config.input_path)
-    device = _torch_device(torch, config.device, config.gpu_id)
+    concrete_device = resolve_device(config.device, config.gpu_id)
+    torch_device = to_torch_device(concrete_device, config.gpu_id)
     upsampler = _create_upsampler(
         config,
-        torch_device=device,
+        concrete_device=concrete_device,
+        torch_device=torch_device,
         on_tile=on_tile,
         should_cancel=should_cancel,
     )
@@ -128,7 +131,7 @@ def _run_inference(
     _emit(on_progress, "upscale")
     if config.face_enhance:
         _emit(on_progress, "face_enhance")
-        return _run_face_enhance(config, upsampler, image, torch_device=device)
+        return _run_face_enhance(config, upsampler, image, torch_device=torch_device)
     output, _ = upsampler.enhance(image, outscale=config.scale, alpha_upsampler=config.alpha_mode)
     return output
 
@@ -166,6 +169,7 @@ def _srvgg_spec(*, scale: int, num_conv: int) -> ModelArchitectureSpec:
 def _create_upsampler(
     config: InferenceConfig,
     *,
+    concrete_device: str,
     torch_device: Any,
     on_tile: TileCallback | None = None,
     should_cancel: CancelCheck | None = None,
@@ -195,9 +199,9 @@ def _create_upsampler(
         tile=config.tile,
         tile_pad=config.tile_pad,
         pre_pad=config.pre_pad,
-        half=not config.fp32 and config.device != "cpu",
+        half=not config.fp32 and concrete_device != "cpu",
         device=torch_device,
-        gpu_id=config.gpu_id if config.device == "cuda" else None,
+        gpu_id=config.gpu_id if concrete_device == "cuda" else None,
     )
     if cls is not RealESRGANer:
         upsampler._pixelup_on_tile = on_tile  # type: ignore[attr-defined]
@@ -394,37 +398,6 @@ def _read_input_image(path: Path) -> Any:
         ErrorCode.INPUT_INVALID_FORMAT,
         "Input image has an unsupported channel layout.",
         details={"input": str(path), "channels": channels},
-    )
-
-
-def _torch_device(torch: Any, device: str, gpu_id: int | None) -> Any:
-    mps = getattr(getattr(torch, "backends", None), "mps", None)
-    mps_available = bool(mps and mps.is_available())
-    if device == "auto":
-        if mps_available:
-            return torch.device("mps")
-        if torch.cuda.is_available():
-            return torch.device(f"cuda:{gpu_id}" if gpu_id is not None else "cuda")
-        return torch.device("cpu")
-    if device == "mps":
-        if not mps_available:
-            raise PixelupError(ErrorCode.INVALID_ARGUMENT, "MPS is not available.")
-        return torch.device("mps")
-    if device == "cuda":
-        if not torch.cuda.is_available():
-            raise PixelupError(ErrorCode.INVALID_ARGUMENT, "CUDA is not available.")
-        if gpu_id is not None and gpu_id >= torch.cuda.device_count():
-            raise PixelupError(
-                ErrorCode.INVALID_ARGUMENT,
-                "CUDA GPU index is not available.",
-                details={"gpu_id": gpu_id, "device_count": torch.cuda.device_count()},
-            )
-        return torch.device(f"cuda:{gpu_id}" if gpu_id is not None else "cuda")
-    if device == "cpu":
-        return torch.device("cpu")
-    raise PixelupError(
-        ErrorCode.INVALID_ARGUMENT,
-        "Device must be one of Auto, MPS, CUDA, or CPU.",
     )
 
 

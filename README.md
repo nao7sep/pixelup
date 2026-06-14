@@ -24,6 +24,7 @@ The app is intentionally small: open or drag image files into the window, select
 - Confirmation prompt before quitting with open images
 - Settings (`Cmd/Ctrl+,`) and About dialogs
 - Session log file per app launch (JSON Lines)
+- Reveal log button to open the current session log file in the system file browser
 
 ## Installation
 

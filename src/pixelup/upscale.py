@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pixelup.config import RuntimeDirs
-from pixelup.devices import DEVICE_VALUES
+from pixelup.devices import DEVICE_VALUES, resolve_device
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import (
     image_from_bgr_array,
@@ -355,36 +355,3 @@ def validate_output_path(path: Path, *, overwrite: bool) -> None:
             details={"output": str(path), "parent": str(parent)},
         )
 
-
-def resolve_device(device: str, gpu_id: int | None) -> str:
-    if device == "cpu":
-        return "cpu"
-    import torch
-
-    mps_available = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
-    cuda_available = torch.cuda.is_available()
-    if device == "auto":
-        if mps_available:
-            return "mps"
-        if cuda_available:
-            return "cuda"
-        return "cpu"
-    if device == "mps":
-        if not mps_available:
-            raise PixelupError(ErrorCode.INVALID_ARGUMENT, "MPS is not available.")
-        return "mps"
-    if device == "cuda":
-        if not cuda_available:
-            raise PixelupError(ErrorCode.INVALID_ARGUMENT, "CUDA is not available.")
-        device_count = torch.cuda.device_count()
-        if gpu_id is not None and gpu_id >= device_count:
-            raise PixelupError(
-                ErrorCode.INVALID_ARGUMENT,
-                "CUDA GPU index is not available.",
-                details={"gpu_id": gpu_id, "device_count": device_count},
-            )
-        return "cuda"
-    raise PixelupError(
-        ErrorCode.INVALID_ARGUMENT,
-        "Device must be one of Auto, MPS, CUDA, or CPU.",
-    )

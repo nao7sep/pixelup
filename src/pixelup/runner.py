@@ -131,15 +131,22 @@ class JobRunner(QObject):
                 worker.request_cancel()
             except Exception:
                 log.debug("quit.cancel_request_failed", job_id=worker.job.id)
-            for signal in (worker.signals.progress, worker.signals.finished):
+            # Stop UI-facing reschedules/updates during shutdown, but keep the
+            # finished -> thread.quit -> deleteLater wiring intact so each thread
+            # event loop actually exits and tears down cleanly.
+            for signal, slot in (
+                (worker.signals.progress, self.progress.emit),
+                (worker.signals.finished, self._job_finished),
+            ):
                 try:
-                    signal.disconnect()
+                    signal.disconnect(slot)
                 except (RuntimeError, TypeError):
-                    # Expected during teardown: a signal may already be
+                    # Expected during teardown: the slot may already be
                     # disconnected or its sender gone. Noise, not an incident.
                     pass
         for thread, worker in entries:
             try:
+                thread.quit()
                 thread.wait(2000)
             except Exception:
                 log.debug("quit.thread_wait_failed", job_id=worker.job.id)

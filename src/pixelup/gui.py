@@ -498,8 +498,15 @@ class MainWindow(QMainWindow):
         AboutDialog(self).exec()
 
     def _reveal_log_file(self) -> None:
-        _reveal_in_file_browser(self.log_file)
-        log.info("log.revealed", log_file=str(self.log_file))
+        try:
+            revealed = _reveal_in_file_browser(self.log_file)
+        except OSError as exc:
+            log.warning("log.reveal_failed", log_file=str(self.log_file), reason=str(exc))
+            return
+        if revealed:
+            log.info("log.revealed", log_file=str(self.log_file))
+        else:
+            log.warning("log.reveal_failed", log_file=str(self.log_file))
 
     def _add_image_row(self, entry: ImageEntry) -> None:
         row = self.image_table.rowCount()
@@ -835,18 +842,24 @@ def _quit_confirmation_text(active: int) -> str:
     return f"{active} {jobs} will be abandoned. Quit PixelUp?"
 
 
-def _reveal_in_file_browser(path: Path) -> None:
+def _reveal_in_file_browser(path: Path) -> bool:
+    """Reveal a path in the OS file browser, returning whether it succeeded.
+
+    The macOS path and the cross-platform fallback report a real success/failure
+    signal. Windows ``explorer.exe`` returns a non-zero exit code even when it
+    succeeds, so its return code can't signal failure; there, launching without
+    an ``OSError`` is the best signal available. Callers handle ``OSError`` (e.g.
+    the helper binary is missing) and log accordingly.
+    """
     target = path if path.exists() else path.parent
     if sys.platform == "darwin":
-        subprocess.run(["open", "-R", str(target)], check=False)
-        return
+        return subprocess.run(["open", "-R", str(target)], check=False).returncode == 0
     if sys.platform == "win32":
         subprocess.run(["explorer", f"/select,{target}"], check=False)
-        return
+        return True
     if target.is_file():
         target = target.parent
-    if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
-        raise RuntimeError(f"Could not reveal path: {target}")
+    return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))))
 
 
 def main() -> int:
