@@ -6,9 +6,11 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from pixelup.errors import ErrorCode, PixelupError
 from pixelup.jobs import Job, JobSettings
 from pixelup.runner import (
     JobRunner,
+    JobWorker,
     _download_text,
     _progress_text,
     _tile_progress_text,
@@ -208,3 +210,149 @@ def test_cleanup_for_quit_is_a_noop_without_threads(_session_log: None) -> None:
     runner = JobRunner([])
     runner.cleanup_for_quit()
     assert runner._threads == {}
+
+
+# --- JobWorker.run branches (no threads) ----------------------------------
+#
+# Run the worker body directly on the main thread (no moveToThread / QThread) with
+# run_upscale + write_sidecar mocked, capturing the emitted signals. This covers
+# the success / cancelled / failed / unexpected-error branches and the progress
+# and cancel callback wiring — the part the real-thread harness can't reach
+# without segfaulting.
+
+
+def _capture_worker(worker: JobWorker) -> tuple[list, list]:
+    finished: list[tuple[object, ...]] = []
+    progress: list[tuple[object, ...]] = []
+    worker.signals.finished.connect(lambda *args: finished.append(args))
+    worker.signals.progress.connect(lambda *args: progress.append(args))
+    return finished, progress
+
+
+def test_worker_run_success_emits_done_with_sidecar(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(1, tmp_path)
+
+    def fake_upscale(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
+        kwargs["on_warning"]("note")  # type: ignore[operator]
+        return {"ok": True, "output": getattr(options, "output_arg", "")}
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", fake_upscale)
+    monkeypatch.setattr(
+        "pixelup.runner.write_sidecar",
+        lambda **kwargs: kwargs["output_path"].with_suffix(".json"),
+    )
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert len(finished) == 1
+    job_id, ok, message, result, warnings = finished[0]
+    assert (job_id, ok, message) == (job.id, True, "Done")
+    assert result["ok"] is True
+    assert str(result["sidecar"]).endswith(".json")
+    assert warnings == ["note"]
+
+
+def test_worker_run_cancelled_emits_cancelled_result(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(2, tmp_path)
+
+    def raise_cancel(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", raise_cancel)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert finished == [(job.id, False, "Cancelled", {"cancelled": True}, [])]
+
+
+def test_worker_run_pixelup_error_emits_its_message(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(3, tmp_path)
+
+    def raise_error(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
+        raise PixelupError(ErrorCode.MODEL_NOT_FOUND, "Model missing.")
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", raise_error)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert finished == [(job.id, False, "Model missing.", {}, [])]
+
+
+def test_worker_run_unexpected_error_is_wrapped(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(4, tmp_path)
+
+    def boom(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
+        raise ValueError("boom")
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", boom)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert finished == [(job.id, False, "Unexpected error: boom", {}, [])]
+
+
+def test_worker_run_forwards_progress_phases_as_text(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(5, tmp_path)
+
+    def fake_upscale(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
+        kwargs["on_progress"]("upscale")  # type: ignore[operator]
+        kwargs["on_tile"](1, 4)  # type: ignore[operator]
+        kwargs["on_download"]("RealESRGAN_x4plus", 1, 4)  # type: ignore[operator]
+        return {"ok": True, "output": getattr(options, "output_arg", "")}
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", fake_upscale)
+    monkeypatch.setattr(
+        "pixelup.runner.write_sidecar",
+        lambda **kwargs: kwargs["output_path"].with_suffix(".json"),
+    )
+    worker = JobWorker(job)
+    _finished, progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert (job.id, "Upscaling") in progress
+    assert (job.id, "1/4 tiles processed") in progress
+    assert (job.id, "25% - downloading RealESRGAN_x4plus") in progress
+
+
+def test_worker_request_cancel_sets_the_should_cancel_flag(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    worker = JobWorker(_make_job(6, tmp_path))
+    assert worker._is_cancelled() is False
+    worker.request_cancel()
+    assert worker._is_cancelled() is True
