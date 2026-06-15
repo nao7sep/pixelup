@@ -2,6 +2,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $scriptExitCode = 0
 
+# run-dev: run the CLI from source (uv). A Python CLI has no separate production
+# build to launch, so this is its only launcher — uv runs the source directly.
+
 function Set-Utf8Console {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [Console]::InputEncoding = $utf8NoBom
@@ -53,11 +56,12 @@ try {
     Invoke-Native -FilePath "uv" -ArgumentList @("sync", "--extra", "dev")
 
     Write-Step "Starting PixelUp"
-    Invoke-Native -FilePath "uv" -ArgumentList @("run", "pixelup") -AllowedExitCodes @(0, 130, -1073741510)
+    # Forward any script arguments to the CLI, matching run-dev.command's `"$@"`.
+    Invoke-Native -FilePath "uv" -ArgumentList (@("run", "pixelup") + $args) -AllowedExitCodes @(0, 130, -1073741510)
 }
 catch {
     Write-Host ""
-    Write-Host "pixelup run failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "pixelup run-dev failed: $($_.Exception.Message)" -ForegroundColor Red
     $scriptExitCode = 1
 }
 finally {

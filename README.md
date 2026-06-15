@@ -47,9 +47,11 @@ uv run pixelup image.png another-image.jpg
 On macOS or Windows, the `scripts/` directory also contains double-clickable helpers:
 
 ```text
-scripts/run.command
-scripts/run.ps1
+scripts/run-dev.command
+scripts/run-dev.ps1
 ```
+
+`run-dev` is the only launcher — PixelUp is a CLI, so there is no separate built artifact to launch.
 
 ## Output Files
 

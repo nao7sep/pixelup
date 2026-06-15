@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# run-dev: run the CLI from source (uv). A Python CLI has no separate production
+# build to launch, so this is its only launcher — uv runs the source directly.
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -19,7 +22,7 @@ pause_on_failure() {
   local status="$1"
   if [[ "$status" -ne 0 && "$status" -ne 130 ]]; then
     echo
-    echo "pixelup run failed with exit code $status."
+    echo "pixelup run-dev failed with exit code $status."
     read -r -p "Press Enter to close..."
   fi
 }
