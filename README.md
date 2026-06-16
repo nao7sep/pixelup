@@ -183,3 +183,7 @@ uv run --extra dev pytest -q tests/test_real_inference_smoke.py
 ```
 
 That directory must contain `realesr-general-x4v3.pth`.
+
+## License
+
+MIT © 2026 Yoshinao Inoguchi
