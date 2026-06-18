@@ -8,7 +8,6 @@ EXPECTED_RUNTIME_PINS = {
     "Pillow": "12.2.0",
     "pillow-heif": "1.3.0",
     "filelock": "3.29.0",
-    "platformdirs": "4.9.6",
     "numpy": "2.4.4",
     "torch": "2.11.0",
     "torchvision": "0.26.0",
@@ -16,7 +15,6 @@ EXPECTED_RUNTIME_PINS = {
     "realesrgan": "0.3.0",
     "basicsr-fixed": "1.4.2",
     "gfpgan": "1.3.8",
-    "superqt": "0.8.1",
 }
 
 
