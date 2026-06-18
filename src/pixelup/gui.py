@@ -43,10 +43,10 @@ from PySide6.QtWidgets import (
 from pixelup import __version__
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import (
-    CONFIG_PATH,
     MAX_QUALITY,
     MAX_TILE,
     TILE_STEP,
+    config_path,
     load_app_config,
     save_app_config,
 )
@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
                 commit.connect(self._on_commit_data_request)
         log.info(
             "config.loaded",
-            path=str(CONFIG_PATH),
+            path=str(config_path()),
             values=config_log_payload(self.config),
         )
 
@@ -483,7 +483,7 @@ class MainWindow(QMainWindow):
             save_app_config(self.config)
             log.info(
                 "settings.saved",
-                path=str(CONFIG_PATH),
+                path=str(config_path()),
                 previous=config_log_payload(previous_config),
                 current=config_log_payload(self.config),
             )

@@ -9,7 +9,16 @@ from pixelup.config import resolve_state_dir
 from pixelup.devices import DEFAULT_DEVICE, DEVICE_VALUES
 from pixelup.paths import OutputFormat
 
-CONFIG_PATH = resolve_state_dir() / "config.json"
+
+def config_path() -> Path:
+    """Resolve ``config.json`` under the storage root, lazily on every call.
+
+    The root is resolved here rather than frozen into a module-level constant at
+    import time: import-time resolution captures a half-set environment and
+    freezes ``PIXELUP_HOME`` for the life of the process. Resolving on first use
+    means a ``PIXELUP_HOME`` set before launch is honored and tests can vary it.
+    """
+    return resolve_state_dir() / "config.json"
 
 # Valid domains for the persisted settings. The UI controls and this loader both
 # reference these, so a value can never be representable in one place but not the
@@ -33,7 +42,9 @@ class AppConfig:
     auto_download: bool = True
 
 
-def load_app_config(path: Path = CONFIG_PATH) -> AppConfig:
+def load_app_config(path: Path | None = None) -> AppConfig:
+    if path is None:
+        path = config_path()
     if not path.exists():
         return AppConfig()
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -55,7 +66,9 @@ def load_app_config(path: Path = CONFIG_PATH) -> AppConfig:
     )
 
 
-def save_app_config(config: AppConfig, path: Path = CONFIG_PATH) -> None:
+def save_app_config(config: AppConfig, path: Path | None = None) -> None:
+    if path is None:
+        path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_to_json(config), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 

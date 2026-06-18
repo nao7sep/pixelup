@@ -30,7 +30,7 @@ def test_env_used_when_no_override(tmp_path: Path) -> None:
 def test_default_leaf_used_when_neither_override_nor_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(config_module, "_default_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(config_module, "_default_state_dir", lambda env=None: tmp_path / "state")
     assert resolve_models_dir(None, {}) == (tmp_path / "state" / "models").resolve()
     assert resolve_temp_dir(None, {}) == (tmp_path / "state" / "temp").resolve()
 
@@ -38,7 +38,7 @@ def test_default_leaf_used_when_neither_override_nor_env(
 def test_resolve_runtime_dirs_composes_both(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(config_module, "_default_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(config_module, "_default_state_dir", lambda env=None: tmp_path / "state")
     dirs = resolve_runtime_dirs(env={})
     assert dirs.models_dir == (tmp_path / "state" / "models").resolve()
     assert dirs.temp_dir == (tmp_path / "state" / "temp").resolve()
@@ -51,6 +51,63 @@ def test_override_expands_user() -> None:
 
 def test_resolve_state_dir_expands_and_resolves_override() -> None:
     assert resolve_state_dir(Path("~/pixelup-state")) == (Path.home() / "pixelup-state").resolve()
+
+
+def test_pixelup_home_relocates_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "relocated"
+    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    assert resolve_state_dir() == root.resolve()
+    # The root and its standard subdirectories are created on first use.
+    assert (root / "logs").is_dir()
+    assert (root / "models").is_dir()
+    assert (root / "temp").is_dir()
+
+
+def test_default_root_is_dot_pixelup_when_home_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PIXELUP_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert resolve_state_dir() == (tmp_path / ".pixelup").resolve()
+
+
+def test_pixelup_home_resolution_is_lazy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # app_config is imported at the top of this module; the root must still be
+    # resolved on first use, so a PIXELUP_HOME set *after* import takes effect
+    # (it was never frozen into a module-level constant).
+    from pixelup.app_config import config_path
+
+    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "first"))
+    assert config_path() == (tmp_path / "first" / "config.json").resolve()
+
+    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "second"))
+    assert config_path() == (tmp_path / "second" / "config.json").resolve()
+
+
+def test_pixelup_home_relative_value_anchors_to_home_not_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    monkeypatch.setenv("PIXELUP_HOME", "pixelup-data")
+    # A relative override resolves against home, never the working directory.
+    assert resolve_state_dir() == (fake_home / "pixelup-data").resolve()
+
+
+def test_unusable_pixelup_home_is_a_reported_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("PIXELUP_HOME", str(blocker / "root"))
+    with pytest.raises(PixelupError) as exc_info:
+        resolve_state_dir()
+    assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
 
 
 def test_ensure_models_dir_creates_directory(tmp_path: Path) -> None:
