@@ -70,7 +70,7 @@ from pixelup.models import KNOWN_MODELS
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, log
 from pixelup.settings_dialog import SettingsDialog
-from pixelup.ui_common import use_regular_spacing
+from pixelup.ui_common import apply_scrollbar_style, use_regular_spacing
 from pixelup.widgets import (
     NoWheelComboBox,
     NoWheelDoubleSpinBox,
@@ -96,7 +96,10 @@ class ImagePreview(QLabel):
         super().__init__("No image selected")
         self._pixmap: QPixmap | None = None
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumSize(160, 120)
+        # A 320x240 (4:3 QVGA) floor keeps the preview genuinely useful: a
+        # scaled-down image is still large enough to judge upscale quality,
+        # unlike the previous 160x120 which crushed to a thumbnail.
+        self.setMinimumSize(320, 240)
 
     def set_image(self, path: Path | None) -> None:
         if path is None:
@@ -148,6 +151,11 @@ class MainWindow(QMainWindow):
         self.resize(1260, 860)
         self.setAcceptDrops(True)
         self._build_ui()
+        # Derive the window minimum from the layout rather than pinning an
+        # arbitrary constant: the central widget's size hint already sums the
+        # panes' content-based minimums (preview floor + table widths/heights),
+        # so the OS refuses to shrink the window below the panes' real needs.
+        self.setMinimumSize(self.centralWidget().sizeHint())
         self._apply_job_settings(job_settings_defaults(self.config))
         self._update_selected_image()
         self._update_action_buttons()
@@ -286,6 +294,11 @@ class MainWindow(QMainWindow):
         image_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         image_header.resizeSection(1, 120)
         image_header.resizeSection(2, 320)
+        # Content-based floor so the central widget's sizeHint() is meaningful:
+        # the two fixed columns (120 + 320) plus a ~200px floor for the stretch
+        # "Image" column to hold a filename, and ~6 rows of vertical room.
+        self.image_table.setMinimumWidth(640)
+        self.image_table.setMinimumHeight(180)
         layout.addWidget(self.image_table, 1)
 
         button_row = QWidget()
@@ -465,6 +478,12 @@ class MainWindow(QMainWindow):
         queue_header.resizeSection(1, 230)
         queue_header.resizeSection(2, 70)
         queue_header.resizeSection(4, 180)
+        # Content-based floor: the four fixed columns (180 + 230 + 70 + 180)
+        # plus a ~200px floor for the stretch "Output" column, and ~6 rows of
+        # vertical room, so every column stays readable and the window minimum
+        # derives honestly from this pane.
+        self.queue_table.setMinimumWidth(860)
+        self.queue_table.setMinimumHeight(180)
         layout.addWidget(self.queue_table)
         return group
 
@@ -869,6 +888,10 @@ def main() -> int:
     app = QApplication(sys.argv)
     if "Fusion" in QStyleFactory.keys():
         app.setStyle("Fusion")
+    # No owned QPalette: PixelUp deliberately follows the OS light/dark theme.
+    # The scroll-bar QSS is palette-based so it stays consistent with whatever
+    # theme the OS resolves, while replacing Fusion's thick square bar.
+    apply_scrollbar_style(app)
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
     log.info(
