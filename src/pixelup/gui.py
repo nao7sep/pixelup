@@ -13,6 +13,7 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QGuiApplication,
+    QIcon,
     QKeySequence,
     QPixmap,
     QResizeEvent,
@@ -894,6 +895,9 @@ def main() -> int:
     apply_scrollbar_style(app)
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
+    icon_path = Path(__file__).parent / "resources" / "icon.png"
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
     log.info(
         "app.started",
         version=__version__,
