@@ -2,8 +2,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $scriptExitCode = 0
 
-# run-dev: run the CLI from source (uv). A Python CLI has no separate production
-# build to launch, so this is its only launcher — uv runs the source directly.
+# run-dev: run PixelUp (a PySide6 GUI app) from source via uv. PixelUp has no
+# packaged build yet, so this is currently its only launcher — uv runs the source directly.
 
 function Set-Utf8Console {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -56,7 +56,7 @@ try {
     Invoke-Native -FilePath "uv" -ArgumentList @("sync", "--extra", "dev")
 
     Write-Step "Starting PixelUp"
-    # Forward any script arguments to the CLI, matching run-dev.command's `"$@"`.
+    # Forward any script arguments to the app, matching run-dev.command's `"$@"`.
     Invoke-Native -FilePath "uv" -ArgumentList (@("run", "pixelup") + $args) -AllowedExitCodes @(0, 130, -1073741510)
 }
 catch {
