@@ -7,6 +7,7 @@ from typing import Any
 
 from pixelup.config import resolve_state_dir
 from pixelup.devices import DEFAULT_DEVICE, DEVICE_VALUES
+from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
 from pixelup.paths import OutputFormat
 
 
@@ -40,6 +41,7 @@ class AppConfig:
     tile: int = MIN_TILE
     device: str = DEFAULT_DEVICE
     auto_download: bool = True
+    font_family: str = DEFAULT_UI_FONT_FAMILY
 
 
 def load_app_config(path: Path | None = None) -> AppConfig:
@@ -63,6 +65,7 @@ def load_app_config(path: Path | None = None) -> AppConfig:
         tile=_clamp_int(data.get("tile"), defaults.tile, MIN_TILE, MAX_TILE),
         device=_coerce_device(data.get("device"), defaults.device),
         auto_download=bool(data.get("auto_download", defaults.auto_download)),
+        font_family=normalize_font_family(data.get("font_family"), defaults.font_family),
     )
 
 
@@ -101,6 +104,7 @@ def _to_json(config: AppConfig) -> dict[str, Any]:
     return {
         "auto_download": config.auto_download,
         "device": config.device,
+        "font_family": config.font_family,
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "output_format": config.output_format.value,
         "quality": config.quality,

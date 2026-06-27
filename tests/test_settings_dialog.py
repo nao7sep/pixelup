@@ -80,3 +80,43 @@ def test_restore_defaults_stays_clean_when_already_default(qapp: QApplication) -
         assert dialog.ok_button.isEnabled() is False
     finally:
         dialog.deleteLater()
+
+
+def test_font_family_field_reflects_config(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig(font_family="Courier New"))
+    try:
+        assert dialog.font_family.text() == "Courier New"
+        assert dialog.config().font_family == "Courier New"
+        assert dialog.is_dirty() is False
+    finally:
+        dialog.deleteLater()
+
+
+def test_font_family_change_marks_dirty_and_normalizes(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig())
+    try:
+        dialog.font_family.setText("  Menlo  ")
+        assert dialog.is_dirty() is True
+        assert dialog.ok_button.isEnabled() is True
+        assert dialog.config().font_family == "Menlo"
+    finally:
+        dialog.deleteLater()
+
+
+def test_blank_font_family_falls_back_to_default(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig())
+    try:
+        dialog.font_family.setText("")
+        assert dialog.config().font_family == AppConfig().font_family
+    finally:
+        dialog.deleteLater()
+
+
+def test_restore_defaults_resets_font_family(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig(font_family="Courier New"))
+    try:
+        dialog._restore_defaults()
+        assert dialog.font_family.text() == AppConfig().font_family
+        assert dialog.config().font_family == AppConfig().font_family
+    finally:
+        dialog.deleteLater()

@@ -27,6 +27,32 @@ def test_missing_app_config_uses_defaults(tmp_path: Path) -> None:
     assert load_app_config(tmp_path / "missing.json") == AppConfig()
 
 
+def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    config = AppConfig(font_family="Courier New, monospace")
+
+    save_app_config(config, path)
+
+    assert load_app_config(path).font_family == "Courier New, monospace"
+
+
+def test_load_app_config_normalizes_font_family(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"font_family": "  Arial  "}), encoding="utf-8")
+
+    assert load_app_config(path).font_family == "Arial"
+
+
+def test_load_app_config_falls_back_on_unusable_font_family(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+
+    path.write_text(json.dumps({"font_family": "   "}), encoding="utf-8")
+    assert load_app_config(path).font_family == AppConfig().font_family
+
+    path.write_text(json.dumps({"font_family": 42}), encoding="utf-8")
+    assert load_app_config(path).font_family == AppConfig().font_family
+
+
 def test_invalid_config_shape_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text("[]\n", encoding="utf-8")

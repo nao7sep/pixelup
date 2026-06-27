@@ -7,9 +7,12 @@ import pytest
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.paths import OutputFormat
 from pixelup.upscale import (
+    DENOISE_NEUTRAL,
     UpscaleOptions,
     _format_extension_mismatch,
     count_tiles,
+    effective_denoise_strength,
+    model_supports_denoise,
     validate_options,
     validate_output_path,
 )
@@ -64,10 +67,6 @@ def test_validate_options_accepts_valid_options() -> None:
         ({"device": "vulkan"}, ErrorCode.INVALID_ARGUMENT),
         ({"download_timeout": 0}, ErrorCode.INVALID_ARGUMENT),
         ({"lock_timeout": -1}, ErrorCode.INVALID_ARGUMENT),
-        (
-            {"model": "RealESRGAN_x4plus", "denoise_strength": 0.5},
-            ErrorCode.DENOISE_STRENGTH_UNSUPPORTED,
-        ),
     ],
 )
 def test_validate_options_rejects_bad_values(overrides: dict[str, object], code: ErrorCode) -> None:
@@ -102,8 +101,36 @@ def test_validate_options_uses_gui_neutral_messages(
     assert exc_info.value.message == expected_message
 
 
-def test_validate_options_allows_denoise_only_for_general_model() -> None:
+def test_validate_options_allows_denoise_for_general_model() -> None:
     validate_options(make_options(model="realesr-general-x4v3", denoise_strength=0.5))
+
+
+def test_validate_options_accepts_denoise_on_non_general_model() -> None:
+    # Denoise simply does not apply to a non-general model: a leftover value is normalized away
+    # (effective_denoise_strength), not rejected. This previously raised for a direct caller — the
+    # GUI path masked it by coercing denoise to neutral per model first.
+    validate_options(make_options(model="RealESRGAN_x4plus", denoise_strength=0.5))
+
+
+@pytest.mark.parametrize(
+    ("model", "denoise", "expected"),
+    [
+        ("realesr-general-x4v3", 0.5, 0.5),  # the general model keeps the caller's value
+        ("realesr-general-x4v3", 1.0, 1.0),
+        ("RealESRGAN_x4plus", 0.5, DENOISE_NEUTRAL),  # every other model normalizes to neutral
+        ("RealESRGAN_x4plus", 1.0, DENOISE_NEUTRAL),
+        ("realesr-animevideov3", 0.0, DENOISE_NEUTRAL),
+    ],
+)
+def test_effective_denoise_strength_normalizes_off_the_general_model(
+    model: str, denoise: float, expected: float
+) -> None:
+    assert effective_denoise_strength(model, denoise) == expected
+
+
+def test_model_supports_denoise_only_for_the_general_model() -> None:
+    assert model_supports_denoise("realesr-general-x4v3") is True
+    assert model_supports_denoise("RealESRGAN_x4plus") is False
 
 
 def test_count_tiles_returns_one_when_tiling_disabled() -> None:

@@ -64,6 +64,36 @@ def _summary(window: MainWindow, path: Path) -> str:
     return window.image_table.item(row, 2).text()
 
 
+def test_build_app_wires_application_and_opens_argv_paths(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # build_app is everything main() does except the blocking app.exec(); driving it headlessly
+    # is the whole point of extracting it (main() is then a 3-line untestable shell). log_file and
+    # runtime_dirs are injected at a temp location so nothing touches the real ~/.pixelup.
+    monkeypatch.setattr("pixelup.gui.load_app_config", lambda: AppConfig())
+    image = _png(tmp_path, "a.png")
+    log_file = tmp_path / "logs" / "session.log"
+    runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models", temp_dir=tmp_path / "temp")
+
+    app, window = gui.build_app(
+        ["pixelup", str(image)],
+        log_file=log_file,
+        runtime_dirs=runtime_dirs,
+    )
+    try:
+        assert app is qapp  # reuses the running QApplication rather than constructing a second
+        assert app.applicationName() == "PixelUp"
+        assert window.windowTitle() == "PixelUp"
+        # The image path on the command line was opened into the window.
+        assert window.image_table.rowCount() == 1
+        assert window._selected_path() == image.resolve()
+    finally:
+        window._session_shutdown = True
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
 def test_open_paths_adds_unique_rows_and_focuses_existing(
     make_window, tmp_path: Path
 ) -> None:

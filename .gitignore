@@ -8,3 +8,8 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+
+# Coverage reports (generated)
+coverage/
+.coverage
+.coverage.*

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pixelup.app_config import AppConfig
 from pixelup.paths import OutputFormat, default_output_path
-from pixelup.upscale import UpscaleOptions
+from pixelup.upscale import UpscaleOptions, effective_denoise_strength
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,9 +53,11 @@ def job_settings_defaults(config: AppConfig) -> JobSettings:
 
 
 def settings_for_model(settings: JobSettings, model: str) -> JobSettings:
-    if model != "realesr-general-x4v3" and settings.denoise_strength != 1.0:
-        return replace(settings, denoise_strength=1.0)
-    return settings
+    # Single source of the "denoise applies only to the general model" rule (see upscale).
+    normalized = effective_denoise_strength(model, settings.denoise_strength)
+    if normalized == settings.denoise_strength:
+        return settings
+    return replace(settings, denoise_strength=normalized)
 
 
 def create_jobs(
@@ -187,6 +189,7 @@ def config_log_payload(config: AppConfig) -> dict[str, object]:
         "tile": config.tile,
         "device": config.device,
         "auto_download": config.auto_download,
+        "font_family": config.font_family,
     }
 
 

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QGridLayout,
     QLabel,
+    QLineEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -21,6 +22,7 @@ from pixelup.app_config import (
     TILE_STEP,
     AppConfig,
 )
+from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
 from pixelup.paths import OutputFormat
 from pixelup.ui_common import use_regular_spacing
 from pixelup.widgets import NoWheelSpinBox, device_combo, output_format_combo
@@ -69,7 +71,24 @@ class SettingsDialog(QDialog):
         self.device = device_combo()
         self.device.setCurrentIndex(self.device.findData(config.device))
 
+        self.font_family = QLineEdit()
+        self.font_family.setText(config.font_family)
+        self.font_family.setMinimumWidth(260)
+
+        # UI font leads as the one app-appearance setting, set apart from the
+        # image-processing job defaults that follow.
         row = 0
+        form.addWidget(QLabel("UI font"), row, 0)
+        form.addWidget(self.font_family, row, 1)
+        row += 1
+        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(
+            QLabel("Comma-separated; the first font installed on this system is used."),
+            row,
+            1,
+            Qt.AlignmentFlag.AlignLeft,
+        )
+        row += 1
         form.addWidget(QLabel("Concurrent jobs"), row, 0)
         form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)
         row += 1
@@ -136,6 +155,7 @@ class SettingsDialog(QDialog):
             self.quality.valueChanged,
             self.tile.valueChanged,
             self.device.currentIndexChanged,
+            self.font_family.textChanged,
         ):
             changed.connect(self._update_commit_enabled)
         self._update_commit_enabled()
@@ -148,6 +168,7 @@ class SettingsDialog(QDialog):
             tile=self.tile.value(),
             device=self.device.currentData(),
             auto_download=self.auto_download.isChecked(),
+            font_family=normalize_font_family(self.font_family.text(), DEFAULT_UI_FONT_FAMILY),
         )
 
     def is_dirty(self) -> bool:
@@ -164,3 +185,4 @@ class SettingsDialog(QDialog):
         self.quality.setValue(defaults.quality)
         self.tile.setValue(defaults.tile)
         self.device.setCurrentIndex(self.device.findData(defaults.device))
+        self.font_family.setText(defaults.font_family)

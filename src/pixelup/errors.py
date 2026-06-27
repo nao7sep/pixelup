@@ -15,7 +15,6 @@ class ErrorCode(StrEnum):
     MODEL_NOT_FOUND = "model_not_found"
     MODEL_DOWNLOAD_FAILED = "model_download_failed"
     MODEL_CORRUPT = "model_corrupt"
-    DENOISE_STRENGTH_UNSUPPORTED = "denoise_strength_unsupported"
     FACE_ENHANCE_UNAVAILABLE = "face_enhance_unavailable"
     OUT_OF_MEMORY = "out_of_memory"
     INVALID_ARGUMENT = "invalid_argument"

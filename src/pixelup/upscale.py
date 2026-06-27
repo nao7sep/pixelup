@@ -65,6 +65,24 @@ class UpscaleOptions:
     lock_timeout: int
 
 
+GENERAL_DENOISE_MODEL = "realesr-general-x4v3"
+DENOISE_NEUTRAL = 1.0
+
+
+def model_supports_denoise(model: str) -> bool:
+    """Denoise strength blends in the separately-trained wdn weights, which exist only for the
+    general x4v3 model; every other architecture ignores it."""
+    return model == GENERAL_DENOISE_MODEL
+
+
+def effective_denoise_strength(model: str, denoise_strength: float) -> float:
+    """The denoise strength a model will actually act on: the caller's value for the general model,
+    the neutral ``DENOISE_NEUTRAL`` (no wdn blend) for every other model. Normalizing a non-neutral
+    value on a model that ignores denoise — rather than rejecting it — keeps a leftover slider value
+    harmless for a direct caller, the same coercion the GUI already applies per model."""
+    return denoise_strength if model_supports_denoise(model) else DENOISE_NEUTRAL
+
+
 @dataclass(frozen=True, slots=True)
 class UpscalePlan:
     input_path: Path
@@ -249,12 +267,9 @@ def validate_options(options: UpscaleOptions) -> None:
             ErrorCode.INVALID_ARGUMENT,
             "Denoise strength must be between 0 and 1.",
         )
-    if options.denoise_strength != 1.0 and options.model != "realesr-general-x4v3":
-        raise PixelupError(
-            ErrorCode.DENOISE_STRENGTH_UNSUPPORTED,
-            "Denoise strength applies only to the 'realesr-general-x4v3' model.",
-            details={"model": options.model, "denoise_strength": options.denoise_strength},
-        )
+    # Denoise on a non-general model is not an error: it simply does not apply and is normalized
+    # to the neutral value (see effective_denoise_strength). Rejecting a non-neutral value here
+    # only ever bit direct callers — the GUI already coerces it away per model before validating.
     if options.alpha_mode not in {"realesrgan", "bicubic"}:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
@@ -280,7 +295,7 @@ def validate_options(options: UpscaleOptions) -> None:
 
 def required_model_names(options: UpscaleOptions) -> list[str]:
     names = [options.model]
-    if options.model == "realesr-general-x4v3" and options.denoise_strength != 1.0:
+    if model_supports_denoise(options.model) and options.denoise_strength != 1.0:
         names.append("realesr-general-wdn-x4v3")
     if options.face_enhance:
         names.extend(

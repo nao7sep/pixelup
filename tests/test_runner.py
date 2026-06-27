@@ -113,6 +113,25 @@ def test_finishing_a_job_starts_the_next(qapp: QApplication, tmp_path: Path) -> 
     assert runner._active_jobs == 0
 
 
+def test_reschedule_after_finish_refills_one_freed_slot(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    # The QTimer.singleShot(0, schedule) that _job_finished posts (runner.py) reads the *current*
+    # _active_jobs and cap when it fires. With four jobs and a cap of two, finishing one frees
+    # exactly one slot, so the reschedule must start exactly one more — not drain the whole queue.
+    jobs = [_make_job(i, tmp_path) for i in range(1, 5)]
+    runner = _RecordingRunner(jobs)
+
+    runner.schedule(2)
+    assert runner.started_ids == [1, 2]
+
+    runner._job_finished(1, True, "Done", {"ok": True}, [])
+    qapp.processEvents()  # let the posted reschedule run
+
+    assert runner.started_ids == [1, 2, 3]
+    assert runner._active_jobs == 2
+
+
 def test_finished_emits_outcome_to_listeners(qapp: QApplication, tmp_path: Path) -> None:
     runner = _RecordingRunner([_make_job(1, tmp_path)])
     finished: list[tuple[object, ...]] = []
@@ -130,6 +149,18 @@ def test_request_cancel_for_unknown_job_is_a_noop(tmp_path: Path) -> None:
     # Nothing is running, so cancelling any id must simply do nothing.
     runner.request_cancel(1)
     runner.request_cancel(999)
+
+
+def test_request_cancel_signals_the_running_worker(tmp_path: Path) -> None:
+    # When a job is live, request_cancel reaches its worker. Driven through a fake registry entry
+    # so the cancel routing is asserted without a real QThread (see the no-real-threads note above).
+    runner = JobRunner([_make_job(1, tmp_path)])
+    worker = _FakeWorker(1)
+    runner._threads = {1: (SimpleNamespace(), worker)}  # type: ignore[dict-item]
+
+    runner.request_cancel(1)
+
+    assert worker.cancel_requested is True
 
 
 # --- cleanup_for_quit teardown sequence -----------------------------------

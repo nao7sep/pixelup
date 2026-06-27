@@ -107,6 +107,7 @@ def test_config_log_payload_shape() -> None:
         "tile": 128,
         "device": "cpu",
         "auto_download": False,
+        "font_family": AppConfig().font_family,
     }
 
 

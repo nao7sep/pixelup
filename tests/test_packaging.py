@@ -38,4 +38,4 @@ def test_inference_extra_is_not_declared() -> None:
 def test_script_starts_gui() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
 
-    assert pyproject["project"]["scripts"]["pixelup"] == "pixelup.gui:main"
+    assert pyproject["project"]["gui-scripts"]["pixelup"] == "pixelup.gui:main"

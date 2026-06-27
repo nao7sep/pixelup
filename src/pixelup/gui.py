@@ -51,8 +51,9 @@ from pixelup.app_config import (
     load_app_config,
     save_app_config,
 )
-from pixelup.config import resolve_runtime_dirs
+from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.errors import PixelupError
+from pixelup.fonts import apply_ui_font
 from pixelup.imaging import read_image_size, register_image_plugins
 from pixelup.jobs import (
     ImageEntry,
@@ -136,6 +137,11 @@ class MainWindow(QMainWindow):
     def __init__(self, *, log_file: Path) -> None:
         super().__init__()
         self.config = load_app_config()
+        # Apply the configured UI font (family-only; the explicit size lives in
+        # fonts.py) before building the UI so every widget inherits it. A fresh
+        # install resolves the canonical default stack. setFont propagates app-
+        # wide, so this is the single place the UI font is established.
+        apply_ui_font(QApplication.instance(), self.config.font_family)
         self.log_file = log_file
         self._job_ids = count(1)
         self._images_by_path: dict[Path, ImageEntry] = {}
@@ -501,6 +507,9 @@ class MainWindow(QMainWindow):
             previous_defaults = job_settings_defaults(self.config)
             self.config = dialog.config()
             save_app_config(self.config)
+            # Re-apply the UI font so a changed family takes effect immediately,
+            # no restart needed.
+            apply_ui_font(QApplication.instance(), self.config.font_family)
             log.info(
                 "settings.saved",
                 path=str(config_path()),
@@ -882,11 +891,23 @@ def _reveal_in_file_browser(path: Path) -> bool:
     return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))))
 
 
-def main() -> int:
+def build_app(
+    argv: list[str],
+    *,
+    log_file: Path | None = None,
+    runtime_dirs: RuntimeDirs | None = None,
+) -> tuple[QApplication, MainWindow]:
+    """Build the fully-wired application and main window, ready to run.
+
+    Everything ``main`` does except the blocking ``app.exec()`` lives here so it is exercisable
+    headlessly: session logging, the runtime dirs, the QApplication and its style/icon, the window,
+    and opening any image paths passed on the command line. ``log_file`` and ``runtime_dirs`` are
+    injectable so a test can point them at a temp location; both default to the real resolution.
+    """
     register_image_plugins()
-    log_file = configure_session_logging()
-    runtime_dirs = resolve_runtime_dirs()
-    app = QApplication(sys.argv)
+    resolved_log_file = configure_session_logging(log_file)
+    resolved_runtime_dirs = runtime_dirs if runtime_dirs is not None else resolve_runtime_dirs()
+    app = QApplication.instance() or QApplication(argv)
     if "Fusion" in QStyleFactory.keys():
         app.setStyle("Fusion")
     # No owned QPalette: PixelUp deliberately follows the OS light/dark theme.
@@ -903,19 +924,24 @@ def main() -> int:
         version=__version__,
         python=sys.version.split()[0],
         platform=sys.platform,
-        log_file=str(log_file),
+        log_file=str(resolved_log_file),
         runtime_dirs={
-            "models_dir": str(runtime_dirs.models_dir),
-            "temp_dir": str(runtime_dirs.temp_dir),
+            "models_dir": str(resolved_runtime_dirs.models_dir),
+            "temp_dir": str(resolved_runtime_dirs.temp_dir),
         },
-        argv=sys.argv[1:],
+        argv=argv[1:],
     )
 
-    window = MainWindow(log_file=log_file)
+    window = MainWindow(log_file=resolved_log_file)
     window.show()
-    paths = [Path(arg) for arg in sys.argv[1:] if not arg.startswith("-")]
+    paths = [Path(arg) for arg in argv[1:] if not arg.startswith("-")]
     if paths:
         window.open_paths(paths)
+    return app, window
+
+
+def main() -> int:
+    app, _window = build_app(sys.argv)
     return app.exec()
 
 
