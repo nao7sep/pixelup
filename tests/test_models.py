@@ -19,6 +19,34 @@ def test_require_model_present_accepts_custom_model_file(tmp_path: Path) -> None
     assert require_model_present(tmp_path, "custom-model") == custom_file
 
 
+def test_require_model_present_returns_known_model_without_rehashing(tmp_path: Path) -> None:
+    # A known model carries a pinned checksum, but require_model_present must not
+    # re-hash it at use-time (the convention drops re-verification after acquisition):
+    # a present file is returned even when its bytes do not match the pin.
+    model_path = tmp_path / "RealESRGAN_x4plus.pth"
+    model_path.write_bytes(b"not the real weights")
+
+    assert require_model_present(tmp_path, "RealESRGAN_x4plus") == model_path
+
+
+def test_require_model_present_raises_when_missing(tmp_path: Path) -> None:
+    with pytest.raises(PixelupError) as excinfo:
+        require_model_present(tmp_path, "RealESRGAN_x4plus")
+
+    assert excinfo.value.code == "model_not_found"
+
+
+def test_require_model_present_treats_empty_file_as_missing(tmp_path: Path) -> None:
+    # A zero-byte leftover is not a usable model: presence requires a non-empty file,
+    # so it reads as missing rather than being returned as present.
+    (tmp_path / "RealESRGAN_x4plus.pth").write_bytes(b"")
+
+    with pytest.raises(PixelupError) as excinfo:
+        require_model_present(tmp_path, "RealESRGAN_x4plus")
+
+    assert excinfo.value.code == "model_not_found"
+
+
 def test_verify_model_file_rejects_wrong_size(tmp_path: Path) -> None:
     model_file = tmp_path / "model.pth"
     model_file.write_bytes(b"small")
@@ -99,12 +127,15 @@ def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -
     assert events[-1] == ("local-model", source.stat().st_size, source.stat().st_size)
 
 
-def test_download_model_info_skips_valid_existing_file(tmp_path: Path) -> None:
+def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path) -> None:
+    # A non-empty file already at the target is trusted and the download skipped — even
+    # when its bytes match neither the pinned size nor the checksum. Presence is trust;
+    # the convention drops re-verification after acquisition, so no re-hash gates the
+    # skip (a file is verified once, when PixelUp downloads it).
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    existing = b"existing"
     target = models_dir / "local-model.pth"
-    target.write_bytes(existing)
+    target.write_bytes(b"whatever is already on disk")
     source = tmp_path / "source.pth"
     source.write_bytes(b"different")
     info = ModelInfo(
@@ -112,8 +143,8 @@ def test_download_model_info_skips_valid_existing_file(tmp_path: Path) -> None:
         None,
         "local-model.pth",
         source.resolve().as_uri(),
-        expected_size=target.stat().st_size,
-        checksum_sha256=_sha256_hex(existing),
+        expected_size=999,  # deliberately wrong
+        checksum_sha256=_sha256_hex(b"a totally different blob"),  # deliberately non-matching
     )
 
     result = download_model_info(
@@ -124,7 +155,7 @@ def test_download_model_info_skips_valid_existing_file(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "present"
-    assert target.read_bytes() == b"existing"
+    assert target.read_bytes() == b"whatever is already on disk"
 
 
 def test_download_model_info_cancels_while_waiting_for_lock(tmp_path: Path) -> None:

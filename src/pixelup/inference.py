@@ -404,12 +404,14 @@ def _read_input_image(path: Path) -> Any:
 
 # pixelup never calls torch.load itself — the third-party loaders (RealESRGANer,
 # GFPGANer, facexlib) own that call and pass no weights_only argument. Model-load
-# safety therefore rests on two things: every model is verified against a pinned
-# SHA-256 before it is loaded (models.verify_model_file), and torch.load's default
-# is the safe weights_only=True, which holds from torch 2.6 onward. We assert that
-# floor here so a downgrade below 2.6 fails loudly rather than silently restoring
-# full-pickle execution. Every shipped model is a plain state_dict that loads under
-# weights_only=True; a future model needing a non-tensor global would be allowed
+# safety therefore rests on torch.load's default weights_only=True (the code-execution
+# gate, holding from torch 2.6 onward); a model that pixelup downloaded is additionally
+# verified against its pinned SHA-256 at download (models.verify_model_file), while a
+# user-placed file is trusted as-is — either way weights_only is what prevents a
+# malicious pickle from executing. We assert that 2.6 floor here so a downgrade fails
+# loudly rather than silently restoring full-pickle execution. Every shipped model is a
+# plain state_dict that loads under weights_only=True; a future model needing a
+# non-tensor global would be allowed
 # surgically via torch.serialization.add_safe_globals — never with weights_only=False.
 _MIN_SAFE_TORCH = (2, 6)
 

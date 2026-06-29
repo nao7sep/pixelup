@@ -43,8 +43,9 @@ class ModelInfo:
 # official releases (xinntao/Real-ESRGAN, TencentARC/GFPGAN, xinntao/facexlib) and
 # confirmed byte-identical to what those pinned URLs serve; that is the trust
 # anchor, since these old releases publish no upstream checksum of their own. A
-# download is verified against its hash before it is cached or loaded (see
-# verify_model_file), so a corrupted or substituted same-size file is rejected.
+# download is verified against its hash before it is cached (see verify_model_file),
+# so a corrupted or substituted same-size file never reaches the cache; a file already
+# on disk is then trusted and not re-hashed on use.
 # These projects froze in 2022; each entry is already the latest of its model.
 ALL_MODELS: tuple[ModelInfo, ...] = (
     ModelInfo(
@@ -150,7 +151,7 @@ def require_model_present(
     name: str,
 ) -> Path:
     path = model_file(models_dir, name)
-    if not path.is_file():
+    if not _model_file_present(path):
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
             f"Model '{name}' is not present in the models directory.",
@@ -159,7 +160,11 @@ def require_model_present(
             ),
             details={"model": name, "models_dir": str(models_dir), "path": str(path)},
         )
-    verify_model_file(path, known_model(name))
+    # A present model is trusted: it was verified once when PixelUp downloaded it (or
+    # placed by the user). The managed-runtime-dependencies-conventions drop
+    # re-verification after acquisition, and re-hashing here would re-read the whole
+    # file before every job — hundreds of MB per face-enhance image — to guard against
+    # a corruption that torch's weights_only load already turns into a loud failure.
     return path
 
 
@@ -223,13 +228,13 @@ def download_model_info(
             details={"models_dir": str(models_dir), "reason": str(exc)},
         ) from exc
     target = models_dir / info.filename
-    if _model_file_is_valid(target, info):
+    if _model_file_present(target):
         return _download_result(info, target, "present")
 
     lock = FileLock(str(locks_dir / f"{_lock_name(info.name)}.lock"))
     _acquire_download_lock(lock, info.name, lock_timeout, on_waiting, should_cancel)
     try:
-        if _model_file_is_valid(target, info):
+        if _model_file_present(target):
             return _download_result(info, target, "present")
         temp_path = models_dir / f".{info.filename}.{os.getpid()}.{uuid4().hex}.tmp"
         log.info("model.download_started", model=info.name, url=info.url)
@@ -387,14 +392,11 @@ def _acquire_download_lock(
                 on_waiting(model, time.monotonic() - start)
 
 
-def _model_file_is_valid(path: Path, info: ModelInfo) -> bool:
-    if not path.is_file():
-        return False
-    try:
-        verify_model_file(path, info)
-    except PixelupError:
-        return False
-    return True
+def _model_file_present(path: Path) -> bool:
+    # Presence is trust: a non-empty file at the target path was verified once at
+    # download (or placed by the user), so the download is skipped and the file is not
+    # re-hashed — see require_model_present. A zero-byte leftover does not count.
+    return path.is_file() and path.stat().st_size > 0
 
 
 def _download_result(info: ModelInfo, path: Path, status: str) -> dict[str, object]:
