@@ -94,6 +94,22 @@ KNOWN_MODEL_NAMES = {model.name for model in KNOWN_MODELS}
 UPSCALE_MODELS = tuple(name for name in MODEL_ORDER if name in KNOWN_MODEL_NAMES)
 
 
+# Horizontal slack added to a measured string so cell text never touches the
+# column edges (covers Qt's default cell margins plus a little breathing room).
+_CELL_PADDING = 24
+# Minimum readable width for a filename column: a fixed filename column elides to
+# this (with a tooltip), and a stretch filename column uses it as its floor.
+_NAME_MIN_WIDTH = 180
+
+
+def _fit_columns(widget: QWidget, *samples: str) -> int:
+    """Width that shows the widest of ``samples`` in ``widget``'s font without
+    eliding. Pass the header label plus the worst-case cell strings that must stay
+    fully visible; rarer, longer values elide and carry a tooltip."""
+    metrics = widget.fontMetrics()
+    return max(metrics.horizontalAdvance(text) for text in samples) + _CELL_PADDING
+
+
 class ImagePreview(QLabel):
     def __init__(self) -> None:
         super().__init__("No image selected")
@@ -156,14 +172,16 @@ class MainWindow(QMainWindow):
         self._session_shutdown = False
 
         self.setWindowTitle("PixelUp")
-        self.resize(1260, 860)
         self.setAcceptDrops(True)
         self._build_ui()
-        # Derive the window minimum from the layout rather than pinning an
-        # arbitrary constant: the central widget's size hint already sums the
-        # panes' content-based minimums (preview floor + table widths/heights),
-        # so the OS refuses to shrink the window below the panes' real needs.
-        self.setMinimumSize(self.centralWidget().sizeHint())
+        # Window minimum = the layout's content-based size hint: the central widget
+        # sums the panes' needs, and each table's minimum is its measured column
+        # widths plus a filename floor (see _fit_columns). Open a little roomier than
+        # that floor so the stretch (filename) columns have slack on first launch.
+        # The old fixed resize(1260, …) sat below this minimum, so it was dead.
+        hint = self.centralWidget().sizeHint()
+        self.setMinimumSize(hint)
+        self.resize(hint.width() + 160, hint.height() + 120)
         self._apply_job_settings(job_settings_defaults(self.config))
         self._update_selected_image()
         self._update_action_buttons()
@@ -292,12 +310,15 @@ class MainWindow(QMainWindow):
         image_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         image_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         image_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        image_header.resizeSection(1, 120)
-        image_header.resizeSection(2, 320)
-        # Content-based floor so the central widget's sizeHint() is meaningful:
-        # the two fixed columns (120 + 320) plus a ~200px floor for the stretch
-        # "Image" column to hold a filename, and ~6 rows of vertical room.
-        self.image_table.setMinimumWidth(640)
+        # Fixed widths measured from the worst-case string each column must show in
+        # the current UI font (see _fit_columns): Size holds "99999 x 99999"; Jobs
+        # holds a common two-state roll-up and elides + tooltips the rarer longer
+        # summaries. "Image" stretches (filename, elides to the floor with a tooltip).
+        size_width = _fit_columns(self.image_table, "Size", "99999 x 99999", "unavailable")
+        jobs_width = _fit_columns(self.image_table, "Jobs", "12 done, 5 failed")
+        image_header.resizeSection(1, size_width)
+        image_header.resizeSection(2, jobs_width)
+        self.image_table.setMinimumWidth(_NAME_MIN_WIDTH + size_width + jobs_width)
         self.image_table.setMinimumHeight(180)
         layout.addWidget(self.image_table, 1)
 
@@ -473,15 +494,20 @@ class MainWindow(QMainWindow):
         queue_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         queue_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         queue_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        queue_header.resizeSection(0, 180)
-        queue_header.resizeSection(1, 230)
-        queue_header.resizeSection(2, 70)
-        queue_header.resizeSection(4, 180)
-        # Content-based floor: the four fixed columns (180 + 230 + 70 + 180)
-        # plus a ~200px floor for the stretch "Output" column, and ~6 rows of
-        # vertical room, so every column stays readable and the window minimum
-        # derives honestly from this pane.
-        self.queue_table.setMinimumWidth(860)
+        # Widths measured from worst-case content in the current UI font: Model
+        # shows the longest model name in full; Scale fits its header; Status holds
+        # "Cancelling...". "Image" elides a long filename to a readable floor (with a
+        # tooltip) and "Output" stretches.
+        model_width = _fit_columns(self.queue_table, "Model", max(MODEL_ORDER, key=len))
+        scale_width = _fit_columns(self.queue_table, "Scale", "4x")
+        status_width = _fit_columns(self.queue_table, "Status", "Cancelling...")
+        queue_header.resizeSection(0, _NAME_MIN_WIDTH)
+        queue_header.resizeSection(1, model_width)
+        queue_header.resizeSection(2, scale_width)
+        queue_header.resizeSection(4, status_width)
+        self.queue_table.setMinimumWidth(
+            _NAME_MIN_WIDTH + model_width + scale_width + _NAME_MIN_WIDTH + status_width
+        )
         self.queue_table.setMinimumHeight(180)
         layout.addWidget(self.queue_table)
         return group
@@ -789,7 +815,10 @@ class MainWindow(QMainWindow):
             statuses_by_input[job.input_path].append(job.status)
         for path in self._image_order:
             row = self._image_rows[path]
-            self.image_table.item(row, 2).setText(job_status_summary(statuses_by_input[path]))
+            summary = job_status_summary(statuses_by_input[path])
+            item = self.image_table.item(row, 2)
+            item.setText(summary)
+            item.setToolTip(summary)
         self._update_selected_image()
 
     def _has_active_jobs(self, path: Path) -> bool:
