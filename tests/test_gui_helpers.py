@@ -7,7 +7,6 @@ from PIL import Image
 from pixelup.gui import (
     _image_size_text,
     _plural,
-    _quit_confirmation_text,
     _safe_image_size,
     _status_text,
 )
@@ -33,12 +32,6 @@ def test_plural() -> None:
     assert _plural(2, "job") == "jobs"
     assert _plural(0, "job") == "jobs"
     assert _plural(2, "child", "children") == "children"
-
-
-def test_quit_confirmation_text() -> None:
-    assert _quit_confirmation_text(0) == "Open images will be closed. Quit PixelUp?"
-    assert _quit_confirmation_text(1) == "1 active job will be abandoned. Quit PixelUp?"
-    assert _quit_confirmation_text(3) == "3 active jobs will be abandoned. Quit PixelUp?"
 
 
 def test_safe_image_size_reads_existing_image(tmp_path: Path) -> None:

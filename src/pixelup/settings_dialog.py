@@ -114,7 +114,7 @@ class SettingsDialog(QDialog):
         row += 1
         form.addWidget(QLabel(""), row, 0)
         form.addWidget(
-            QLabel("Smaller tiles use less memory; 0 processes the whole image."),
+            QLabel("Lower uses less memory; 0 processes the whole image at once."),
             row,
             1,
             Qt.AlignmentFlag.AlignLeft,

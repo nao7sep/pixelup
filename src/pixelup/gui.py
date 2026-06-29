@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
-    QMessageBox,
     QPushButton,
     QRadioButton,
     QStyleFactory,
@@ -68,7 +67,9 @@ from pixelup.jobs import (
     job_status_summary,
     retry_failed_jobs,
 )
+from pixelup.message_dialogs import warn_image_in_use, warn_no_images, warn_no_models
 from pixelup.models import KNOWN_MODELS
+from pixelup.quit_dialog import QuitConfirmDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, log
 from pixelup.settings_dialog import SettingsDialog
@@ -194,15 +195,7 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         active = sum(1 for job in self.jobs if job.status in {"pending", "running", "cancelling"})
-        confirm = QMessageBox(self)
-        confirm.setIcon(QMessageBox.Icon.Warning)
-        confirm.setWindowTitle("Quit PixelUp?")
-        confirm.setText(_quit_confirmation_text(active))
-        quit_button = confirm.addButton("Quit", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_button = confirm.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        confirm.setDefaultButton(cancel_button)
-        confirm.exec()
-        if confirm.clickedButton() is quit_button:
+        if QuitConfirmDialog(active, self).exec() == QDialog.DialogCode.Accepted:
             log.info("quit.confirmed", active_jobs=active)
             self.runner.cleanup_for_quit()
             event.accept()
@@ -421,12 +414,11 @@ class MainWindow(QMainWindow):
         form.addRow("Scale", scale_row)
         form.addRow("", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
-        form.addRow("", QLabel("Applies only to realesr-general-x4v3."))
+        form.addRow("", QLabel("Only for realesr-general-x4v3."))
         form.addRow("Alpha mode", self.alpha_mode)
         form.addRow("Output format", self.output_format)
         form.addRow("Quality", self.quality)
         form.addRow("Tile size", self.tile)
-        form.addRow("", QLabel("Smaller tiles use less memory; 0 processes the whole image."))
         form.addRow("Device", self.device)
         form.addRow("", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
@@ -584,11 +576,7 @@ class MainWindow(QMainWindow):
         if path is None:
             return
         if self._has_active_jobs(path):
-            QMessageBox.information(
-                self,
-                "PixelUp",
-                "Pending or running jobs still use this image.",
-            )
+            warn_image_in_use(self)
             return
         row = self._image_rows.pop(path)
         self.image_table.removeRow(row)
@@ -656,10 +644,10 @@ class MainWindow(QMainWindow):
 
     def _enqueue_jobs(self, input_paths: list[Path], models: list[str], scale: int) -> None:
         if not input_paths:
-            QMessageBox.information(self, "PixelUp", "Open or select at least one image.")
+            warn_no_images(self)
             return
         if not models:
-            QMessageBox.information(self, "PixelUp", "Select at least one model.")
+            warn_no_models(self)
             return
         settings = self.current_job_settings()
         new_jobs = create_jobs(
@@ -862,13 +850,6 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
     if count == 1:
         return singular
     return plural if plural is not None else f"{singular}s"
-
-
-def _quit_confirmation_text(active: int) -> str:
-    if not active:
-        return "Open images will be closed. Quit PixelUp?"
-    jobs = _plural(active, "active job")
-    return f"{active} {jobs} will be abandoned. Quit PixelUp?"
 
 
 def _reveal_in_file_browser(path: Path) -> bool:
