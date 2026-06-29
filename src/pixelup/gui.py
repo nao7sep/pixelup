@@ -426,7 +426,7 @@ class MainWindow(QMainWindow):
         form.addRow("Output format", self.output_format)
         form.addRow("Quality", self.quality)
         form.addRow("Tile size", self.tile)
-        form.addRow("", QLabel("If memory is limited, try 512 before 256."))
+        form.addRow("", QLabel("Smaller tiles use less memory; 0 processes the whole image."))
         form.addRow("Device", self.device)
         form.addRow("", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)

@@ -31,6 +31,12 @@ MAX_QUALITY = 100
 MIN_TILE = 0
 MAX_TILE = 4096
 TILE_STEP = 256
+# Tiling is on by default so peak memory scales with the tile, not the image: a
+# whole-image pass (tile=0) can exhaust GPU/MPS memory and hard-crash on large
+# inputs. 256 keeps peak memory low enough to run on modest GPUs and smaller-memory
+# machines; output is effectively identical to larger tiles, and a power user can
+# raise it in settings for a small speed gain.
+DEFAULT_TILE = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +44,7 @@ class AppConfig:
     max_concurrent_jobs: int = MIN_CONCURRENT_JOBS
     output_format: OutputFormat = OutputFormat.PNG
     quality: int = 95
-    tile: int = MIN_TILE
+    tile: int = DEFAULT_TILE
     device: str = DEFAULT_DEVICE
     auto_download: bool = True
     font_family: str = DEFAULT_UI_FONT_FAMILY

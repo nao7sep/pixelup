@@ -141,7 +141,9 @@ def options_for_job(job: Job) -> UpscaleOptions:
         tile=job.settings.tile,
         tile_pad=10,
         pre_pad=0,
-        fp32=False,
+        # Full precision by default: half precision on MPS can produce black/NaN
+        # Real-ESRGAN output, and tiling already bounds the extra memory cost.
+        fp32=True,
         face_enhance=job.settings.face_enhance,
         denoise_strength=job.settings.denoise_strength,
         alpha_mode=job.settings.alpha_mode,
