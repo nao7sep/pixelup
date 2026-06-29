@@ -38,6 +38,14 @@ class ModelInfo:
     listed: bool = True
 
 
+# Each model is pinned to an immutable upstream release artifact (the URL's tag)
+# and to a SHA-256 of that artifact's bytes. The hashes were computed from the
+# official releases (xinntao/Real-ESRGAN, TencentARC/GFPGAN, xinntao/facexlib) and
+# confirmed byte-identical to what those pinned URLs serve; that is the trust
+# anchor, since these old releases publish no upstream checksum of their own. A
+# download is verified against its hash before it is cached or loaded (see
+# verify_model_file), so a corrupted or substituted same-size file is rejected.
+# These projects froze in 2022; each entry is already the latest of its model.
 ALL_MODELS: tuple[ModelInfo, ...] = (
     ModelInfo(
         "RealESRGAN_x4plus",
@@ -45,6 +53,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "RealESRGAN_x4plus.pth",
         f"{REAL_ESRGAN_RELEASES}/v0.1.0/RealESRGAN_x4plus.pth",
         67040989,
+        checksum_sha256="4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1",
     ),
     ModelInfo(
         "RealESRNet_x4plus",
@@ -52,6 +61,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "RealESRNet_x4plus.pth",
         f"{REAL_ESRGAN_RELEASES}/v0.1.1/RealESRNet_x4plus.pth",
         67040989,
+        checksum_sha256="a820b9bde89a874d7599d545567308ce6c128fc8754a53208eda016d40aa81df",
     ),
     ModelInfo(
         "RealESRGAN_x2plus",
@@ -59,6 +69,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "RealESRGAN_x2plus.pth",
         f"{REAL_ESRGAN_RELEASES}/v0.2.1/RealESRGAN_x2plus.pth",
         67061725,
+        checksum_sha256="49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb",
     ),
     ModelInfo(
         "RealESRGAN_x4plus_anime_6B",
@@ -66,6 +77,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "RealESRGAN_x4plus_anime_6B.pth",
         f"{REAL_ESRGAN_RELEASES}/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth",
         17938799,
+        checksum_sha256="f872d837d3c90ed2e05227bed711af5671a6fd1c9f7d7e91c911a61f155e99da",
     ),
     ModelInfo(
         "realesr-animevideov3",
@@ -73,6 +85,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "realesr-animevideov3.pth",
         f"{REAL_ESRGAN_RELEASES}/v0.2.5.0/realesr-animevideov3.pth",
         2504012,
+        checksum_sha256="b8a8376811077954d82ca3fcf476f1ac3da3e8a68a4f4d71363008000a18b75d",
     ),
     ModelInfo(
         "realesr-general-x4v3",
@@ -80,6 +93,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "realesr-general-x4v3.pth",
         f"{REAL_ESRGAN_RELEASES}/v0.2.5.0/realesr-general-x4v3.pth",
         4885111,
+        checksum_sha256="8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292",
     ),
     ModelInfo(
         "realesr-general-wdn-x4v3",
@@ -87,6 +101,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "realesr-general-wdn-x4v3.pth",
         f"{REAL_ESRGAN_RELEASES}/v0.2.5.0/realesr-general-wdn-x4v3.pth",
         4885111,
+        checksum_sha256="1641f8c4464b9f097c9fdda5589273713f67cf59f3d909e0bd688f0cee269dca",
         listed=False,
     ),
     ModelInfo(
@@ -95,6 +110,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "GFPGANv1.4.pth",
         f"{GFPGAN_RELEASES}/v1.3.4/GFPGANv1.4.pth",
         348632874,
+        checksum_sha256="e2cd4703ab14f4d01fd1383a8a8b266f9a5833dacee8e6a79d3bf21a1b6be5ad",
     ),
     ModelInfo(
         "facexlib-detection-retinaface-resnet50",
@@ -102,6 +118,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "detection_Resnet50_Final.pth",
         f"{FACEXLIB_RELEASES}/v0.1.0/detection_Resnet50_Final.pth",
         109497761,
+        checksum_sha256="6d1de9c2944f2ccddca5f5e010ea5ae64a39845a86311af6fdf30841b0a5a16d",
         listed=False,
     ),
     ModelInfo(
@@ -110,6 +127,7 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         "parsing_parsenet.pth",
         f"{FACEXLIB_RELEASES}/v0.2.2/parsing_parsenet.pth",
         85331193,
+        checksum_sha256="3d558d8d0e42c20224f13cf5a29c79eba2d59913419f945545d8cf7b72920de2",
         listed=False,
     ),
 )
@@ -268,6 +286,15 @@ def verify_model_file(path: Path, info: ModelInfo | None = None) -> dict[str, ob
             details={"path": str(path)},
         )
     size = path.stat().st_size
+    # A model PixelUp knows how to download must carry a pinned SHA-256; otherwise
+    # verification would silently fall back to a size check, which cannot detect a
+    # substituted same-size file. A missing pin is a registry defect, not a soft pass.
+    if info is not None and info.url is not None and info.checksum_sha256 is None:
+        raise PixelupError(
+            ErrorCode.INTERNAL_ERROR,
+            f"Model '{info.name}' has no pinned checksum; refusing to trust it.",
+            details={"model": info.name, "path": str(path)},
+        )
     checksum = _sha256(path) if info and info.checksum_sha256 else None
     ok = size > 0
     if info and info.expected_size is not None:

@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,10 @@ from filelock import FileLock
 
 from pixelup.errors import PixelupError
 from pixelup.models import ModelInfo, download_model_info, require_model_present, verify_model_file
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def test_require_model_present_accepts_custom_model_file(tmp_path: Path) -> None:
@@ -25,9 +30,51 @@ def test_verify_model_file_rejects_wrong_size(tmp_path: Path) -> None:
     assert excinfo.value.code == "model_corrupt"
 
 
+def test_verify_model_file_rejects_checksum_mismatch(tmp_path: Path) -> None:
+    # Correct size, wrong bytes: a substituted same-size file must be caught by the
+    # SHA-256 gate, which a size-only check could not detect.
+    content = b"the real weights"
+    model_file = tmp_path / "model.pth"
+    model_file.write_bytes(content)
+    info = ModelInfo(
+        "model",
+        None,
+        "model.pth",
+        None,
+        expected_size=len(content),
+        checksum_sha256=_sha256_hex(b"a different blob of the same length!!"),
+    )
+
+    with pytest.raises(PixelupError) as excinfo:
+        verify_model_file(model_file, info)
+
+    assert excinfo.value.code == "model_corrupt"
+
+
+def test_verify_model_file_requires_pinned_checksum_for_downloadable(tmp_path: Path) -> None:
+    # A model PixelUp knows how to download (it has a url) must carry a pinned
+    # checksum; without one, verification must not fall back to a size-only pass.
+    model_file = tmp_path / "model.pth"
+    model_file.write_bytes(b"weights")
+    info = ModelInfo(
+        "downloadable",
+        None,
+        "model.pth",
+        "https://example.com/model.pth",
+        expected_size=7,
+        checksum_sha256=None,
+    )
+
+    with pytest.raises(PixelupError) as excinfo:
+        verify_model_file(model_file, info)
+
+    assert excinfo.value.code == "internal_error"
+
+
 def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -> None:
+    content = b"downloaded weights"
     source = tmp_path / "source.pth"
-    source.write_bytes(b"downloaded weights")
+    source.write_bytes(content)
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
@@ -35,6 +82,7 @@ def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=source.stat().st_size,
+        checksum_sha256=_sha256_hex(content),
     )
     events: list[tuple[str, int, int | None]] = []
 
@@ -54,8 +102,9 @@ def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -
 def test_download_model_info_skips_valid_existing_file(tmp_path: Path) -> None:
     models_dir = tmp_path / "models"
     models_dir.mkdir()
+    existing = b"existing"
     target = models_dir / "local-model.pth"
-    target.write_bytes(b"existing")
+    target.write_bytes(existing)
     source = tmp_path / "source.pth"
     source.write_bytes(b"different")
     info = ModelInfo(
@@ -64,6 +113,7 @@ def test_download_model_info_skips_valid_existing_file(tmp_path: Path) -> None:
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=target.stat().st_size,
+        checksum_sha256=_sha256_hex(existing),
     )
 
     result = download_model_info(

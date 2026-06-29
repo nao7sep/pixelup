@@ -10,10 +10,36 @@ from pixelup.errors import PixelupError
 from pixelup.inference import (
     InferenceConfig,
     ModelArchitectureSpec,
+    _assert_safe_torch_load,
     _build_network,
     model_architecture_spec,
 )
 from pixelup.upscale import count_tiles
+
+
+def _fake_torch(version: str) -> ModuleType:
+    module = ModuleType("torch")
+    module.__version__ = version  # type: ignore[attr-defined]
+    return module
+
+
+def test_assert_safe_torch_load_rejects_pre_2_6() -> None:
+    # torch < 2.6 loaded weights with full unpickling by default; refuse it.
+    with pytest.raises(PixelupError) as excinfo:
+        _assert_safe_torch_load(_fake_torch("2.5.1"))
+    assert excinfo.value.code == "internal_error"
+
+
+def test_assert_safe_torch_load_accepts_2_6_and_newer() -> None:
+    # No raise == the safe-load floor is satisfied.
+    _assert_safe_torch_load(_fake_torch("2.6.0"))
+    _assert_safe_torch_load(_fake_torch("2.11.0+cpu"))
+
+
+def test_assert_safe_torch_load_tolerates_unparseable_version() -> None:
+    # An odd build string must not brick a legitimate install; the SHA-256 pin
+    # stays the primary protection.
+    _assert_safe_torch_load(_fake_torch("weird-build"))
 
 
 def test_model_architecture_specs_match_builtin_models() -> None:

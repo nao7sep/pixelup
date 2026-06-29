@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import threading
 import warnings
 from collections.abc import Callable, Mapping
@@ -401,12 +402,39 @@ def _read_input_image(path: Path) -> Any:
     )
 
 
+# pixelup never calls torch.load itself — the third-party loaders (RealESRGANer,
+# GFPGANer, facexlib) own that call and pass no weights_only argument. Model-load
+# safety therefore rests on two things: every model is verified against a pinned
+# SHA-256 before it is loaded (models.verify_model_file), and torch.load's default
+# is the safe weights_only=True, which holds from torch 2.6 onward. We assert that
+# floor here so a downgrade below 2.6 fails loudly rather than silently restoring
+# full-pickle execution. Every shipped model is a plain state_dict that loads under
+# weights_only=True; a future model needing a non-tensor global would be allowed
+# surgically via torch.serialization.add_safe_globals — never with weights_only=False.
+_MIN_SAFE_TORCH = (2, 6)
+
+
 def _import_torch() -> Any:
     try:
         import torch
     except ImportError as exc:
         raise _missing_inference_dependency("torch", exc) from exc
+    _assert_safe_torch_load(torch)
     return torch
+
+
+def _assert_safe_torch_load(torch_module: Any) -> None:
+    match = re.match(r"(\d+)\.(\d+)", str(torch_module.__version__))
+    if match is None:
+        return  # unparseable build string: fall back to the SHA-256 pin, do not brick
+    if (int(match.group(1)), int(match.group(2))) < _MIN_SAFE_TORCH:
+        raise PixelupError(
+            ErrorCode.INTERNAL_ERROR,
+            "PixelUp requires torch >= 2.6, where torch.load defaults to the safe "
+            "weights_only=True; the installed torch is older and would load model "
+            "weights with full unpickling.",
+            details={"torch_version": str(torch_module.__version__)},
+        )
 
 
 def _import_numpy() -> Any:
