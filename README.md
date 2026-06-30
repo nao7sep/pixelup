@@ -13,7 +13,7 @@ PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRG
 
 - macOS or Windows
 - Python with [uv](https://docs.astral.sh/uv/)
-- Model weights (Real-ESRGAN, plus GFPGAN for face enhancement) — fetched on demand from their official GitHub releases and verified against a pinned SHA-256
+- Model weights (Real-ESRGAN, plus GFPGAN and its facexlib detection/parsing weights for face enhancement) — fetched on demand from their official GitHub releases and verified against a pinned SHA-256
 - Optional: a GPU/MPS/CUDA backend for faster inference (CPU is the fallback)
 
 ## Getting started

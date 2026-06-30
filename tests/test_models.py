@@ -158,6 +158,38 @@ def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path
     assert target.read_bytes() == b"whatever is already on disk"
 
 
+def test_download_model_info_removes_temp_on_verification_failure(tmp_path: Path) -> None:
+    # A fully downloaded temp file whose bytes fail verification (wrong pinned
+    # checksum) must be cleaned up: download_model_info raises model_corrupt, no
+    # target file is published, and no leftover .tmp remains in models_dir. This is
+    # the Deliver/fail-clean invariant on the most security-relevant path — a
+    # substituted or corrupt download must never reach the cache.
+    content = b"downloaded weights"
+    source = tmp_path / "source.pth"
+    source.write_bytes(content)
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        source.resolve().as_uri(),
+        expected_size=len(content),
+        checksum_sha256=_sha256_hex(b"a different blob of the same length"),
+    )
+
+    with pytest.raises(PixelupError) as excinfo:
+        download_model_info(
+            models_dir,
+            info,
+            download_timeout=10,
+            lock_timeout=1,
+        )
+
+    assert excinfo.value.code == "model_corrupt"
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
 def test_download_model_info_cancels_while_waiting_for_lock(tmp_path: Path) -> None:
     # When the download lock is held by another process and the caller signals
     # cancellation, the wait must abort with JOB_CANCELLED instead of blocking
