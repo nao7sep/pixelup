@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QVBoxLayout,
@@ -24,8 +25,40 @@ from pixelup.app_config import (
 )
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
 from pixelup.paths import OutputFormat
-from pixelup.ui_common import use_regular_spacing
+from pixelup.ui_common import secondary_label, use_regular_spacing
 from pixelup.widgets import NoWheelSpinBox, device_combo, output_format_combo
+
+# A settled column width for the value fields so a control and its wrapped
+# caption share one edge, and captions wrap predictably instead of stretching
+# the dialog to the widest single line.
+_FIELD_WIDTH = 320
+
+
+def _captioned(control: QWidget, caption: str, *, fill: bool = False) -> QWidget:
+    """Group a control with a muted caption directly beneath it.
+
+    The caption reads as sub-text of its control (a tight 2px gap) rather than a
+    peer form row a full row-gap away. ``fill`` lets a wide field (the font line
+    edit) span the column, while compact controls (spin boxes, combos) stay left.
+    """
+    container = QWidget()
+    container.setFixedWidth(_FIELD_WIDTH)
+    box = QVBoxLayout(container)
+    box.setContentsMargins(0, 0, 0, 0)
+    box.setSpacing(2)
+    if fill:
+        box.addWidget(control)
+    else:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(control)
+        row.addStretch()
+        box.addLayout(row)
+    cap = secondary_label(caption)
+    cap.setWordWrap(True)
+    box.addWidget(cap)
+    return container
 
 
 class SettingsDialog(QDialog):
@@ -75,18 +108,22 @@ class SettingsDialog(QDialog):
         self.font_family.setText(config.font_family)
         self.font_family.setMinimumWidth(260)
 
-        # UI font leads as the one app-appearance setting, set apart from the
-        # image-processing job defaults that follow.
+        # Each caption groups under its own control (see _captioned) rather than
+        # floating a full row-gap away, so the label reads as sub-text of the
+        # field it explains. Row labels top-align to sit beside the control, not
+        # the caption. UI font leads as the one app-appearance setting, set apart
+        # from the image-processing job defaults that follow.
+        label_align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         row = 0
-        form.addWidget(QLabel("UI font"), row, 0)
-        form.addWidget(self.font_family, row, 1)
-        row += 1
-        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(QLabel("UI font"), row, 0, label_align)
         form.addWidget(
-            QLabel("Comma-separated; the first font installed on this system is used."),
+            _captioned(
+                self.font_family,
+                "Comma-separated; the first font installed on this system is used.",
+                fill=True,
+            ),
             row,
             1,
-            Qt.AlignmentFlag.AlignLeft,
         )
         row += 1
         form.addWidget(QLabel("Concurrent jobs"), row, 0)
@@ -98,37 +135,25 @@ class SettingsDialog(QDialog):
         form.addWidget(QLabel("Output format"), row, 0)
         form.addWidget(self.format, row, 1, Qt.AlignmentFlag.AlignLeft)
         row += 1
-        form.addWidget(QLabel("Quality"), row, 0)
-        form.addWidget(self.quality, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(QLabel("Quality"), row, 0, label_align)
         form.addWidget(
-            QLabel("Used for JPG and WebP. Ignored for PNG."),
+            _captioned(self.quality, "Used for JPG and WebP. Ignored for PNG."),
             row,
             1,
-            Qt.AlignmentFlag.AlignLeft,
         )
         row += 1
-        form.addWidget(QLabel("Tile size"), row, 0)
-        form.addWidget(self.tile, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(QLabel("Tile size"), row, 0, label_align)
         form.addWidget(
-            QLabel("Lower uses less memory; 0 processes the whole image at once."),
+            _captioned(self.tile, "Lower uses less memory; 0 processes the whole image at once."),
             row,
             1,
-            Qt.AlignmentFlag.AlignLeft,
         )
         row += 1
-        form.addWidget(QLabel("Device"), row, 0)
-        form.addWidget(self.device, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
-        form.addWidget(QLabel(""), row, 0)
+        form.addWidget(QLabel("Device"), row, 0, label_align)
         form.addWidget(
-            QLabel("Auto lets Real-ESRGAN choose the best available device."),
+            _captioned(self.device, "Auto lets Real-ESRGAN choose the best available device."),
             row,
             1,
-            Qt.AlignmentFlag.AlignLeft,
         )
         form.setColumnStretch(0, 0)
         form.setColumnStretch(1, 0)

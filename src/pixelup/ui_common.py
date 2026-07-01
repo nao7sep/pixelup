@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QLayout
+from PySide6.QtGui import QDesktopServices, QPalette
+from PySide6.QtWidgets import QApplication, QLabel, QLayout
 
 REGULAR_SPACING = 10
 
@@ -46,6 +46,27 @@ def use_regular_spacing(layout: QLayout, *, margins: bool = True) -> None:
     margin = REGULAR_SPACING if margins else 0
     layout.setContentsMargins(margin, margin, margin, margin)
     layout.setSpacing(REGULAR_SPACING)
+
+
+def title_label(text: str) -> QLabel:
+    """A large, bold label for a dialog's primary heading (e.g. the app name)."""
+    label = QLabel(text)
+    font = label.font()
+    font.setPointSizeF(font.pointSizeF() * 1.6)
+    font.setBold(True)
+    label.setFont(font)
+    return label
+
+
+def secondary_label(text: str) -> QLabel:
+    """A muted label for supporting text (version, captions, copyright).
+
+    Uses the palette's placeholder-text role so the de-emphasis follows the OS
+    light/dark theme rather than a hard-coded gray.
+    """
+    label = QLabel(text)
+    label.setForegroundRole(QPalette.ColorRole.PlaceholderText)
+    return label
 
 
 def apply_scrollbar_style(app: QApplication) -> None:

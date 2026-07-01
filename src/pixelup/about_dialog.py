@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup import __version__
-from pixelup.ui_common import open_url, use_regular_spacing
+from pixelup.ui_common import open_url, secondary_label, title_label, use_regular_spacing
 
 PROJECT_URL = "https://github.com/nao7sep/pixelup"
 ISSUES_URL = "https://github.com/nao7sep/pixelup/issues"
@@ -22,11 +22,17 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("About PixelUp")
         self.setModal(True)
+        self.setMinimumWidth(400)
 
         layout = QVBoxLayout(self)
-        use_regular_spacing(layout)
-        name = QLabel("PixelUp")
-        version = QLabel(f"Version {__version__}")
+        # A graduated rhythm rather than the uniform default: the outer margins
+        # give the surface room, spacing is added explicitly per section so the
+        # heading groups with its version and the sections below stay distinct.
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(0)
+
+        name = title_label("PixelUp")
+        version = secondary_label(f"Version {__version__}")
         copy = QLabel("Upscale local images with Real-ESRGAN in a simple desktop workflow.")
         copy.setWordWrap(True)
 
@@ -37,12 +43,11 @@ class AboutDialog(QDialog):
         github_button.clicked.connect(lambda: open_url(PROJECT_URL))
         issues_button = QPushButton("Report issue")
         issues_button.clicked.connect(lambda: open_url(ISSUES_URL))
-        links_layout.addStretch()
         links_layout.addWidget(github_button)
         links_layout.addWidget(issues_button)
         links_layout.addStretch()
 
-        meta = QLabel("(c) 2026 Yoshinao Inoguchi - MIT License")
+        meta = secondary_label("(c) 2026 Yoshinao Inoguchi - MIT License")
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         # Close has RejectRole, so `rejected` covers both the button click and
@@ -50,8 +55,13 @@ class AboutDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         layout.addWidget(name)
+        layout.addSpacing(4)
         layout.addWidget(version)
+        layout.addSpacing(12)
         layout.addWidget(copy)
+        layout.addSpacing(16)
         layout.addWidget(links)
+        layout.addSpacing(16)
         layout.addWidget(meta)
+        layout.addSpacing(16)
         layout.addWidget(buttons)
