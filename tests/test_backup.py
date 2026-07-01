@@ -31,7 +31,8 @@ def _write_config(home: Path, text: str = '{"quality": 95}\n') -> Path:
 
 
 def _read_index(home: Path) -> list[dict]:
-    return json.loads((home / "backups" / "index.json").read_text(encoding="utf-8"))
+    """The index's `entries` rows (the file is a JSON object wrapping them — the fleet shape)."""
+    return json.loads((home / "backups" / "index.json").read_text(encoding="utf-8"))["entries"]
 
 
 def _archives(home: Path) -> list[Path]:
@@ -56,6 +57,8 @@ def test_first_run_captures_config_with_shared_schema(
     with zipfile.ZipFile(archives[0]) as zf:
         assert zf.namelist() == ["config.json"]
 
+    raw = json.loads((home / "backups" / "index.json").read_text(encoding="utf-8"))
+    assert set(raw.keys()) == {"entries"}  # object wrapper (fleet shape), not a bare array
     index = _read_index(home)
     assert len(index) == 1
     row = index[0]
@@ -123,7 +126,7 @@ def test_broken_index_is_reset_and_full_backup_taken(
     assert report.index_was_reset is True
     assert report.outcome == "files_archived"
     assert report.files_archived == 1
-    # The reset index is now a clean array with the fresh full-backup row.
+    # The reset index now holds the fresh full-backup row.
     index = _read_index(home)
     assert len(index) == 1
     assert index[0]["archivePath"] == "config.json"
@@ -158,6 +161,9 @@ def test_always_exclude_noise_files_are_dropped(
     home = _home(tmp_path, monkeypatch)
     _write_config(home)
     (home / ".DS_Store").write_text("junk", encoding="utf-8")
+    (home / "Thumbs.db").write_text("junk", encoding="utf-8")
+    (home / "desktop.ini").write_text("junk", encoding="utf-8")
+    (home / "Desktop.ini").write_text("junk", encoding="utf-8")  # OS-noise floor, case-insensitive
     (home / "scratch.tmp").write_text("junk", encoding="utf-8")
 
     run_backup(home, now=datetime(2026, 7, 1, 2, 22, 20, tzinfo=UTC))

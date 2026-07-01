@@ -210,10 +210,13 @@ def load_index(index_path: Path) -> tuple[list[IndexRecord], bool]:
         data = json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return [], True
-    if not isinstance(data, list):
+    if not isinstance(data, dict):
+        return [], True
+    rows = data.get("entries")
+    if not isinstance(rows, list):
         return [], True
     records: list[IndexRecord] = []
-    for row in data:
+    for row in rows:
         if not isinstance(row, dict):
             return [], True
         try:
@@ -248,7 +251,7 @@ def _write_archive(backups_dir: Path, archived_at: str, changed: list[Candidate]
 
 def _write_index(index_path: Path, records: list[IndexRecord]) -> None:
     """Atomically write the whole index (temp then os.replace)."""
-    payload = json.dumps([record.to_json() for record in records], indent=2) + "\n"
+    payload = json.dumps({"entries": [record.to_json() for record in records]}, indent=2) + "\n"
     temp_path = index_path.parent / f".{INDEX_FILE_NAME}.{os.getpid()}.{uuid4().hex}.tmp"
     try:
         temp_path.write_text(payload, encoding="utf-8")
