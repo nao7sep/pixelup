@@ -40,8 +40,9 @@ BACKUPS_DIR_MODE = 0o700
 # backups/ are always-exclude by the shared spec.
 EXCLUDED_DIR_NAMES = frozenset({BACKUPS_DIR_NAME, "logs", "models", "temp"})
 
-# Always-exclude noise files, matched anywhere in the tree.
-EXCLUDED_FILE_NAMES = frozenset({".DS_Store", "Thumbs.db"})
+# Always-exclude OS/file-manager noise, matched anywhere in the tree by lowercased base name (the fleet
+# floor): a file manager drops these into any directory the user opens.
+EXCLUDED_FILE_NAMES = frozenset({".ds_store", "thumbs.db", "desktop.ini"})
 EXCLUDED_SUFFIXES = (".tmp",)
 
 
@@ -95,7 +96,7 @@ def _is_excluded(relative: PurePosixPath) -> bool:
     parts = relative.parts
     if parts and parts[0] in EXCLUDED_DIR_NAMES:
         return True
-    name = relative.name
+    name = relative.name.lower()
     if name in EXCLUDED_FILE_NAMES:
         return True
     return any(name.endswith(suffix) for suffix in EXCLUDED_SUFFIXES)
@@ -133,7 +134,10 @@ def collect_candidates(home_root: Path) -> tuple[list[Candidate], list[dict[str,
         return candidates, skips
 
     for path in sorted(home_root.rglob("*")):
-        if not path.is_file():
+        # Never follow a symlink: skip it (a link is not the app's own data, and following one risks
+        # escaping the root). rglob does not recurse into symlinked directories, so a symlinked subtree
+        # stays out too. Only real, regular files are archived.
+        if path.is_symlink() or not path.is_file():
             continue
         relative = PurePosixPath(path.relative_to(home_root).as_posix())
         if _is_excluded(relative):
