@@ -31,10 +31,6 @@ BACKUP_STAMP_FORMAT = "%Y%m%d-%H%M%S-utc"
 # lastWriteUtc values within 2 s count as equal (data-backup-conventions).
 MTIME_EQUAL_WINDOW_MS = 2000
 
-# Owner-only, so an archive never downgrades a restricted-at-rest file to
-# world-readable. Skipped implicitly on Windows (chmod is a near-no-op there).
-BACKUPS_DIR_MODE = 0o700
-
 # Top-level directory names under the home root that are never archived. models/
 # and temp/ are app-specific (large re-fetchable weights; job staging); logs/ and
 # backups/ are always-exclude by the shared spec.
@@ -285,11 +281,9 @@ def run_backup(home_root: Path, *, now: datetime | None = None) -> BackupReport:
         report.outcome = "nothing_changed"
         return report
 
+    # Secrets are excluded from backups, so no permission hardening is needed;
+    # the backups dir is created with default modes.
     backups_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(backups_dir, BACKUPS_DIR_MODE)
-    except OSError:
-        pass  # Windows / restricted filesystems: owner-only is best-effort.
 
     target = _write_archive(backups_dir, archived_at, changed)
 
