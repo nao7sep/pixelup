@@ -47,6 +47,7 @@ from pixelup.app_config import (
     MAX_TILE,
     TILE_STEP,
     config_path,
+    ensure_app_config,
     load_app_config,
     save_app_config,
 )
@@ -153,6 +154,10 @@ class ImagePreview(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self, *, log_file: Path) -> None:
         super().__init__()
+        # Create config.json from the built-in defaults on first run so the settings file exists on
+        # disk immediately, not only after the first save (storage-path conventions). Create-if-absent
+        # — never overwrites an existing file — and before load_app_config reads it.
+        ensure_app_config()
         self.config = load_app_config()
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. A fresh

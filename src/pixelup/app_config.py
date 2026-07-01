@@ -82,6 +82,23 @@ def save_app_config(config: AppConfig, path: Path | None = None) -> None:
     path.write_text(json.dumps(_to_json(config), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def ensure_app_config(path: Path | None = None) -> bool:
+    """Create ``config.json`` from the built-in defaults on first run, only when it is absent.
+
+    So the settings file exists on disk immediately rather than only after the first save
+    (storage-path conventions, "Materializing settings on first run"). The single trigger is
+    absence: an existing file is never inspected or overwritten, so a good or hand-edited file is
+    never at risk. It is written through :func:`save_app_config` — the same serializer the normal
+    save path uses — not a hand-built literal. Returns ``True`` when a file was created.
+    """
+    if path is None:
+        path = config_path()
+    if path.exists():
+        return False
+    save_app_config(AppConfig(), path)
+    return True
+
+
 def _clamp_int(value: Any, default: int, low: int, high: int) -> int:
     try:
         number = int(value)

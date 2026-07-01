@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pixelup.app_config import AppConfig, load_app_config, save_app_config
+from pixelup.app_config import AppConfig, ensure_app_config, load_app_config, save_app_config
 from pixelup.paths import OutputFormat
 
 
@@ -25,6 +25,31 @@ def test_app_config_round_trips_json(tmp_path: Path) -> None:
 
 def test_missing_app_config_uses_defaults(tmp_path: Path) -> None:
     assert load_app_config(tmp_path / "missing.json") == AppConfig()
+
+
+def test_ensure_app_config_writes_defaults_on_first_run(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    assert not path.exists()
+
+    created = ensure_app_config(path)
+
+    assert created is True
+    assert path.exists()
+    # Written through save_app_config, so it round-trips back to the defaults.
+    assert load_app_config(path) == AppConfig()
+
+
+def test_ensure_app_config_never_overwrites_an_existing_file(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    save_app_config(AppConfig(quality=55, tile=256), path)
+    before = path.read_text(encoding="utf-8")
+
+    created = ensure_app_config(path)
+
+    assert created is False
+    # Absence is the single trigger, so an existing file is left byte-for-byte as it was.
+    assert path.read_text(encoding="utf-8") == before
+    assert load_app_config(path).quality == 55
 
 
 def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
