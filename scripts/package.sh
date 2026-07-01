@@ -19,6 +19,17 @@ rm -rf "$DIST" build-pyinstaller
 # uv run --extra build auto-syncs the runtime + build (PyInstaller) deps first.
 uv run --extra build pyinstaller pixelup.spec --workpath build-pyinstaller --distpath "$DIST" --noconfirm
 
+# Wire the macOS 26 (Tahoe) Liquid Glass icon. The spec sets CFBundleIconFile (the classic .icns,
+# read by macOS < 26) and CFBundleIconName -> "pixel-butterfly-paper" (read by macOS 26), but the
+# catalog that name resolves to has to be copied in by hand: build/Assets.car is the committed
+# catalog generated from company/assets by the liquid-glass-icon tool. Drop it into Resources, then
+# re-sign ad-hoc — adding a resource invalidates PyInstaller's own signature. See the
+# liquid-glass-icon-workflow (regenerate with the tool's `apps/pixelup.mjs build` + `deploy`).
+CAR="build/Assets.car"
+[ -f "$CAR" ] || { echo "missing $CAR — regenerate via the liquid-glass-icon tool (apps/pixelup.mjs build + deploy)" >&2; exit 1; }
+cp "$CAR" "$DIST/$APP.app/Contents/Resources/Assets.car"
+codesign --force --deep --sign - "$DIST/$APP.app"
+
 # Fail fast if freezing dropped a lazily-imported dependency (see gui._selftest).
 PIXELUP_SELFTEST=1 "$DIST/$APP.app/Contents/MacOS/$APP"
 

@@ -96,6 +96,12 @@ if is_mac:
             "CFBundleName": "PixelUp",
             "CFBundleDisplayName": "PixelUp",
             "NSHighResolutionCapable": True,
+            # Dual-key icon: CFBundleIconFile (the classic .icns, set by icon= above) is read by
+            # macOS < 26; CFBundleIconName points macOS 26 (Tahoe) at the Liquid Glass Assets.car
+            # that package.sh copies into Contents/Resources/ after the freeze (see the
+            # liquid-glass-icon-workflow). The catalog is generated from company/assets by
+            # company/tools/liquid-glass-icon/apps/pixelup.mjs.
+            "CFBundleIconName": "pixel-butterfly-paper",
             # No document types / URL schemes; PixelUp takes image paths as argv.
         },
     )
