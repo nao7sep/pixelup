@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from collections import defaultdict
 from itertools import count
 from pathlib import Path
@@ -43,6 +44,7 @@ from PySide6.QtWidgets import (
 
 from pixelup import __version__
 from pixelup.about_dialog import AboutDialog
+from pixelup.backup import run_startup_backup
 from pixelup.app_config import (
     MAX_QUALITY,
     MAX_TILE,
@@ -159,6 +161,14 @@ class MainWindow(QMainWindow):
         # disk immediately, not only after the first save (storage-path conventions). Create-if-absent
         # — never overwrites an existing file — and before load_app_config reads it.
         ensure_app_config()
+        # Just-in-case startup backup of the home root (data-backup-conventions).
+        # Fired on a daemon thread AFTER config.json is materialized, so it never
+        # blocks the Qt event loop. The pass is pure file I/O, best-effort, and
+        # self-silencing (see run_startup_backup): it never touches Qt objects,
+        # never blocks startup, and never crashes the app.
+        threading.Thread(
+            target=run_startup_backup, name="pixelup-startup-backup", daemon=True
+        ).start()
         self.config = load_app_config()
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. A fresh
