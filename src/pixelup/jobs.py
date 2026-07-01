@@ -70,13 +70,15 @@ def create_jobs(
     auto_download: bool,
     job_ids: Iterator[int],
 ) -> list[Job]:
-    reserved_by_input: dict[Path, set[Path]] = defaultdict(set)
+    # One reservation set for the whole batch, keyed by resolved absolute path, so
+    # inputs whose stems differ only in case (Photo.png vs photo.png) disambiguate
+    # against each other and not just against pre-existing files.
+    reserved: set[Path] = set()
     for job in existing_jobs:
-        _reserve_output_bundle(reserved_by_input[job.input_path], job.output_path)
+        _reserve_output_bundle(reserved, job.output_path)
 
     jobs: list[Job] = []
     for input_path in input_paths:
-        reserved = reserved_by_input[input_path]
         for model in models:
             model_settings = settings_for_model(settings, model)
             output_path = default_output_path(
@@ -102,16 +104,17 @@ def create_jobs(
 
 
 def retry_failed_jobs(jobs: list[Job]) -> list[int]:
-    reserved_by_input: dict[Path, set[Path]] = defaultdict(set)
+    # One reservation set for the whole batch (see create_jobs): case-only
+    # sibling inputs must disambiguate against each other, not just live files.
+    reserved: set[Path] = set()
     for job in jobs:
         if job.status != "failed":
-            _reserve_output_bundle(reserved_by_input[job.input_path], job.output_path)
+            _reserve_output_bundle(reserved, job.output_path)
 
     retried: list[int] = []
     for job in jobs:
         if job.status != "failed":
             continue
-        reserved = reserved_by_input[job.input_path]
         job.output_path = default_output_path(
             job.input_path,
             model=job.model,

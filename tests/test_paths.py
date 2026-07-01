@@ -99,6 +99,37 @@ def test_default_output_path_treats_reserved_sidecar_as_collision(tmp_path: Path
     assert resolved == tmp_path / "girl-realesr-general-x4v3-4x-2.png"
 
 
+def test_default_output_path_treats_case_only_existing_file_as_collision(tmp_path: Path) -> None:
+    # A sibling that differs only in case is one file on macOS/Windows, so the
+    # planner must disambiguate even on a case-sensitive filesystem.
+    input_path = tmp_path / "Girl.png"
+    (tmp_path / "girl-realesr-general-x4v3-4x.png").write_bytes(b"existing")
+
+    resolved = default_output_path(
+        input_path,
+        model="realesr-general-x4v3",
+        scale=4,
+        output_format=OutputFormat.PNG,
+    )
+
+    assert resolved == tmp_path / "Girl-realesr-general-x4v3-4x-2.png"
+
+
+def test_default_output_path_treats_case_only_reserved_name_as_collision(tmp_path: Path) -> None:
+    input_path = tmp_path / "Girl.png"
+    reserved = {tmp_path / "girl-realesr-general-x4v3-4x.png"}
+
+    resolved = default_output_path(
+        input_path,
+        model="realesr-general-x4v3",
+        scale=4,
+        output_format=OutputFormat.PNG,
+        reserved=reserved,
+    )
+
+    assert resolved == tmp_path / "Girl-realesr-general-x4v3-4x-2.png"
+
+
 def test_model_filename_token_is_lowercase_with_hyphens() -> None:
     assert model_filename_token("RealESRGAN_x4plus_anime_6B") == "realesrgan-x4plus-anime-6b"
 

@@ -1,6 +1,15 @@
 # PixelUp
 
-PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and fetches the models it needs on first use. Pre-release (0.x), currently run from source.
+PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and fetches the models it needs on first use. Pre-release (0.x).
+
+## Download
+
+Prebuilt builds for **macOS (Apple Silicon)** and **Windows (x64)** are on the [Releases](https://github.com/nao7sep/pixelup/releases) page — a `.dmg` / `setup.exe` installer or a portable `.zip`. The builds are **self-contained** (no Python or uv install needed) and **unsigned**, so the OS warns the first time you open one:
+
+- **macOS** — right-click the app and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/PixelUp.app`).
+- **Windows** — on the SmartScreen prompt, click **More info → Run anyway**.
+
+Model weights are still fetched on demand on first use (verified against a pinned SHA-256).
 
 ## Features
 
@@ -11,14 +20,14 @@ PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRG
 
 ## Requirements
 
-- macOS or Windows
-- Python with [uv](https://docs.astral.sh/uv/)
-- Model weights (Real-ESRGAN, plus GFPGAN and its facexlib detection/parsing weights for face enhancement) — fetched on demand from their official GitHub releases and verified against a pinned SHA-256
-- Optional: a GPU/MPS/CUDA backend for faster inference (CPU is the fallback)
+- **macOS (Apple Silicon)** or **Windows (x64)** to run a prebuilt download — self-contained, nothing to install.
+- **Python with [uv](https://docs.astral.sh/uv/)** only if you run or build from source.
+- Model weights (Real-ESRGAN, plus GFPGAN and its facexlib detection/parsing weights for face enhancement) — fetched on demand from their official GitHub releases and verified against a pinned SHA-256.
+- Optional: a GPU/MPS/CUDA backend for faster inference (CPU is the fallback).
 
 ## Getting started
 
-Double-click the launcher for your platform (`scripts/run-dev.command` on macOS, `scripts/run-dev.ps1` on Windows), or run from source:
+Run from source (the developer path) — double-click the launcher for your platform (`scripts/run-dev.command` on macOS, `scripts/run-dev.ps1` on Windows), or:
 
 ```console
 uv sync --extra dev

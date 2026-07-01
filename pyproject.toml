@@ -32,9 +32,25 @@ dev = [
   "pytest-cov==7.0.0",
   "ruff==0.15.12",
 ]
+# Packaging-only: the freezer that builds the double-click .app/.exe. Kept out of the
+# runtime deps (test_packaging.py pins those) and out of dev so a normal test/dev sync
+# stays lean — `uv sync --extra build` is only needed by scripts/package.* and CI.
+build = [
+  "pyinstaller==6.16.0",
+]
 
 [project.gui-scripts]
 pixelup = "pixelup.gui:main"
+
+[tool.uv]
+# realesrgan hard-depends on the original `basicsr`, but pixelup pins `basicsr-fixed`
+# — a patched fork that installs under the same `basicsr` import name and fixes its
+# `from torchvision.transforms.functional_tensor import ...` (that module was removed
+# in modern torchvision). Installing both is a same-directory file collision whose
+# winner depends on install order: fine locally (fixed fork won), but on CI the
+# original won and the frozen macOS build crashed on first import. Drop the original
+# from the graph via a never-true marker so only the fixed fork provides `basicsr`.
+override-dependencies = ["basicsr ; sys_platform == 'nonexistent'"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

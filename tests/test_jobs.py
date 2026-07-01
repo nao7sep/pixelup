@@ -207,6 +207,36 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
     }
 
 
+def test_create_jobs_disambiguates_case_only_sibling_inputs(tmp_path: Path) -> None:
+    # Photo.png and photo.png live in one directory; their default output stems
+    # differ only in case and would clobber each other on macOS/Windows. The
+    # batch-wide reservation set must give them distinct output filenames.
+    upper = tmp_path / "Photo.png"
+    lower = tmp_path / "photo.png"
+    upper.write_bytes(b"")
+    lower.write_bytes(b"")
+
+    jobs = create_jobs(
+        input_paths=[upper, lower],
+        models=["realesr-general-x4v3"],
+        scale=4,
+        settings=JobSettings(output_format=OutputFormat.PNG),
+        existing_jobs=[],
+        auto_download=True,
+        job_ids=count(1),
+    )
+
+    assert len(jobs) == 2
+    # Human-derived names are preserved (not lowercased); only the disambiguation
+    # suffix separates the two, and their names differ case-insensitively.
+    names = [job.output_path.name for job in jobs]
+    assert names == [
+        "Photo-realesr-general-x4v3-4x.png",
+        "photo-realesr-general-x4v3-4x-2.png",
+    ]
+    assert len({name.casefold() for name in names}) == 2
+
+
 def test_create_jobs_separates_sidecars_across_output_formats(tmp_path: Path) -> None:
     # Same image + model + scale, different output formats — the two jobs share
     # the default stem, so a single sidecar JSON would overwrite. The planner

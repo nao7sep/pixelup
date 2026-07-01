@@ -93,7 +93,9 @@ def collision_safe_path(
     reserved: set[Path] | None = None,
     companion_suffixes: tuple[str, ...] = (),
 ) -> Path:
-    used = {item.expanduser().resolve() for item in (reserved or set())}
+    # Keys are casefolded so a candidate collides with any file or reservation
+    # that differs only in case — on macOS/Windows the two would be one file.
+    used = {_collision_key(item) for item in (reserved or set())}
     candidate = path.expanduser().resolve()
     if _bundle_is_free(candidate, companion_suffixes, used):
         return candidate
@@ -108,13 +110,32 @@ def collision_safe_path(
     )
 
 
+def _collision_key(path: Path) -> str:
+    return str(path.expanduser().resolve()).casefold()
+
+
+def _exists_case_insensitively(path: Path) -> bool:
+    # os-level exists() already answers this on case-insensitive filesystems;
+    # the directory scan is what catches a case-only sibling on Linux.
+    if path.exists():
+        return True
+    parent = path.parent
+    if not parent.is_dir():
+        return False
+    target = path.name.casefold()
+    return any(entry.name.casefold() == target for entry in parent.iterdir())
+
+
 def _bundle_is_free(
     candidate: Path,
     companion_suffixes: tuple[str, ...],
-    used: set[Path],
+    used: set[str],
 ) -> bool:
     paths = [candidate, *(candidate.with_suffix(suffix) for suffix in companion_suffixes)]
-    return all(not path.exists() and path not in used for path in paths)
+    return all(
+        not _exists_case_insensitively(path) and _collision_key(path) not in used
+        for path in paths
+    )
 
 
 def model_filename_token(model: str) -> str:

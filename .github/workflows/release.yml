@@ -1,0 +1,74 @@
+name: Release
+
+# PixelUp is a PySide6 GUI app, frozen to a double-click binary with PyInstaller
+# (scripts/package.sh on macOS, scripts/package.ps1 on Windows — the spec is
+# pixelup.spec). Per the app-release-conventions: a test gate runs first, then each
+# OS packages its own installer + portable, and everything is attached to a DRAFT
+# release for inspection before publishing. Nothing is published automatically.
+#
+#   - push a tag `v*` -> test, build both OSes, attach the artifacts to a draft for that tag.
+#   - manual dispatch -> test + build only (no release), a smoke check.
+#
+# Python is pinned to 3.12 (the developed/run-on version): setup-uv defaults to the
+# newest Python (3.14), on which the transitive basicsr 1.4.2 (via realesrgan) fails
+# to build its legacy setup.py.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --extra dev
+      # Test gate: a red suite means no build. GUI tests run headless (offscreen Qt);
+      # the real-inference smoke self-skips unless PIXELUP_RUN_REAL_INFERENCE=1.
+      - run: uv run pytest
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      # Each script freezes the app with PyInstaller and emits this platform's
+      # installer + portable into dist/ (and self-tests the frozen bundle).
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ./scripts/package.sh
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: ./scripts/package.ps1
+        shell: pwsh
+
+      - name: Attach to draft release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          draft: true
+          prerelease: true # 0.x is pre-release
+          files: |
+            dist/*.dmg
+            dist/*-setup.exe
+            dist/*-mac.zip
+            dist/*-win.zip

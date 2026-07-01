@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections import defaultdict
@@ -955,7 +956,42 @@ def build_app(
     return app, window
 
 
+def _selftest() -> int:
+    """Import the full runtime stack and exit — proof that a build resolved every
+    dependency, without downloading models or running inference.
+
+    The inference libraries (torch, realesrgan, basicsr, gfpgan, facexlib, cv2) are
+    imported lazily deep inside functions, so a frozen PyInstaller bundle can build
+    and even launch while silently missing one of them — the gap only surfaces when a
+    user first upscales. Running the packaged binary with PIXELUP_SELFTEST=1 forces
+    every such import up front, so CI/packaging catches a missing hidden-import here
+    rather than in the user's hands. Import-only: no window, no network, no weights.
+    """
+    import importlib
+
+    for module in (
+        "torch",
+        "torchvision",
+        "cv2",
+        "numpy",
+        "PIL",
+        "pillow_heif",
+        "filelock",
+        "realesrgan",
+        "realesrgan.archs.srvgg_arch",
+        "basicsr",
+        "basicsr.archs.rrdbnet_arch",
+        "gfpgan",
+        "facexlib",
+        "PySide6.QtWidgets",
+    ):
+        importlib.import_module(module)
+    return 0
+
+
 def main() -> int:
+    if os.environ.get("PIXELUP_SELFTEST") == "1":
+        return _selftest()
     app, _window = build_app(sys.argv)
     return app.exec()
 
