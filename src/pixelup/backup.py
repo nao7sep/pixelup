@@ -322,7 +322,8 @@ def run_startup_backup(home_root: Path | None = None) -> None:
                 index_was_reset=report.index_was_reset,
             )
         else:
-            log.info(
+            # The common outcome; at debug so a normal no-op run is silent in production.
+            log.debug(
                 "backup.nothing_changed",
                 skips=len(report.skips),
                 index_was_reset=report.index_was_reset,
