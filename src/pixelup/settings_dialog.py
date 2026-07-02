@@ -126,11 +126,11 @@ class SettingsDialog(QDialog):
             1,
         )
         row += 1
-        form.addWidget(QLabel("Concurrent jobs"), row, 0)
-        form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)
-        row += 1
         form.addWidget(QLabel(""), row, 0)
         form.addWidget(self.auto_download, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
+        form.addWidget(QLabel("Concurrent jobs"), row, 0)
+        form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)
         row += 1
         form.addWidget(QLabel("Output format"), row, 0)
         form.addWidget(self.format, row, 1, Qt.AlignmentFlag.AlignLeft)
