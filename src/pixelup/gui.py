@@ -44,7 +44,6 @@ from PySide6.QtWidgets import (
 
 from pixelup import __version__
 from pixelup.about_dialog import AboutDialog
-from pixelup.backup import run_startup_backup
 from pixelup.app_config import (
     MAX_QUALITY,
     MAX_TILE,
@@ -54,6 +53,7 @@ from pixelup.app_config import (
     load_app_config,
     save_app_config,
 )
+from pixelup.backup import run_startup_backup
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.errors import PixelupError
 from pixelup.fonts import apply_ui_font
@@ -157,9 +157,10 @@ class ImagePreview(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self, *, log_file: Path) -> None:
         super().__init__()
-        # Create config.json from the built-in defaults on first run so the settings file exists on
-        # disk immediately, not only after the first save (storage-path conventions). Create-if-absent
-        # — never overwrites an existing file — and before load_app_config reads it.
+        # Create config.json from the built-in defaults on first run so the settings file exists
+        # on disk immediately, not only after the first save (storage-path conventions).
+        # Create-if-absent — never overwrites an existing file — and before load_app_config
+        # reads it.
         ensure_app_config()
         # Just-in-case startup backup of the home root (data-backup-conventions).
         # Fired on a daemon thread AFTER config.json is materialized, so it never

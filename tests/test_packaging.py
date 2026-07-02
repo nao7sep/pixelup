@@ -4,11 +4,11 @@ import tomllib
 from pathlib import Path
 
 EXPECTED_RUNTIME_PINS = {
-    "PySide6": "6.11.0",
-    "Pillow": "12.2.0",
-    "pillow-heif": "1.3.0",
-    "filelock": "3.29.0",
-    "numpy": "2.4.4",
+    "PySide6": "6.11.1",
+    "Pillow": "12.3.0",
+    "pillow-heif": "1.4.0",
+    "filelock": "3.29.4",
+    "numpy": "2.4.6",
     "torch": "2.12.1",
     "torchvision": "0.27.1",
     "opencv-python": "4.13.0.92",

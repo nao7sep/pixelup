@@ -36,8 +36,8 @@ MTIME_EQUAL_WINDOW_MS = 2000
 # backups/ are always-exclude by the shared spec.
 EXCLUDED_DIR_NAMES = frozenset({BACKUPS_DIR_NAME, "logs", "models", "temp"})
 
-# Always-exclude OS/file-manager noise, matched anywhere in the tree by lowercased base name (the fleet
-# floor): a file manager drops these into any directory the user opens.
+# Always-exclude OS/file-manager noise, matched anywhere in the tree by lowercased base name
+# (the fleet floor): a file manager drops these into any directory the user opens.
 EXCLUDED_FILE_NAMES = frozenset({".ds_store", "thumbs.db", "desktop.ini"})
 EXCLUDED_SUFFIXES = (".tmp",)
 
@@ -130,9 +130,9 @@ def collect_candidates(home_root: Path) -> tuple[list[Candidate], list[dict[str,
         return candidates, skips
 
     for path in sorted(home_root.rglob("*")):
-        # Never follow a symlink: skip it (a link is not the app's own data, and following one risks
-        # escaping the root). rglob does not recurse into symlinked directories, so a symlinked subtree
-        # stays out too. Only real, regular files are archived.
+        # Never follow a symlink: skip it (a link is not the app's own data, and following one
+        # risks escaping the root). rglob does not recurse into symlinked directories, so a
+        # symlinked subtree stays out too. Only real, regular files are archived.
         if path.is_symlink() or not path.is_file():
             continue
         relative = PurePosixPath(path.relative_to(home_root).as_posix())
