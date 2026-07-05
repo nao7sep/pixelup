@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
-from uuid import uuid4
 
 from filelock import FileLock, Timeout
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.nanoid import nanoid
 from pixelup.session_log import log
 
 DownloadCallback = Callable[[str, int, int | None], None]
@@ -244,7 +244,7 @@ def download_model_info(
         # an atomic same-filesystem rename — a cross-volume temp/ could degrade
         # that to a copy. (Image-output staging uses temp/ in imaging.py; model
         # publish needs the same-fs guarantee.)
-        temp_path = models_dir / f"{target.stem}-{uuid4().hex}.tmp"
+        temp_path = models_dir / f"{target.stem}-{nanoid()}.tmp"
         log.info("model.download_started", model=info.name, url=info.url)
         try:
             _download_to_temp(

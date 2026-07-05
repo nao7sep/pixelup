@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
-from uuid import uuid4
 
 from pixelup.config import resolve_state_dir
+from pixelup.nanoid import nanoid
 from pixelup.session_log import log
 from pixelup.timestamps import utc_stamp_ms
 
@@ -252,7 +252,7 @@ def _write_archive(
         archived_at = utc_stamp_ms(moment)
         target = backups_dir / f"backup-{archived_at}.zip"
 
-    temp_path = backups_dir / f"{target.stem}-{uuid4().hex}.tmp"
+    temp_path = backups_dir / f"{target.stem}-{nanoid()}.tmp"
     try:
         with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for candidate in changed:
@@ -267,7 +267,7 @@ def _write_archive(
 def _write_index(index_path: Path, records: list[IndexRecord]) -> None:
     """Atomically write the whole index (temp then os.replace)."""
     payload = json.dumps({"entries": [record.to_json() for record in records]}, indent=2) + "\n"
-    temp_path = index_path.parent / f"{index_path.stem}-{uuid4().hex}.tmp"
+    temp_path = index_path.parent / f"{index_path.stem}-{nanoid()}.tmp"
     try:
         temp_path.write_text(payload, encoding="utf-8")
         os.replace(temp_path, index_path)

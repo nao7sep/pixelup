@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageError
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
+from pixelup.nanoid import nanoid
 from pixelup.paths import OutputFormat
 from pixelup.session_log import log
 
@@ -247,7 +247,7 @@ def _temp_output_path(output_path: Path) -> Path:
     # where a central-temp rename would raise EXDEV outright. The name still
     # follows the house <stem>-<discriminator>.tmp shape, derived from the
     # target's own stem.
-    return output_path.parent / f"{output_path.stem}-{uuid4().hex}.tmp"
+    return output_path.parent / f"{output_path.stem}-{nanoid()}.tmp"
 
 
 @contextmanager

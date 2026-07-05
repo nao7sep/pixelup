@@ -137,9 +137,9 @@ def test_archive_and_index_temp_files_use_stem_nanoid_shape(
     run_backup(home, now=datetime(2026, 7, 1, 2, 22, 20, 456000, tzinfo=UTC))
 
     zip_temp = replaced["backup-20260701-022220-456-utc.zip"]
-    assert re.fullmatch(r"backup-20260701-022220-456-utc-[0-9a-f]{32}\.tmp", zip_temp)
+    assert re.fullmatch(r"backup-20260701-022220-456-utc-[A-Za-z0-9_-]{21}\.tmp", zip_temp)
     index_temp = replaced["index.json"]
-    assert re.fullmatch(r"index-[0-9a-f]{32}\.tmp", index_temp)
+    assert re.fullmatch(r"index-[A-Za-z0-9_-]{21}\.tmp", index_temp)
 
 
 def test_colliding_stamp_advances_to_next_free_millisecond(

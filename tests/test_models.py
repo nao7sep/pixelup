@@ -157,7 +157,7 @@ def test_download_model_info_temp_file_uses_stem_nanoid_shape(tmp_path: Path) ->
     )
 
     assert captured
-    assert re.fullmatch(r"local-model-[0-9a-f]{32}\.tmp", captured[-1])
+    assert re.fullmatch(r"local-model-[A-Za-z0-9_-]{21}\.tmp", captured[-1])
 
 
 def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path) -> None:

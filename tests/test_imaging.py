@@ -33,11 +33,11 @@ def test_save_output_image_writes_atomically_and_flattens_jpg_alpha(tmp_path: Pa
     assert list(tmp_path.glob("*.tmp")) == []
 
 
-def test_save_output_image_temp_file_uses_stem_uuid4hex_shape_beside_output(
+def test_save_output_image_temp_file_uses_stem_nanoid_shape_beside_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The staged temp name is <stem>-<uuid4hex>.tmp, derived from the target
+    # The staged temp name is <stem>-<nanoid>.tmp, derived from the target
     # output's stem, and it is staged in the output's own directory so the
     # final os.replace is always a same-volume rename.
     output_dir = tmp_path / "output-volume"
@@ -64,7 +64,7 @@ def test_save_output_image_temp_file_uses_stem_uuid4hex_shape_beside_output(
     monkeypatch.setattr(Image.Image, "save", original_save)
 
     assert len(captured) == 1
-    assert re.fullmatch(r"photo-x4plus-4x-[0-9a-f]{32}\.tmp", captured[0].name)
+    assert re.fullmatch(r"photo-x4plus-4x-[A-Za-z0-9_-]{21}\.tmp", captured[0].name)
     assert captured[0].parent == output.parent
 
 
