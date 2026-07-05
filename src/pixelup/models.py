@@ -236,15 +236,15 @@ def download_model_info(
     try:
         if _model_file_present(target):
             return _download_result(info, target, "present")
-        # Stage the download as a hidden, per-download-unique dotfile INSIDE
-        # models_dir — deliberately, not under a separate temp/ dir. The
-        # convention's intent (a deletable staging area, unique name, verify
-        # there, then atomic publish) is met: the dotfile is removed on every
-        # failure path below, and same-directory staging is precisely what makes
-        # os.replace an atomic same-filesystem rename — a cross-volume temp/
-        # could degrade that to a copy. (Image-output staging uses temp/ in
-        # imaging.py; model publish needs the same-fs guarantee.)
-        temp_path = models_dir / f".{info.filename}.{os.getpid()}.{uuid4().hex}.tmp"
+        # Stage the download as a per-download-unique file INSIDE models_dir —
+        # deliberately, not under a separate temp/ dir. The convention's intent
+        # (a deletable staging area, unique name, verify there, then atomic
+        # publish) is met: the staged file is removed on every failure path
+        # below, and same-directory staging is precisely what makes os.replace
+        # an atomic same-filesystem rename — a cross-volume temp/ could degrade
+        # that to a copy. (Image-output staging uses temp/ in imaging.py; model
+        # publish needs the same-fs guarantee.)
+        temp_path = models_dir / f"{target.stem}-{uuid4().hex}.tmp"
         log.info("model.download_started", model=info.name, url=info.url)
         try:
             _download_to_temp(

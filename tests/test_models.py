@@ -1,4 +1,5 @@
 import hashlib
+import re
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,38 @@ def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -
     assert result["status"] == "downloaded"
     assert (models_dir / "local-model.pth").read_bytes() == b"downloaded weights"
     assert events[-1] == ("local-model", source.stat().st_size, source.stat().st_size)
+
+
+def test_download_model_info_temp_file_uses_stem_nanoid_shape(tmp_path: Path) -> None:
+    # The staged download's temp name is <stem>-<nanoid>.tmp (target's stem, no
+    # leading dot, no pid segment), same directory as the eventual target.
+    content = b"downloaded weights"
+    source = tmp_path / "source.pth"
+    source.write_bytes(content)
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        source.resolve().as_uri(),
+        expected_size=source.stat().st_size,
+        checksum_sha256=_sha256_hex(content),
+    )
+    captured: list[str] = []
+
+    def on_download(model: str, done: int, total: int | None) -> None:
+        captured.extend(path.name for path in models_dir.glob("*.tmp"))
+
+    download_model_info(
+        models_dir,
+        info,
+        download_timeout=10,
+        lock_timeout=1,
+        on_download=on_download,
+    )
+
+    assert captured
+    assert re.fullmatch(r"local-model-[0-9a-f]{32}\.tmp", captured[-1])
 
 
 def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path) -> None:

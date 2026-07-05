@@ -2,8 +2,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $scriptExitCode = 0
 
-# run-dev: run PixelUp (a PySide6 GUI app) from source via uv. PixelUp has no
-# packaged build yet, so this is currently its only launcher — uv runs the source directly.
+# run-dev: run PixelUp (a PySide6 GUI app) from source via uv. This is the fast
+# dev-loop launcher; rebuild and run-built cover the frozen PyInstaller build.
 
 function Set-Utf8Console {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

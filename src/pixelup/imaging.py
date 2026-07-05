@@ -134,7 +134,7 @@ def save_output_image(
         strip_metadata=strip_metadata,
         target_profile=target_profile,
     )
-    temp_path = _temp_output_path(temp_dir)
+    temp_path = _temp_output_path(temp_dir, output_path)
     try:
         with temp_file_guard(temp_path):
             encoded.save(temp_path, **save_kwargs)
@@ -249,8 +249,13 @@ def _save_kwargs(
     return kwargs
 
 
-def _temp_output_path(temp_dir: Path) -> Path:
-    return temp_dir / f"pixelup-{os.getpid()}-{uuid4().hex}.tmp"
+def _temp_output_path(temp_dir: Path, output_path: Path) -> Path:
+    # Staged in the app's shared temp/ working directory rather than beside
+    # output_path (which may be on a different volume than ~/.pixelup/temp/,
+    # degrading the eventual os.replace to a copy) — a pre-existing placement
+    # this rollout does not change. The name still follows the house
+    # <stem>-<nanoid>.tmp shape, derived from the target's stem.
+    return temp_dir / f"{output_path.stem}-{uuid4().hex}.tmp"
 
 
 @contextmanager

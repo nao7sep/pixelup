@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# run-dev: run PixelUp (a PySide6 GUI app) from source via uv. PixelUp has no
-# packaged build yet, so this is currently its only launcher — uv runs the source directly.
+# run-dev: run PixelUp (a PySide6 GUI app) from source via uv. This is the fast
+# dev-loop launcher; rebuild and run-built cover the frozen PyInstaller build.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"

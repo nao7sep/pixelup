@@ -1,3 +1,4 @@
+import re
 from io import BytesIO
 from pathlib import Path
 
@@ -32,6 +33,40 @@ def test_save_output_image_writes_atomically_and_flattens_jpg_alpha(tmp_path: Pa
         assert saved.mode == "RGB"
         assert saved.format == "JPEG"
     assert list(temp_dir.iterdir()) == []
+
+
+def test_save_output_image_temp_file_uses_stem_nanoid_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The staged output's temp name is <stem>-<nanoid>.tmp, derived from the
+    # target output's stem (even though it is staged in temp_dir, not beside
+    # output_path — a pre-existing placement this rollout does not change).
+    output = tmp_path / "photo-x4plus-4x.png"
+    temp_dir = tmp_path / "temp"
+    original_save = Image.Image.save
+    captured: list[str] = []
+
+    def capture_and_save(self: Image.Image, fp: object, **kwargs: object) -> None:
+        captured.append(Path(fp).name)
+        original_save(self, fp, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "save", capture_and_save)
+    save_output_image(
+        Image.new("RGB", (1, 1), "white"),
+        output_path=output,
+        output_format=OutputFormat.PNG,
+        quality=95,
+        background="white",
+        temp_dir=temp_dir,
+        source_metadata=SourceMetadata(),
+        strip_metadata=True,
+        target_profile=None,
+    )
+    monkeypatch.setattr(Image.Image, "save", original_save)
+
+    assert len(captured) == 1
+    assert re.fullmatch(r"photo-x4plus-4x-[0-9a-f]{32}\.tmp", captured[0])
 
 
 def test_save_output_image_rejects_invalid_background(tmp_path: Path) -> None:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pixelup.config import resolve_state_dir
-from pixelup.timestamps import to_utc_iso_ms
+from pixelup.timestamps import to_utc_iso_ms, utc_stamp_ms
 
 LOGGER_NAME = "pixelup"
 DEBUG_ENV = "PIXELUP_DEBUG"
@@ -186,8 +186,8 @@ def debug_enabled(env: Mapping[str, str] | None = None) -> bool:
 
 
 def session_log_path(*, state_dir: Path | None = None, now: datetime | None = None) -> Path:
-    moment = now.astimezone(UTC) if now is not None else datetime.now(UTC)
-    stamp = moment.strftime("%Y%m%d-%H%M%S-utc")
+    moment = now if now is not None else datetime.now(UTC)
+    stamp = utc_stamp_ms(moment)
     root = resolve_state_dir(state_dir)
     return root / "logs" / f"{stamp}.log"
 

@@ -4,13 +4,14 @@ import json
 import os
 import zipfile
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
 from pixelup.config import resolve_state_dir
 from pixelup.session_log import log
+from pixelup.timestamps import utc_stamp_ms
 
 # The just-in-case startup backup (data-backup-conventions). A best-effort,
 # silent, incremental snapshot of the app's home root (~/.pixelup/), taken at
@@ -25,7 +26,10 @@ from pixelup.session_log import log
 
 BACKUPS_DIR_NAME = "backups"
 INDEX_FILE_NAME = "index.json"
-BACKUP_STAMP_FORMAT = "%Y%m%d-%H%M%S-utc"
+# archivedAt is timestamps.utc_stamp_ms's compact millisecond UTC stamp:
+# yyyymmdd-hhmmss-fff-utc (e.g. 20260610-031542-123-utc). Existing index entries
+# written under the older whole-second form remain valid as-is; they are never
+# migrated or rewritten.
 
 # The 2-second window absorbs FAT/exFAT modification-time granularity: two
 # lastWriteUtc values within 2 s count as equal (data-backup-conventions).
@@ -162,7 +166,7 @@ def collect_candidates(home_root: Path) -> tuple[list[Candidate], list[dict[str,
 
 def latest_records(records: list[IndexRecord]) -> dict[str, IndexRecord]:
     """Pure: the last-known state per archivePath = the record with the maximum
-    archivedAt (lexicographic on the yyyymmdd-hhmmss-utc stamp)."""
+    archivedAt (lexicographic on the yyyymmdd-hhmmss-fff-utc stamp)."""
     latest: dict[str, IndexRecord] = {}
     for record in records:
         current = latest.get(record.archive_path)
@@ -229,11 +233,26 @@ def load_index(index_path: Path) -> tuple[list[IndexRecord], bool]:
     return records, False
 
 
-def _write_archive(backups_dir: Path, archived_at: str, changed: list[Candidate]) -> Path:
+def _write_archive(
+    backups_dir: Path, moment: datetime, changed: list[Candidate]
+) -> tuple[Path, str]:
     """Write the changed files into a zip at a temp path, then atomically rename
-    it to backup-<archived_at>.zip. Archive first, index second (load-bearing)."""
+    it to backup-<archived_at>.zip. Archive first, index second (load-bearing).
+
+    No-clobber create: if that name is already taken (e.g. a second instance of
+    the app stamped the same millisecond), advance the instant by 1 ms and retry
+    until a free stamp is found. Returns the archive path alongside the winning
+    archived_at stamp, since the index records that follow must carry whichever
+    stamp actually won.
+    """
+    archived_at = utc_stamp_ms(moment)
     target = backups_dir / f"backup-{archived_at}.zip"
-    temp_path = backups_dir / f".backup-{archived_at}.{os.getpid()}.{uuid4().hex}.tmp"
+    while target.exists():
+        moment = moment + timedelta(milliseconds=1)
+        archived_at = utc_stamp_ms(moment)
+        target = backups_dir / f"backup-{archived_at}.zip"
+
+    temp_path = backups_dir / f"{target.stem}-{uuid4().hex}.tmp"
     try:
         with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for candidate in changed:
@@ -242,13 +261,13 @@ def _write_archive(backups_dir: Path, archived_at: str, changed: list[Candidate]
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
-    return target
+    return target, archived_at
 
 
 def _write_index(index_path: Path, records: list[IndexRecord]) -> None:
     """Atomically write the whole index (temp then os.replace)."""
     payload = json.dumps({"entries": [record.to_json() for record in records]}, indent=2) + "\n"
-    temp_path = index_path.parent / f".{INDEX_FILE_NAME}.{os.getpid()}.{uuid4().hex}.tmp"
+    temp_path = index_path.parent / f"{index_path.stem}-{uuid4().hex}.tmp"
     try:
         temp_path.write_text(payload, encoding="utf-8")
         os.replace(temp_path, index_path)
@@ -264,8 +283,7 @@ def run_backup(home_root: Path, *, now: datetime | None = None) -> BackupReport:
     skip-empty path (nothing changed) it writes nothing at all.
     """
     report = BackupReport()
-    moment = now.astimezone(UTC) if now is not None else datetime.now(UTC)
-    archived_at = moment.strftime(BACKUP_STAMP_FORMAT)
+    moment = now if now is not None else datetime.now(UTC)
 
     backups_dir = home_root / BACKUPS_DIR_NAME
     index_path = backups_dir / INDEX_FILE_NAME
@@ -285,7 +303,7 @@ def run_backup(home_root: Path, *, now: datetime | None = None) -> BackupReport:
     # the backups dir is created with default modes.
     backups_dir.mkdir(parents=True, exist_ok=True)
 
-    target = _write_archive(backups_dir, archived_at, changed)
+    target, archived_at = _write_archive(backups_dir, moment, changed)
 
     new_records = records + [
         IndexRecord(

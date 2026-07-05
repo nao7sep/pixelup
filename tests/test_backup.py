@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -45,7 +47,8 @@ def test_first_run_captures_config_with_shared_schema(
     home = _home(tmp_path, monkeypatch)
     _write_config(home)
 
-    report = run_backup(home, now=datetime(2026, 7, 1, 2, 22, 20, tzinfo=UTC))
+    # Non-zero microseconds pin millisecond precision (not just zero-padding).
+    report = run_backup(home, now=datetime(2026, 7, 1, 2, 22, 20, 456000, tzinfo=UTC))
 
     assert report.outcome == "files_archived"
     assert report.files_archived == 1
@@ -53,7 +56,7 @@ def test_first_run_captures_config_with_shared_schema(
 
     archives = _archives(home)
     assert len(archives) == 1
-    assert archives[0].name == "backup-20260701-022220-utc.zip"
+    assert archives[0].name == "backup-20260701-022220-456-utc.zip"
     with zipfile.ZipFile(archives[0]) as zf:
         assert zf.namelist() == ["config.json"]
 
@@ -63,7 +66,7 @@ def test_first_run_captures_config_with_shared_schema(
     assert len(index) == 1
     row = index[0]
     assert set(row) == {"archivedAt", "archivePath", "sizeBytes", "lastWriteUtc"}
-    assert row["archivedAt"] == "20260701-022220-utc"
+    assert row["archivedAt"] == "20260701-022220-456-utc"
     assert row["archivePath"] == "config.json"
     assert isinstance(row["sizeBytes"], int)
     assert row["lastWriteUtc"].endswith("Z")
@@ -98,8 +101,6 @@ def test_one_file_changed_appends_a_new_row_and_archive(
     # A genuine edit: larger content, mtime pushed well past the 2 s window.
     config.write_text('{"quality": 80, "tile": 512}\n', encoding="utf-8")
     future = (datetime(2026, 7, 1, 2, 22, 20, tzinfo=UTC) + timedelta(hours=1)).timestamp()
-    import os
-
     os.utime(config, (future, future))
 
     report = run_backup(home, now=datetime(2026, 7, 1, 4, 0, 0, tzinfo=UTC))
@@ -110,7 +111,64 @@ def test_one_file_changed_appends_a_new_row_and_archive(
 
     index = _read_index(home)
     assert len(index) == 2  # append-only: one row per file archived per run
-    assert [r["archivedAt"] for r in index] == ["20260701-022220-utc", "20260701-040000-utc"]
+    assert [r["archivedAt"] for r in index] == [
+        "20260701-022220-000-utc",
+        "20260701-040000-000-utc",
+    ]
+
+
+def test_archive_and_index_temp_files_use_stem_nanoid_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every atomic write's temp name is <stem>-<nanoid>.tmp, same directory as
+    # the target: capture the os.replace(src, dst) pairs to see the transient
+    # temp names before they are renamed onto backup-<archivedAt>.zip / index.json.
+    home = _home(tmp_path, monkeypatch)
+    _write_config(home)
+    replaced: dict[str, str] = {}
+    original_replace = os.replace
+
+    def capture_replace(src: object, dst: object) -> None:
+        replaced[Path(dst).name] = Path(src).name
+        original_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", capture_replace)
+
+    run_backup(home, now=datetime(2026, 7, 1, 2, 22, 20, 456000, tzinfo=UTC))
+
+    zip_temp = replaced["backup-20260701-022220-456-utc.zip"]
+    assert re.fullmatch(r"backup-20260701-022220-456-utc-[0-9a-f]{32}\.tmp", zip_temp)
+    index_temp = replaced["index.json"]
+    assert re.fullmatch(r"index-[0-9a-f]{32}\.tmp", index_temp)
+
+
+def test_colliding_stamp_advances_to_next_free_millisecond(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    _write_config(home)
+
+    # Pre-create an archive at the stamp this run would otherwise use (e.g. a
+    # second instance of the app that started at the exact same millisecond).
+    backups_dir = home / "backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    (backups_dir / "backup-20260701-022220-456-utc.zip").write_bytes(b"")
+
+    report = run_backup(home, now=datetime(2026, 7, 1, 2, 22, 20, 456000, tzinfo=UTC))
+
+    assert report.outcome == "files_archived"
+    # The pre-existing archive is untouched; the new one lands one millisecond later.
+    archives = _archives(home)
+    assert [a.name for a in archives] == [
+        "backup-20260701-022220-456-utc.zip",
+        "backup-20260701-022220-457-utc.zip",
+    ]
+    assert report.archive_path is not None
+    assert Path(report.archive_path).name == "backup-20260701-022220-457-utc.zip"
+
+    index = _read_index(home)
+    assert len(index) == 1
+    assert index[0]["archivedAt"] == "20260701-022220-457-utc"
 
 
 def test_broken_index_is_reset_and_full_backup_taken(

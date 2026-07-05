@@ -19,12 +19,14 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def test_session_log_path_uses_utc_timestamp(tmp_path: Path) -> None:
+    # Millisecond precision is pinned via a non-zero microsecond component:
+    # 123456 us must truncate (not round) to 123 ms.
     path = session_log_path(
         state_dir=tmp_path,
-        now=datetime(2026, 5, 7, 5, 43, 21, tzinfo=UTC),
+        now=datetime(2026, 5, 7, 5, 43, 21, 123456, tzinfo=UTC),
     )
 
-    assert path == tmp_path / "logs" / "20260507-054321-utc.log"
+    assert path == tmp_path / "logs" / "20260507-054321-123-utc.log"
 
 
 def test_configure_writes_jsonl_envelope(tmp_path: Path) -> None:
