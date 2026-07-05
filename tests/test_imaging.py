@@ -12,7 +12,6 @@ from pixelup.paths import OutputFormat
 
 def test_save_output_image_writes_atomically_and_flattens_jpg_alpha(tmp_path: Path) -> None:
     output = tmp_path / "out.jpg"
-    temp_dir = tmp_path / "temp"
     image = Image.new("RGBA", (2, 2), (255, 0, 0, 128))
 
     size = save_output_image(
@@ -21,7 +20,6 @@ def test_save_output_image_writes_atomically_and_flattens_jpg_alpha(tmp_path: Pa
         output_format=OutputFormat.JPG,
         quality=95,
         background="white",
-        temp_dir=temp_dir,
         source_metadata=SourceMetadata(),
         strip_metadata=True,
         target_profile=None,
@@ -32,23 +30,24 @@ def test_save_output_image_writes_atomically_and_flattens_jpg_alpha(tmp_path: Pa
     with Image.open(output) as saved:
         assert saved.mode == "RGB"
         assert saved.format == "JPEG"
-    assert list(temp_dir.iterdir()) == []
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
-def test_save_output_image_temp_file_uses_stem_nanoid_shape(
+def test_save_output_image_temp_file_uses_stem_uuid4hex_shape_beside_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The staged output's temp name is <stem>-<nanoid>.tmp, derived from the
-    # target output's stem (even though it is staged in temp_dir, not beside
-    # output_path — a pre-existing placement this rollout does not change).
-    output = tmp_path / "photo-x4plus-4x.png"
-    temp_dir = tmp_path / "temp"
+    # The staged temp name is <stem>-<uuid4hex>.tmp, derived from the target
+    # output's stem, and it is staged in the output's own directory so the
+    # final os.replace is always a same-volume rename.
+    output_dir = tmp_path / "output-volume"
+    output_dir.mkdir()
+    output = output_dir / "photo-x4plus-4x.png"
     original_save = Image.Image.save
-    captured: list[str] = []
+    captured: list[Path] = []
 
     def capture_and_save(self: Image.Image, fp: object, **kwargs: object) -> None:
-        captured.append(Path(fp).name)
+        captured.append(Path(fp))
         original_save(self, fp, **kwargs)
 
     monkeypatch.setattr(Image.Image, "save", capture_and_save)
@@ -58,7 +57,6 @@ def test_save_output_image_temp_file_uses_stem_nanoid_shape(
         output_format=OutputFormat.PNG,
         quality=95,
         background="white",
-        temp_dir=temp_dir,
         source_metadata=SourceMetadata(),
         strip_metadata=True,
         target_profile=None,
@@ -66,7 +64,8 @@ def test_save_output_image_temp_file_uses_stem_nanoid_shape(
     monkeypatch.setattr(Image.Image, "save", original_save)
 
     assert len(captured) == 1
-    assert re.fullmatch(r"photo-x4plus-4x-[0-9a-f]{32}\.tmp", captured[0])
+    assert re.fullmatch(r"photo-x4plus-4x-[0-9a-f]{32}\.tmp", captured[0].name)
+    assert captured[0].parent == output.parent
 
 
 def test_save_output_image_rejects_invalid_background(tmp_path: Path) -> None:
@@ -77,7 +76,6 @@ def test_save_output_image_rejects_invalid_background(tmp_path: Path) -> None:
             output_format=OutputFormat.JPG,
             quality=95,
             background="not-a-color",
-            temp_dir=tmp_path / "temp",
             source_metadata=SourceMetadata(),
             strip_metadata=False,
             target_profile=None,
@@ -95,7 +93,6 @@ def test_save_output_image_can_embed_srgb_profile(tmp_path: Path) -> None:
         output_format=OutputFormat.PNG,
         quality=95,
         background="white",
-        temp_dir=tmp_path / "temp",
         source_metadata=SourceMetadata(),
         strip_metadata=False,
         target_profile="srgb",
@@ -121,7 +118,6 @@ def test_save_output_image_can_embed_p3_profile(tmp_path: Path) -> None:
         output_format=OutputFormat.PNG,
         quality=95,
         background="white",
-        temp_dir=tmp_path / "temp",
         source_metadata=SourceMetadata(),
         strip_metadata=False,
         target_profile="p3",
@@ -140,7 +136,6 @@ def test_save_output_image_strips_metadata_and_profile(tmp_path: Path) -> None:
         output_format=OutputFormat.JPG,
         quality=95,
         background="white",
-        temp_dir=tmp_path / "temp",
         source_metadata=SourceMetadata(icc_profile=_profile_bytes("srgb"), xmp=b"<xmp />"),
         strip_metadata=True,
         target_profile=None,
@@ -161,7 +156,6 @@ def test_save_output_image_preserves_png_xmp(tmp_path: Path) -> None:
         output_format=OutputFormat.PNG,
         quality=95,
         background="white",
-        temp_dir=tmp_path / "temp",
         source_metadata=SourceMetadata(xmp=xmp),
         strip_metadata=False,
         target_profile=None,
@@ -176,7 +170,6 @@ def test_save_output_image_cleans_temp_file_on_save_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output = tmp_path / "out.png"
-    temp_dir = tmp_path / "temp"
     original_save = Image.Image.save
 
     def fail_after_partial_write(self: Image.Image, fp: object, **kwargs: object) -> None:
@@ -191,7 +184,6 @@ def test_save_output_image_cleans_temp_file_on_save_failure(
             output_format=OutputFormat.PNG,
             quality=95,
             background="white",
-            temp_dir=temp_dir,
             source_metadata=SourceMetadata(),
             strip_metadata=False,
             target_profile=None,
@@ -200,4 +192,4 @@ def test_save_output_image_cleans_temp_file_on_save_failure(
     monkeypatch.setattr(Image.Image, "save", original_save)
     assert excinfo.value.code == "output_unwritable"
     assert not output.exists()
-    assert list(temp_dir.iterdir()) == []
+    assert list(tmp_path.glob("*.tmp")) == []

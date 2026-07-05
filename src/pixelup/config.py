@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,11 @@ APP_NAME = "pixelup"
 HOME_ENV = "PIXELUP_HOME"
 MODELS_ENV = "PIXELUP_MODELS_DIR"
 TEMP_ENV = "PIXELUP_TEMP_DIR"
+
+# An env reference left over after expansion — $VAR, ${VAR}, or %VAR% — means
+# the referenced variable was unset (os.path.expandvars leaves an unset
+# reference literal rather than raising).
+_UNRESOLVED_ENV_REF = re.compile(r"\$\{\w+\}|\$\w+|%\w+%")
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,12 +87,37 @@ def _default_state_dir(env: dict[str, str] | None = None) -> Path:
     source_env = env if env is not None else os.environ
     override = source_env.get(HOME_ENV, "")
     if override.strip():
-        expanded = os.path.expandvars(os.path.expanduser(override.strip()))
-        root = Path(expanded)
+        root = _expand_home_override(override.strip())
         if not root.is_absolute():
             root = Path.home() / root
         return _ensure_state_root(root.resolve())
     return _ensure_state_root((Path.home() / f".{APP_NAME}").resolve())
+
+
+def _expand_home_override(raw: str) -> Path:
+    """Expand ``~`` and environment references in a raw ``PIXELUP_HOME`` value.
+
+    An unset variable referenced in the value (``$FOO``, ``${FOO}``, ``%FOO%``)
+    is left literal by ``os.path.expandvars`` rather than raising, and a
+    variable that is set but empty silently expands to nothing — which, once
+    the caller falls back to anchoring a non-absolute result against the home
+    directory, would otherwise collapse the storage root onto bare ``$HOME``.
+    Per the storage-path-conventions, an override that does not resolve to a
+    usable directory is a startup error, never a silent fallback, so both
+    cases raise here instead of producing a path.
+    """
+    expanded = os.path.expandvars(os.path.expanduser(raw))
+    if not expanded or _UNRESOLVED_ENV_REF.search(expanded):
+        raise PixelupError(
+            ErrorCode.OUTPUT_UNWRITABLE,
+            f"{HOME_ENV} does not expand to a usable path.",
+            hint=(
+                f"Check that every environment variable referenced in {HOME_ENV} "
+                "is set to a non-empty value."
+            ),
+            details={"value": raw, "expanded": expanded},
+        )
+    return Path(expanded)
 
 
 def _ensure_state_root(root: Path) -> Path:

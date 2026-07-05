@@ -106,19 +106,10 @@ def save_output_image(
     output_format: OutputFormat,
     quality: int,
     background: str,
-    temp_dir: Path,
     source_metadata: SourceMetadata | None,
     strip_metadata: bool,
     target_profile: str | None,
 ) -> tuple[int, int]:
-    try:
-        temp_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise PixelupError(
-            ErrorCode.OUTPUT_UNWRITABLE,
-            "Could not create the temp directory.",
-            details={"path": str(temp_dir), "reason": str(exc)},
-        ) from exc
     encoded = _prepare_image_for_save(
         image,
         output_format=output_format,
@@ -134,7 +125,7 @@ def save_output_image(
         strip_metadata=strip_metadata,
         target_profile=target_profile,
     )
-    temp_path = _temp_output_path(temp_dir, output_path)
+    temp_path = _temp_output_path(output_path)
     try:
         with temp_file_guard(temp_path):
             encoded.save(temp_path, **save_kwargs)
@@ -249,13 +240,14 @@ def _save_kwargs(
     return kwargs
 
 
-def _temp_output_path(temp_dir: Path, output_path: Path) -> Path:
-    # Staged in the app's shared temp/ working directory rather than beside
-    # output_path (which may be on a different volume than ~/.pixelup/temp/,
-    # degrading the eventual os.replace to a copy) — a pre-existing placement
-    # this rollout does not change. The name still follows the house
-    # <stem>-<nanoid>.tmp shape, derived from the target's stem.
-    return temp_dir / f"{output_path.stem}-{uuid4().hex}.tmp"
+def _temp_output_path(output_path: Path) -> Path:
+    # Staged beside output_path, not in a central temp directory: os.replace
+    # is only atomic within one filesystem volume, and output_path may be on
+    # a different volume than ~/.pixelup/temp/ (a USB stick, a second disk),
+    # where a central-temp rename would raise EXDEV outright. The name still
+    # follows the house <stem>-<discriminator>.tmp shape, derived from the
+    # target's own stem.
+    return output_path.parent / f"{output_path.stem}-{uuid4().hex}.tmp"
 
 
 @contextmanager

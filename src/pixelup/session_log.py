@@ -227,9 +227,15 @@ def configure_session_logging(log_path: Path | None = None) -> Path:
 def _build_file_handler(path: Path) -> logging.FileHandler | None:
     # The file is a StreamHandler under the hood, so every record is flushed on
     # emit — the convention's "flush warn/error/debug immediately" holds for free.
+    # Exclusive-create (mode "x"): the session filename is millisecond-paced, so
+    # a same-millisecond clash between two processes is vanishingly rare but not
+    # impossible. On that clash the second writer's open raises FileExistsError
+    # (an OSError) rather than silently interleaving into the first writer's
+    # file, and degrades to the console fallback below like any other open
+    # failure.
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        return logging.FileHandler(path, encoding="utf-8")
+        return logging.FileHandler(path, mode="x", encoding="utf-8")
     except OSError:
         return None
 

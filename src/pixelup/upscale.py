@@ -235,7 +235,6 @@ def run_upscale(
         output_format=plan.output_format,
         quality=options.quality,
         background=options.background,
-        temp_dir=runtime_dirs.temp_dir,
         source_metadata=load_source_metadata(plan.input_path),
         strip_metadata=options.strip_metadata,
         target_profile=options.target_profile,

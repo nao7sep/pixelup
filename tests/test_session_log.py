@@ -171,6 +171,28 @@ def test_configure_degrades_to_stderr_when_file_unavailable(tmp_path: Path) -> N
     assert not isinstance(handlers[0], logging.FileHandler)
 
 
+def test_configure_degrades_to_stderr_on_same_millisecond_clash(tmp_path: Path) -> None:
+    # The session filename is millisecond-paced, so two processes can rarely
+    # land on the same one. The file is opened exclusive-create, so the second
+    # writer must degrade to the console fallback rather than interleave into
+    # the first writer's file.
+    log_path = tmp_path / "logs" / "session.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text('{"message": "from first process"}\n', encoding="utf-8")
+
+    returned = configure_session_logging(log_path)
+    log.info("second_process.event")
+
+    assert returned == log_path
+    handlers = get_logger().handlers
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], logging.StreamHandler)
+    assert not isinstance(handlers[0], logging.FileHandler)
+    # The first writer's content is untouched — the second process never opened
+    # (let alone truncated or appended into) the existing file.
+    assert log_path.read_text(encoding="utf-8") == '{"message": "from first process"}\n'
+
+
 def test_redact_masks_denied_keys_case_insensitively() -> None:
     out = redact_log_fields({"Token": "abc", "ApiKey": "k", "user": "bob"})
     assert out == {"Token": "[redacted]", "ApiKey": "[redacted]", "user": "bob"}
@@ -229,18 +251,23 @@ def test_caller_error_field_does_not_clobber_exception_payload(tmp_path: Path) -
 
 
 def test_excepthook_does_not_stack_across_reconfiguration(tmp_path: Path) -> None:
-    log_path = tmp_path / "logs" / "session.log"
+    # Two distinct paths, as two real sessions would each get: the log file is
+    # now opened exclusive-create, so re-opening the same path would itself
+    # degrade to the stderr fallback rather than exercise the property under
+    # test here.
+    first_log_path = tmp_path / "logs" / "first.log"
+    second_log_path = tmp_path / "logs" / "second.log"
 
     # Reconfigure twice in one process; the excepthook must not chain onto a
     # previous copy of itself, or a single crash would be logged once per call.
-    configure_session_logging(log_path)
-    configure_session_logging(log_path)
+    configure_session_logging(first_log_path)
+    configure_session_logging(second_log_path)
 
     try:
         raise ValueError("synthetic crash")
     except ValueError:
         sys.excepthook(*sys.exc_info())
 
-    crashes = [e for e in _read_jsonl(log_path) if e["message"] == "unhandled.exception"]
+    crashes = [e for e in _read_jsonl(second_log_path) if e["message"] == "unhandled.exception"]
     assert len(crashes) == 1
     assert crashes[0]["error"]["type"] == "ValueError"

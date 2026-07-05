@@ -110,6 +110,30 @@ def test_unusable_pixelup_home_is_a_reported_error(
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
 
 
+def test_pixelup_home_with_unset_env_reference_is_a_reported_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An unset $VAR is left literal by os.path.expandvars rather than raising;
+    # that must not silently become a directory literally named "$PIXELUP_NOPE".
+    monkeypatch.delenv("PIXELUP_NOPE", raising=False)
+    monkeypatch.setenv("PIXELUP_HOME", "$PIXELUP_NOPE/data")
+    with pytest.raises(PixelupError) as exc_info:
+        resolve_state_dir()
+    assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
+
+
+def test_pixelup_home_with_empty_env_reference_is_a_reported_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A variable that is set but empty must not silently collapse the
+    # storage root onto bare $HOME.
+    monkeypatch.setenv("PIXELUP_EMPTY", "")
+    monkeypatch.setenv("PIXELUP_HOME", "$PIXELUP_EMPTY")
+    with pytest.raises(PixelupError) as exc_info:
+        resolve_state_dir()
+    assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
+
+
 def test_ensure_models_dir_creates_directory(tmp_path: Path) -> None:
     target = tmp_path / "nested" / "models"
     assert ensure_models_dir(target) == target
