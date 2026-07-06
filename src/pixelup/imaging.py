@@ -129,6 +129,10 @@ def save_output_image(
     try:
         with temp_file_guard(temp_path):
             encoded.save(temp_path, **save_kwargs)
+            # not recorded: this is the harvest-then-discard OUTPUT image, a binary
+            # written for the user at a user-chosen location — not managed text the
+            # app owns and reloads as state. Binaries are out of scope for the text
+            # backup, and output is never recorded (data-backup-conventions).
             os.replace(temp_path, output_path)
     except PixelupError:
         temp_path.unlink(missing_ok=True)

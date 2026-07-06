@@ -233,6 +233,12 @@ def _build_file_handler(path: Path) -> logging.FileHandler | None:
     # (an OSError) rather than silently interleaving into the first writer's
     # file, and degrades to the console fallback below like any other open
     # failure.
+    #
+    # not recorded: the session log is an append-mode file (logs/<stamp>.log),
+    # opened by this FileHandler and never written through the managed-text
+    # atomic-write choke point (write_managed_text). Append-mode logs are excluded
+    # from the text backup by construction — the mechanism never reaches the record
+    # hook — so no explicit rule is needed (data-backup-conventions).
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         return logging.FileHandler(path, mode="x", encoding="utf-8")

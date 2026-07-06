@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pixelup.config import quarantine_corrupt_file, resolve_state_dir
+from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_managed_text
 from pixelup.devices import DEFAULT_DEVICE, DEVICE_VALUES
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
 from pixelup.paths import OutputFormat
@@ -129,10 +129,17 @@ def load_app_config_result(path: Path | None = None) -> ConfigLoadResult:
 
 
 def save_app_config(config: AppConfig, path: Path | None = None) -> None:
+    """Persist the settings through the single managed-text atomic-write choke point.
+
+    ``config.json`` is PixelUp's one managed text store, and the write goes through
+    :func:`pixelup.config.write_managed_text` — the atomic temp-then-rename that is
+    both the durability floor and the exact point the data-backup layer records the
+    bytes just written. This is the app's RECORD write site: every save of
+    ``config.json`` is captured (deduped) in ``backups.sqlite3`` (data-backup-conventions).
+    """
     if path is None:
         path = config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_to_json(config), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_managed_text(path, json.dumps(_to_json(config), indent=2, sort_keys=True) + "\n")
 
 
 def ensure_app_config(path: Path | None = None) -> bool:

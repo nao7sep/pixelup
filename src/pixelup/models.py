@@ -255,6 +255,11 @@ def download_model_info(
                 should_cancel=should_cancel,
             )
             verify_model_file(temp_path, info)
+            # not recorded: model weights are large binaries, re-fetchable from
+            # their source and interchangeable with it — not hand-authored text the
+            # app owns as state. Binaries are out of scope for the text backup, and
+            # models/ is a binary-bearing directory excluded wholesale
+            # (data-backup-conventions).
             os.replace(temp_path, target)
         except PixelupError as exc:
             temp_path.unlink(missing_ok=True)

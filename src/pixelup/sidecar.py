@@ -60,6 +60,12 @@ def write_sidecar(
         "warnings": warnings,
         "duration_ms": result.get("ms"),
     }
+    # not recorded: this sidecar is OUTPUT metadata written beside the output image
+    # at a user-chosen location, colocated with the (binary) output the app harvests
+    # then forgets — not managed text the app owns and reloads as state. Output is
+    # never recorded, and a sidecar beside a not-recorded output rides along into
+    # exclusion (data-backup-conventions). It is regenerable from the run and would
+    # bloat the text history with no recovery value.
     sidecar_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return sidecar_path
 

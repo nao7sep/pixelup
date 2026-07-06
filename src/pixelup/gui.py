@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import threading
 from collections import defaultdict
 from itertools import count
 from pathlib import Path
@@ -53,7 +52,6 @@ from pixelup.app_config import (
     load_app_config_result,
     save_app_config,
 )
-from pixelup.backup import run_startup_backup
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.errors import PixelupError
 from pixelup.fonts import apply_ui_font
@@ -167,14 +165,6 @@ class MainWindow(QMainWindow):
         # Create-if-absent — never overwrites an existing file — and before the config is
         # loaded below.
         ensure_app_config()
-        # Just-in-case startup backup of the home root (data-backup-conventions).
-        # Fired on a daemon thread AFTER config.json is materialized, so it never
-        # blocks the Qt event loop. The pass is pure file I/O, best-effort, and
-        # self-silencing (see run_startup_backup): it never touches Qt objects,
-        # never blocks startup, and never crashes the app.
-        threading.Thread(
-            target=run_startup_backup, name="pixelup-startup-backup", daemon=True
-        ).start()
         # A corrupt config.json quarantines-then-resets rather than crashing startup
         # (storage-path conventions); the loader returns where the corrupt file went so
         # the notice below can tell the user. It is surfaced only after the window is

@@ -165,8 +165,8 @@ def quarantine_corrupt_file(path: Path) -> Path:
     The one place PixelUp quarantines an unreadable managed file. The storage-path
     conventions forbid silently discarding a corrupt managed file: the load path may
     only halt or *quarantine-then-reset*, and either way the original bytes are
-    preserved. This is that quarantine step, shared by every load path that resets a
-    corrupt file to defaults (``config.json`` and the backup ``index.json``).
+    preserved. This is that quarantine step, used by the ``config.json`` load path
+    when it resets a corrupt file to defaults.
 
     The quarantine name follows the derived-filename grammar
     ``<stem>-<discriminator>.<role-extension>``: the discriminator is a millisecond
@@ -181,5 +181,53 @@ def quarantine_corrupt_file(path: Path) -> Path:
     target = path.with_name(f"{path.stem}-{utc_now_stamp_ms()}.invalid")
     if target.exists():
         target = path.with_name(f"{path.stem}-{utc_now_stamp_ms()}-{nanoid()}.invalid")
+    # not recorded: this is a move-aside of an already-unreadable managed file, not a
+    # managed-text write — no new content is produced here, and the corrupt bytes are
+    # not a version to preserve in the history (the store never captured them, so
+    # there is nothing to add). The subsequent fresh save through write_managed_text
+    # is what records the recovered-to-defaults content (data-backup-conventions).
     os.replace(path, target)
     return target
+
+
+def write_managed_text(path: Path, text: str) -> None:
+    """The single managed-text atomic-write choke point for PixelUp.
+
+    Every durable text file the app owns is written through here — today that is
+    exactly ``config.json`` (:func:`pixelup.app_config.save_app_config`), the app's
+    one managed text store. A managed-text write that bypasses this helper is a
+    silent backup gap; there is deliberately no second atomic-write path for managed
+    text in the app.
+
+    Writes ``text`` (UTF-8) to a same-directory temp named ``<stem>-<nanoid>.tmp``
+    (the storage-path conventions' derived-filename grammar — the nanoid guarantees
+    two concurrent writers never share a temp), then atomically renames it over
+    ``path``, so a crash mid-write cannot corrupt the target. Raises on failure; the
+    caller logs it through the session log.
+
+    **The data-backup record fires strictly AFTER the rename lands
+    (data-backup-conventions).** Recording before the rename would risk a "backup of
+    a save that never happened": if the rename then failed, the history would hold a
+    version that never reached disk. So: rename lands, *then* record the exact bytes
+    just written — the same ``data`` buffer already in hand, never a re-read of the
+    file (which would risk capturing a concurrent writer's content, not what this
+    call wrote). The record is best-effort and silent; it never raises back into this
+    write and never affects the save's success (see :mod:`pixelup.backup_store`).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = text.encode("utf-8")
+    temp_path = path.with_name(f"{path.stem}-{nanoid()}.tmp")
+    try:
+        temp_path.write_bytes(data)
+        os.replace(temp_path, path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+    # After the rename: the file is exactly where it belongs, so record the bytes we
+    # just wrote. Imported lazily to avoid a config <-> backup_store import cycle
+    # (backup_store resolves its store path through resolve_state_dir here). record()
+    # catches, logs once, and swallows every failure, so a backup problem can never
+    # break the save that already succeeded above.
+    from pixelup.backup_store import record
+
+    record(path, data)

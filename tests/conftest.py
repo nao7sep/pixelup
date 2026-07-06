@@ -7,6 +7,7 @@ import sys
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from pixelup.backup_store import close_backup_store
 from pixelup.session_log import LOGGER_NAME
 
 
@@ -27,6 +28,21 @@ def _reset_pixelup_logging():
         logger.removeHandler(handler)
     logger.setLevel(logging.NOTSET)
     sys.excepthook = saved_excepthook
+
+
+@pytest.fixture(autouse=True)
+def _reset_backup_store():
+    """Close the write-through backup store after every test.
+
+    The store is a process-wide singleton opened lazily against whatever
+    PIXELUP_HOME resolves to at first use. Tests redirect PIXELUP_HOME to a
+    throwaway root; without this teardown the singleton would stay bound to the
+    first test's root (and hold that file handle open) for the whole session. This
+    closes it and resets the singleton so the next test's first save re-opens the
+    store under that test's own root (data-backup-conventions test migration).
+    """
+    yield
+    close_backup_store()
 
 
 @pytest.fixture(scope="session")
