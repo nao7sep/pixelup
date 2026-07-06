@@ -18,8 +18,23 @@ the finished bundle, so a missing hidden import fails the build, not the user.
 """
 
 import sys
+import tomllib
+from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
+
+# The version is read from pyproject.toml — the single source of truth (app-release
+# conventions) — at freeze time, never hardcoded here: a literal would silently drift
+# from the real version on the next bump. The spec is a Python file that runs during
+# the freeze, so it reads the SSOT directly rather than relying on package.sh/.ps1 to
+# thread it in, keeping the version correct however the freeze is invoked (CI, either
+# package script, or a bare ``pyinstaller pixelup.spec``). This feeds the macOS bundle's
+# CFBundleShortVersionString / CFBundleVersion so a frozen .app reports its real version
+# instead of 0.0.0. SPECPATH is the spec's own directory (injected by PyInstaller), so
+# the read is independent of the working directory the freeze was launched from.
+_VERSION = tomllib.loads(
+    (Path(SPECPATH) / "pyproject.toml").read_text(encoding="utf-8")
+)["project"]["version"]
 
 # The app finds its window icon at runtime via
 # ``Path(pixelup.gui.__file__).parent / "resources" / "icon.png"`` — inside a
@@ -95,6 +110,13 @@ if is_mac:
         info_plist={
             "CFBundleName": "PixelUp",
             "CFBundleDisplayName": "PixelUp",
+            # Both version keys are derived from the pyproject.toml SSOT (_VERSION above),
+            # so a frozen .app reports its real version instead of the 0.0.0 PyInstaller
+            # defaults to when they are absent. CFBundleShortVersionString is the marketing
+            # version shown in the Finder/About; CFBundleVersion is the build version macOS
+            # requires be present — both track the one SSOT string.
+            "CFBundleShortVersionString": _VERSION,
+            "CFBundleVersion": _VERSION,
             "NSHighResolutionCapable": True,
             # Dual-key icon: CFBundleIconFile (the classic .icns, set by icon= above) is read by
             # macOS < 26; CFBundleIconName points macOS 26 (Tahoe) at the Liquid Glass Assets.car

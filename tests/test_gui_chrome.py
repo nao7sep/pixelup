@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from pixelup.app_config import AppConfig
+from pixelup.app_config import AppConfig, ConfigLoadResult
 from pixelup.gui import ImagePreview, MainWindow
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
@@ -26,7 +26,7 @@ def make_window(
     # No real scheduling (no threads / inference), and a clean in-memory config
     # rather than the developer's real ~/.pixelup/config.json.
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
-    monkeypatch.setattr("pixelup.gui.load_app_config", lambda: AppConfig())
+    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     log_file = tmp_path / "logs" / "session.log"
     configure_session_logging(log_file)
 

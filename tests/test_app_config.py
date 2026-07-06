@@ -3,7 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from pixelup.app_config import AppConfig, ensure_app_config, load_app_config, save_app_config
+from pixelup.app_config import (
+    AppConfig,
+    ensure_app_config,
+    load_app_config,
+    load_app_config_result,
+    save_app_config,
+)
 from pixelup.paths import OutputFormat
 
 
@@ -78,12 +84,97 @@ def test_load_app_config_falls_back_on_unusable_font_family(tmp_path: Path) -> N
     assert load_app_config(path).font_family == AppConfig().font_family
 
 
-def test_invalid_config_shape_is_rejected(tmp_path: Path) -> None:
+def test_corrupt_config_is_quarantined_then_reset(tmp_path: Path) -> None:
+    # A present-but-corrupt config.json must never crash startup: the load path
+    # quarantines the unreadable file aside (bytes preserved) and resets to defaults,
+    # rather than raising or silently discarding the original (storage-path conventions).
+    path = tmp_path / "config.json"
+    path.write_text("{ this is not valid json", encoding="utf-8")
+
+    result = load_app_config_result(path)
+
+    # Defaults were loaded, so the app can proceed on a fresh, valid config.
+    assert result.config == AppConfig()
+    # The corrupt original was quarantined, not discarded: a <stem>-<ms-utc>.invalid
+    # sibling now holds the exact original bytes, and config.json itself no longer does.
+    assert result.quarantined_to is not None
+    assert result.quarantined_to.parent == tmp_path
+    assert result.quarantined_to.name.startswith("config-")
+    assert result.quarantined_to.suffix == ".invalid"
+    assert result.quarantined_to.read_text(encoding="utf-8") == "{ this is not valid json"
+    # config.json was reset on disk through the normal save path, so the next load is clean.
+    assert path.exists()
+    assert load_app_config_result(path).quarantined_to is None
+    assert load_app_config(path) == AppConfig()
+
+
+def test_non_object_config_is_quarantined_then_reset(tmp_path: Path) -> None:
+    # A syntactically valid but wrong-shaped config (a JSON array, not an object) is
+    # corrupt just the same: quarantined-then-reset, never raised.
     path = tmp_path / "config.json"
     path.write_text("[]\n", encoding="utf-8")
 
-    with pytest.raises(ValueError):
-        load_app_config(path)
+    result = load_app_config_result(path)
+
+    assert result.config == AppConfig()
+    assert result.quarantined_to is not None
+    assert result.quarantined_to.suffix == ".invalid"
+    assert result.quarantined_to.read_text(encoding="utf-8") == "[]\n"
+    assert load_app_config(path) == AppConfig()
+
+
+def test_missing_config_is_not_treated_as_corrupt(tmp_path: Path) -> None:
+    # The normal first run: no file, defaults, and nothing quarantined.
+    result = load_app_config_result(tmp_path / "missing.json")
+
+    assert result.config == AppConfig()
+    assert result.quarantined_to is None
+
+
+def test_corrupt_config_lets_window_open(
+    qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # End-to-end pin: a corrupt config.json under a redirected PIXELUP_HOME must let
+    # MainWindow construct (the frozen-app failure the finding is about was the window
+    # never opening), running on freshly reset defaults and surfacing the reset to the
+    # user rather than crashing.
+    from PySide6.QtWidgets import QApplication
+
+    from pixelup.gui import MainWindow
+    from pixelup.runner import JobRunner
+    from pixelup.session_log import configure_session_logging
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("PIXELUP_HOME", str(home))
+    (home / "config.json").write_text("{ broken", encoding="utf-8")
+
+    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    notices: list[str] = []
+    monkeypatch.setattr(
+        "pixelup.gui.warn_config_reset",
+        lambda parent, name: notices.append(name),
+    )
+    log_file = home / "logs" / "session.log"
+    configure_session_logging(log_file)
+
+    window = MainWindow(log_file=log_file)
+    try:
+        # The window opened on defaults instead of crashing on the corrupt file.
+        assert window.config == AppConfig()
+        assert window._config_quarantined_to is not None
+        # The corrupt original was quarantined next to the (now reset) config.json.
+        assert window._config_quarantined_to.suffix == ".invalid"
+        assert window._config_quarantined_to.read_text(encoding="utf-8") == "{ broken"
+        assert (home / "config.json").exists()
+        # The deferred non-fatal notice fires once the event loop turns.
+        QApplication.processEvents()
+        assert notices == [window._config_quarantined_to.name]
+    finally:
+        window._session_shutdown = True
+        window.close()
+        window.deleteLater()
+        QApplication.processEvents()
 
 
 def test_load_app_config_clamps_out_of_range_values(tmp_path: Path) -> None:

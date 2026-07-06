@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from pixelup.config import resolve_state_dir
+from pixelup.config import quarantine_corrupt_file, resolve_state_dir
 from pixelup.nanoid import nanoid
 from pixelup.session_log import log
 from pixelup.timestamps import utc_stamp_ms
@@ -201,36 +201,51 @@ def plan_changes(
 def load_index(index_path: Path) -> tuple[list[IndexRecord], bool]:
     """Load index.json. Returns (records, was_reset).
 
-    Missing is the normal first run: empty, not reset. Corrupt/unparseable resets
-    to empty and reports was_reset=True (the next run is then a full backup).
+    Missing is the normal first run: empty, not reset. A corrupt or unparseable
+    index resets to empty and reports was_reset=True (the next run is then a full
+    backup) — but, per the storage-path conventions, the corrupt file is not
+    silently discarded: it is quarantined aside to ``<stem>-<ms-utc>.invalid``
+    (preserving its bytes) before the reset, the same discipline ``config.json``
+    uses. The quarantine happens once, at the single reset point, no matter which
+    check tripped it.
     """
     if not index_path.exists():
         return [], False
     try:
-        data = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return _parse_index(index_path), False
+    except (OSError, ValueError, KeyError, TypeError):
+        quarantine_corrupt_file(index_path)
         return [], True
+
+
+def _parse_index(index_path: Path) -> list[IndexRecord]:
+    """Parse index.json into records, raising on any malformed content.
+
+    Every rejection the reset path recognizes is expressed here as a raise: an
+    unparseable file (ValueError from json), a non-object root or missing/wrong
+    ``entries`` list (ValueError), and a malformed row (KeyError/TypeError/ValueError
+    from the field coercions). The one caller turns any of those into the
+    quarantine-then-reset outcome.
+    """
+    data = json.loads(index_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        return [], True
+        raise ValueError("backup index is not a JSON object")
     rows = data.get("entries")
     if not isinstance(rows, list):
-        return [], True
+        raise ValueError("backup index has no entries list")
     records: list[IndexRecord] = []
     for row in rows:
         if not isinstance(row, dict):
-            return [], True
-        try:
-            records.append(
-                IndexRecord(
-                    archived_at=str(row["archivedAt"]),
-                    archive_path=str(row["archivePath"]),
-                    size_bytes=int(row["sizeBytes"]),
-                    last_write_utc=str(row["lastWriteUtc"]),
-                )
+            raise ValueError("backup index row is not a JSON object")
+        records.append(
+            IndexRecord(
+                archived_at=str(row["archivedAt"]),
+                archive_path=str(row["archivePath"]),
+                size_bytes=int(row["sizeBytes"]),
+                last_write_utc=str(row["lastWriteUtc"]),
             )
-        except (KeyError, TypeError, ValueError):
-            return [], True
-    return records, False
+        )
+    return records
 
 
 def _write_archive(

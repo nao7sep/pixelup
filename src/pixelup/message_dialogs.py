@@ -23,3 +23,11 @@ def warn_no_models(parent: QWidget) -> None:
 
 def warn_image_in_use(parent: QWidget) -> None:
     _info(parent, "Pending or running jobs still use this image.")
+
+
+def warn_config_reset(parent: QWidget, quarantined_name: str) -> None:
+    _info(
+        parent,
+        "Your settings file was unreadable and has been reset to defaults.\n\n"
+        f"The unreadable file was kept as {quarantined_name} in the PixelUp folder.",
+    )

@@ -8,7 +8,7 @@ from collections import defaultdict
 from itertools import count
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Slot
+from PySide6.QtCore import Qt, QTimer, QUrl, Slot
 from PySide6.QtGui import (
     QCloseEvent,
     QDesktopServices,
@@ -50,7 +50,7 @@ from pixelup.app_config import (
     TILE_STEP,
     config_path,
     ensure_app_config,
-    load_app_config,
+    load_app_config_result,
     save_app_config,
 )
 from pixelup.backup import run_startup_backup
@@ -71,7 +71,12 @@ from pixelup.jobs import (
     job_status_summary,
     retry_failed_jobs,
 )
-from pixelup.message_dialogs import warn_image_in_use, warn_no_images, warn_no_models
+from pixelup.message_dialogs import (
+    warn_config_reset,
+    warn_image_in_use,
+    warn_no_images,
+    warn_no_models,
+)
 from pixelup.models import KNOWN_MODELS
 from pixelup.quit_dialog import QuitConfirmDialog
 from pixelup.runner import JobRunner
@@ -159,8 +164,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         # Create config.json from the built-in defaults on first run so the settings file exists
         # on disk immediately, not only after the first save (storage-path conventions).
-        # Create-if-absent — never overwrites an existing file — and before load_app_config
-        # reads it.
+        # Create-if-absent — never overwrites an existing file — and before the config is
+        # loaded below.
         ensure_app_config()
         # Just-in-case startup backup of the home root (data-backup-conventions).
         # Fired on a daemon thread AFTER config.json is materialized, so it never
@@ -170,7 +175,13 @@ class MainWindow(QMainWindow):
         threading.Thread(
             target=run_startup_backup, name="pixelup-startup-backup", daemon=True
         ).start()
-        self.config = load_app_config()
+        # A corrupt config.json quarantines-then-resets rather than crashing startup
+        # (storage-path conventions); the loader returns where the corrupt file went so
+        # the notice below can tell the user. It is surfaced only after the window is
+        # built, so the message box has a real parent.
+        load_result = load_app_config_result()
+        self.config = load_result.config
+        self._config_quarantined_to = load_result.quarantined_to
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. A fresh
         # install resolves the canonical default stack. setFont propagates app-
@@ -213,6 +224,21 @@ class MainWindow(QMainWindow):
             path=str(config_path()),
             values=config_log_payload(self.config),
         )
+        if self._config_quarantined_to is not None:
+            log.warning(
+                "config.corrupt_reset",
+                path=str(config_path()),
+                quarantined_to=str(self._config_quarantined_to),
+            )
+            # Deferred to the event loop so the notice appears over the shown window
+            # (build_app calls window.show() after __init__ returns) instead of
+            # blocking construction ahead of the first paint. Non-fatal: the app is
+            # already running on freshly reset defaults; this only tells the user.
+            QTimer.singleShot(0, self._notify_config_reset)
+
+    def _notify_config_reset(self) -> None:
+        if self._config_quarantined_to is not None:
+            warn_config_reset(self, self._config_quarantined_to.name)
 
     def _on_commit_data_request(self, _manager: object) -> None:
         self._session_shutdown = True

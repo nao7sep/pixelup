@@ -39,3 +39,23 @@ def test_script_starts_gui() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
 
     assert pyproject["project"]["gui-scripts"]["pixelup"] == "pixelup.gui:main"
+
+
+def test_spec_derives_bundle_version_from_pyproject_ssot() -> None:
+    # The frozen macOS .app must report its real version, not PyInstaller's 0.0.0
+    # default, and the version must come from the pyproject.toml SSOT rather than a
+    # literal in the spec (which would silently drift on the next bump). PyInstaller
+    # is not installed in the test env, so this pins the wiring by source inspection:
+    # the spec reads pyproject.toml into _VERSION and feeds it to both bundle keys.
+    spec = Path("pixelup.spec").read_text(encoding="utf-8")
+
+    # Version is read from the SSOT at freeze time, not hardcoded.
+    assert 'tomllib.loads(' in spec
+    assert '["project"]["version"]' in spec
+    # Both macOS version keys are present and set from that derived _VERSION, never a literal.
+    assert '"CFBundleShortVersionString": _VERSION,' in spec
+    assert '"CFBundleVersion": _VERSION,' in spec
+
+    # And there is no hardcoded copy of the current version anywhere in the spec.
+    version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+    assert version not in spec

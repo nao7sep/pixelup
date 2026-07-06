@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.nanoid import nanoid
+from pixelup.timestamps import utc_now_stamp_ms
 
 APP_NAME = "pixelup"
 HOME_ENV = "PIXELUP_HOME"
@@ -155,3 +157,29 @@ def _ensure_dir(path: Path, code: ErrorCode, message: str) -> Path:
     if not path.is_dir():
         raise PixelupError(code, message, details={"path": str(path)})
     return path
+
+
+def quarantine_corrupt_file(path: Path) -> Path:
+    """Move a corrupt managed file aside to ``<stem>-<ms-utc>.invalid`` and return the new path.
+
+    The one place PixelUp quarantines an unreadable managed file. The storage-path
+    conventions forbid silently discarding a corrupt managed file: the load path may
+    only halt or *quarantine-then-reset*, and either way the original bytes are
+    preserved. This is that quarantine step, shared by every load path that resets a
+    corrupt file to defaults (``config.json`` and the backup ``index.json``).
+
+    The quarantine name follows the derived-filename grammar
+    ``<stem>-<discriminator>.<role-extension>``: the discriminator is a millisecond
+    UTC stamp (``yyyymmdd-hhmmss-fff-utc``) because the moment of quarantine carries
+    meaning, and the role extension is ``.invalid`` — the file *is* now an invalid
+    cast-off, so its original extension is replaced rather than appended to, keeping
+    the debris out of any ``*.json`` scan. On the rare same-millisecond collision the
+    stem gains a nanoid so a second quarantine never clobbers the first. The move is
+    an atomic same-directory rename, so no interruption can leave a half-copied
+    ``.invalid`` file next to a still-corrupt original.
+    """
+    target = path.with_name(f"{path.stem}-{utc_now_stamp_ms()}.invalid")
+    if target.exists():
+        target = path.with_name(f"{path.stem}-{utc_now_stamp_ms()}-{nanoid()}.invalid")
+    os.replace(path, target)
+    return target

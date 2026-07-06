@@ -188,6 +188,12 @@ def test_broken_index_is_reset_and_full_backup_taken(
     index = _read_index(home)
     assert len(index) == 1
     assert index[0]["archivePath"] == "config.json"
+    # The corrupt index was quarantined, not silently discarded: an
+    # index-<ms-utc>.invalid sibling preserves the original bytes, the same
+    # quarantine-then-reset discipline config.json uses (storage-path conventions).
+    quarantined = list((home / "backups").glob("index-*.invalid"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf-8") == "{ this is not valid"
 
 
 def test_models_and_logs_and_temp_are_excluded(

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pixelup.config import resolve_state_dir
+from pixelup.config import quarantine_corrupt_file, resolve_state_dir
 from pixelup.devices import DEFAULT_DEVICE, DEVICE_VALUES
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
 from pixelup.paths import OutputFormat
@@ -50,28 +50,81 @@ class AppConfig:
     font_family: str = DEFAULT_UI_FONT_FAMILY
 
 
+@dataclass(frozen=True, slots=True)
+class ConfigLoadResult:
+    """The outcome of loading ``config.json``: the settings, plus whether a corrupt
+    file had to be quarantined.
+
+    ``quarantined_to`` is the path the corrupt original was moved aside to
+    (``<stem>-<ms-utc>.invalid``) when the file was unreadable, else ``None``. It
+    exists so the startup shell can surface a *non-fatal* user-facing notice — the
+    corrupt file held only disposable preferences, so resetting to defaults is safe,
+    and the user should know their tweaks were replaced and where the old file went.
+    The quarantine-vs-notice decision stays here, out of the GUI: the window merely
+    reports what this pure loader already decided.
+    """
+
+    config: AppConfig
+    quarantined_to: Path | None = None
+
+
 def load_app_config(path: Path | None = None) -> AppConfig:
+    """Load the settings, resetting a corrupt file to defaults.
+
+    Thin accessor over :func:`load_app_config_result` for the many callers that only
+    need the ``AppConfig`` and not the quarantine event.
+    """
+    return load_app_config_result(path).config
+
+
+def load_app_config_result(path: Path | None = None) -> ConfigLoadResult:
+    """Load ``config.json``, quarantining-then-resetting a corrupt file rather than crashing.
+
+    A present-but-corrupt settings file must never take the app down at startup: the
+    storage-path conventions require the load path to *halt or quarantine-then-reset*,
+    and for ``config.json`` — pure, disposable preferences — quarantine-then-reset is
+    the right choice, because being unable to launch over a bad settings file is the
+    worse failure. So on unreadable JSON or a non-object shape, the corrupt file is
+    moved aside to ``<stem>-<ms-utc>.invalid`` (bytes preserved via
+    :func:`quarantine_corrupt_file`), the built-in defaults are written back through
+    the normal save path, and the result records where the original went so the caller
+    can surface a non-fatal notice. A missing file is the normal first run: defaults,
+    no quarantine.
+    """
     if path is None:
         path = config_path()
     if not path.exists():
-        return AppConfig()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"PixelUp config must be a JSON object: {path}")
+        return ConfigLoadResult(AppConfig())
+    # Only unreadable-as-JSON content is treated as corrupt-and-resettable. A read
+    # that fails with an OSError (a permission or I/O problem) is a transient access
+    # failure, not corruption, and must not cost the user their real settings, so it
+    # is left to propagate rather than quarantining a file we simply could not read.
+    text = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("config is not a JSON object")
+    except ValueError:
+        quarantined_to = quarantine_corrupt_file(path)
+        defaults = AppConfig()
+        save_app_config(defaults, path)
+        return ConfigLoadResult(defaults, quarantined_to=quarantined_to)
     defaults = AppConfig()
-    return AppConfig(
-        max_concurrent_jobs=_clamp_int(
-            data.get("max_concurrent_jobs"),
-            defaults.max_concurrent_jobs,
-            MIN_CONCURRENT_JOBS,
-            MAX_CONCURRENT_JOBS,
-        ),
-        output_format=_coerce_output_format(data.get("output_format"), defaults.output_format),
-        quality=_clamp_int(data.get("quality"), defaults.quality, MIN_QUALITY, MAX_QUALITY),
-        tile=_clamp_int(data.get("tile"), defaults.tile, MIN_TILE, MAX_TILE),
-        device=_coerce_device(data.get("device"), defaults.device),
-        auto_download=bool(data.get("auto_download", defaults.auto_download)),
-        font_family=normalize_font_family(data.get("font_family"), defaults.font_family),
+    return ConfigLoadResult(
+        AppConfig(
+            max_concurrent_jobs=_clamp_int(
+                data.get("max_concurrent_jobs"),
+                defaults.max_concurrent_jobs,
+                MIN_CONCURRENT_JOBS,
+                MAX_CONCURRENT_JOBS,
+            ),
+            output_format=_coerce_output_format(data.get("output_format"), defaults.output_format),
+            quality=_clamp_int(data.get("quality"), defaults.quality, MIN_QUALITY, MAX_QUALITY),
+            tile=_clamp_int(data.get("tile"), defaults.tile, MIN_TILE, MAX_TILE),
+            device=_coerce_device(data.get("device"), defaults.device),
+            auto_download=bool(data.get("auto_download", defaults.auto_download)),
+            font_family=normalize_font_family(data.get("font_family"), defaults.font_family),
+        )
     )
 
 

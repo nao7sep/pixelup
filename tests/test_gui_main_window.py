@@ -9,7 +9,7 @@ from PIL import Image
 from PySide6.QtWidgets import QApplication
 
 from pixelup import gui
-from pixelup.app_config import AppConfig
+from pixelup.app_config import AppConfig, ConfigLoadResult
 from pixelup.gui import MainWindow
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
@@ -37,7 +37,7 @@ def make_window(
     # No real scheduling (no threads / inference), and a clean in-memory config
     # rather than the developer's real ~/.pixelup/config.json.
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
-    monkeypatch.setattr("pixelup.gui.load_app_config", lambda: AppConfig())
+    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     log_file = tmp_path / "logs" / "session.log"
     configure_session_logging(log_file)
 
@@ -70,7 +70,7 @@ def test_build_app_wires_application_and_opens_argv_paths(
     # build_app is everything main() does except the blocking app.exec(); driving it headlessly
     # is the whole point of extracting it (main() is then a 3-line untestable shell). log_file and
     # runtime_dirs are injected at a temp location so nothing touches the real ~/.pixelup.
-    monkeypatch.setattr("pixelup.gui.load_app_config", lambda: AppConfig())
+    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     image = _png(tmp_path, "a.png")
     log_file = tmp_path / "logs" / "session.log"
     runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models", temp_dir=tmp_path / "temp")

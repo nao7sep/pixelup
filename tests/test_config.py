@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from pixelup import config as config_module
 from pixelup.config import (
     ensure_models_dir,
     ensure_temp_dir,
+    quarantine_corrupt_file,
     resolve_models_dir,
     resolve_runtime_dirs,
     resolve_state_dir,
@@ -154,3 +156,44 @@ def test_ensure_temp_dir_wraps_oserror(tmp_path: Path) -> None:
     with pytest.raises(PixelupError) as exc_info:
         ensure_temp_dir(blocker / "temp")
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
+
+
+_QUARANTINE_NAME = re.compile(r"^config-\d{8}-\d{6}-\d{3}-utc\.invalid$")
+
+
+def test_quarantine_corrupt_file_moves_bytes_to_invalid_sibling(tmp_path: Path) -> None:
+    corrupt = tmp_path / "config.json"
+    corrupt.write_text("{ not valid json", encoding="utf-8")
+
+    quarantined = quarantine_corrupt_file(corrupt)
+
+    # The original is gone from its place; its bytes live on under the .invalid name.
+    assert not corrupt.exists()
+    assert quarantined.parent == tmp_path
+    assert quarantined.read_text(encoding="utf-8") == "{ not valid json"
+    # The name follows <stem>-<ms-utc>.invalid: the role extension replaces .json (so a
+    # *.json scan can never pick the debris up), and the discriminator is the compact
+    # millisecond UTC stamp.
+    assert _QUARANTINE_NAME.match(quarantined.name)
+    assert quarantined.suffix == ".invalid"
+
+
+def test_quarantine_corrupt_file_disambiguates_same_millisecond(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two quarantines forced into the same millisecond stamp must not collide: the
+    # second gains a nanoid so it never clobbers the first (both originals preserved).
+    monkeypatch.setattr(config_module, "utc_now_stamp_ms", lambda: "20260705-010203-004-utc")
+
+    first = tmp_path / "config.json"
+    first.write_text("first corrupt", encoding="utf-8")
+    quarantined_first = quarantine_corrupt_file(first)
+
+    second = tmp_path / "config.json"
+    second.write_text("second corrupt", encoding="utf-8")
+    quarantined_second = quarantine_corrupt_file(second)
+
+    assert quarantined_first != quarantined_second
+    assert quarantined_first.read_text(encoding="utf-8") == "first corrupt"
+    assert quarantined_second.read_text(encoding="utf-8") == "second corrupt"
+    assert quarantined_second.suffix == ".invalid"
