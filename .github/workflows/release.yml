@@ -67,6 +67,14 @@ jobs:
         with:
           draft: true
           prerelease: true # 0.x is pre-release
+          # Body renders from the pushed tag (${{ github.ref_name }}), so the note
+          # never goes stale on a version bump — no release-specific text baked in.
+          body: |
+            **PixelUp ${{ github.ref_name }}**
+
+            These builds are unsigned, so the OS warns on first launch:
+            - **macOS**: right-click the app → **Open** (or `xattr -dr com.apple.quarantine PixelUp.app`)
+            - **Windows**: SmartScreen → **More info** → **Run anyway**
           files: |
             dist/*.dmg
             dist/*-setup.exe
