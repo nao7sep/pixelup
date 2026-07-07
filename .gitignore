@@ -1,0 +1,20 @@
+# Local tooling
+.DS_Store
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build output — PyInstaller work dir + the frozen app / installers, produced by
+# scripts/package.* (the tracked build/ dir holds the app icons and is NOT ignored).
+build-pyinstaller/
+dist/
+
+# Coverage reports (generated)
+coverage/
+.coverage
+.coverage.*

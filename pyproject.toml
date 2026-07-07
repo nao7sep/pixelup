@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixelup"
+version = "0.1.0"
+description = "Simple Real-ESRGAN desktop upscaler"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+  { name = "Yoshinao Inoguchi", email = "nao7sep@gmail.com" },
+]
+dependencies = [
+  "PySide6==6.11.1",
+  "Pillow==12.3.0",
+  "pillow-heif==1.4.0",
+  "filelock==3.29.4",
+  # Held at 2.4.6: numpy 2.5.0 is the latest, but the transitive chain
+  # realesrgan -> facexlib -> numba requires numpy<2.5 (even numba's latest
+  # 0.66.0 caps at <2.5), and no released numba supports numpy 2.5. numba is a
+  # hard (non-optional) dep of facexlib, so it cannot be dropped. Bump to 2.5.0
+  # once a numba release lifts the <2.5 cap. Unrelated to the Python floor
+  # (raised to 3.12 below): 2.5.0 is blocked on 3.12+ too.
+  "numpy==2.4.6",
+  "torch==2.12.1",
+  "torchvision==0.27.1",
+  "opencv-python==4.13.0.92",
+  "realesrgan==0.3.0",
+  "basicsr-fixed==1.4.2",
+  "gfpgan==1.3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "ruff==0.15.20",
+]
+# Packaging-only: the freezer that builds the double-click .app/.exe. Kept out of the
+# runtime deps (test_packaging.py pins those) and out of dev so a normal test/dev sync
+# stays lean — `uv sync --extra build` is only needed by scripts/package.* and CI.
+build = [
+  "pyinstaller==6.21.0",
+]
+
+[project.gui-scripts]
+pixelup = "pixelup.gui:main"
+
+[tool.uv]
+# realesrgan hard-depends on the original `basicsr`, but pixelup pins `basicsr-fixed`
+# — a patched fork that installs under the same `basicsr` import name and fixes its
+# `from torchvision.transforms.functional_tensor import ...` (that module was removed
+# in modern torchvision). Installing both is a same-directory file collision whose
+# winner depends on install order: fine locally (fixed fork won), but on CI the
+# original won and the frozen macOS build crashed on first import. Drop the original
+# from the graph via a never-true marker so only the fixed fork provides `basicsr`.
+override-dependencies = ["basicsr ; sys_platform == 'nonexistent'"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pixelup = ["resources/*.png"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+# Coverage is an instrument, not a gate (no threshold / CI fail) — it maps where logic still
+# hides in the Qt layer. Run: `uv run pytest --cov --cov-report=term-missing --cov-report=html`.
+[tool.coverage.run]
+branch = true
+source = ["pixelup"]
+omit = [
+  # The `python -m pixelup` / gui:main entry shells — untestable bootstrap, no logic.
+  "*/pixelup/__main__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.coverage.html]
+# Gitignored, alongside the rest of the fleet's coverage output.
+directory = "coverage"
