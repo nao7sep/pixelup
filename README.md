@@ -25,9 +25,9 @@ Model weights are still fetched on demand on first use (verified against a pinne
 - Model weights (Real-ESRGAN, plus GFPGAN and its facexlib detection/parsing weights for face enhancement) — fetched on demand from their official GitHub releases and verified against a pinned SHA-256.
 - Optional: a GPU/MPS/CUDA backend for faster inference (CPU is the fallback).
 
-## Getting started
+## Run from source
 
-Run from source (the developer path) — double-click the launcher for your platform (`scripts/run-dev.command` on macOS, `scripts/run-dev.ps1` on Windows), or:
+Double-click the launcher for your platform (`scripts/run-dev.command` on macOS, `scripts/run-dev.ps1` on Windows), or:
 
 ```console
 uv sync --extra dev
