@@ -8,6 +8,7 @@ import pytest
 from pixelup.app_config import AppConfig, save_app_config
 from pixelup.backup_store import STORE_FILE_NAME, close_backup_store
 from pixelup.config import write_managed_text
+from pixelup.jobs import JobSettings
 
 
 def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -75,9 +76,9 @@ def test_save_app_config_records_config_json(
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
 
-    save_app_config(AppConfig(quality=95), target)
-    save_app_config(AppConfig(quality=95), target)  # identical -> deduped
-    save_app_config(AppConfig(quality=80), target)  # changed -> new row
+    save_app_config(AppConfig(parameters=JobSettings(quality=95)), target)
+    save_app_config(AppConfig(parameters=JobSettings(quality=95)), target)  # identical -> deduped
+    save_app_config(AppConfig(parameters=JobSettings(quality=80)), target)  # changed -> new row
 
     rows = _store_rows(home, target)
     assert len(rows) == 2  # first save + the changed save; the identical one skipped

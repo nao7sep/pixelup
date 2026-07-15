@@ -5,20 +5,80 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from pixelup.app_config import AppConfig
+from pixelup.devices import DEFAULT_DEVICE
 from pixelup.paths import OutputFormat, default_output_path
 from pixelup.upscale import UpscaleOptions, effective_denoise_strength
+
+# The valid domain of every image-processing parameter, named and gathered here
+# beside the JobSettings they bound. The Parameters panel builds its controls from
+# these and the config loader clamps/coerces incoming values against them, so a
+# value can never be representable in one place but not the other.
+MIN_QUALITY = 0
+MAX_QUALITY = 100
+MIN_TILE = 0
+MAX_TILE = 4096
+TILE_STEP = 256
+MIN_DENOISE_STRENGTH = 0.0
+MAX_DENOISE_STRENGTH = 1.0
+DENOISE_STRENGTH_STEP = 0.1
+
+# Ordered (label, value) pairs for the two enumerated parameters, in the shape
+# DEVICE_CHOICES already established: labels are for UI display, values are what a
+# job carries and what config persistence stores. Keep these the only place either
+# set is enumerated for the panel and the loader.
+SCALE_CHOICES: tuple[tuple[str, int], ...] = (
+    ("2x", 2),
+    ("4x", 4),
+)
+SCALE_VALUES: tuple[int, ...] = tuple(value for _label, value in SCALE_CHOICES)
+ALPHA_MODE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("Real-ESRGAN", "realesrgan"),
+    ("Bicubic", "bicubic"),
+)
+ALPHA_MODE_VALUES: tuple[str, ...] = tuple(value for _label, value in ALPHA_MODE_CHOICES)
+TARGET_PROFILE_CHOICES: tuple[tuple[str, str | None], ...] = (
+    ("Default", None),
+    ("sRGB", "srgb"),
+    ("Display P3", "p3"),
+    ("Adobe RGB", "adobergb"),
+)
+TARGET_PROFILE_VALUES: tuple[str | None, ...] = tuple(
+    value for _label, value in TARGET_PROFILE_CHOICES
+)
+
+# Tiling is on by default so peak memory scales with the tile, not the image: a
+# whole-image pass (tile=0) can exhaust GPU/MPS memory and hard-crash on large
+# inputs. 256 keeps peak memory low enough to run on modest GPUs and smaller-memory
+# machines; output is effectively identical to larger tiles, and a power user can
+# raise it — or deliberately choose 0, which stays selectable (MIN_TILE) — in the
+# Parameters panel.
+DEFAULT_TILE = 256
+
+# 4x is the scale PixelUp has always opened on, and the one every bundled model is
+# trained for (the x2 model is the lone exception, and plan_warnings covers the
+# mismatch), so it stays the built-in. 2x remains selectable in the Parameters panel.
+DEFAULT_SCALE = 4
 
 
 @dataclass(frozen=True, slots=True)
 class JobSettings:
+    """The image-processing parameters a job runs with — and, constructed bare, the
+    single source of PixelUp's built-in parameter defaults.
+
+    ``JobSettings()`` *is* the built-ins: the Parameters panel's "Reset parameters"
+    restores exactly this, and the config loader falls back to it field by field.
+    There is deliberately no second defaults layer to drift against — the field
+    defaults below are the only place a built-in parameter value is written.
+    """
+
+    scale: int = DEFAULT_SCALE
     face_enhance: bool = False
     denoise_strength: float = 0.5
     alpha_mode: str = "realesrgan"
-    device: str = "auto"
+    device: str = DEFAULT_DEVICE
     output_format: OutputFormat = OutputFormat.PNG
     quality: int = 95
-    tile: int = 0
+    tile: int = DEFAULT_TILE
     strip_metadata: bool = False
     target_profile: str | None = None
 
@@ -31,25 +91,22 @@ class ImageEntry:
 
 @dataclass(slots=True)
 class Job:
+    """One queued unit of work: an input, a model, and the panel as it stood.
+
+    ``settings`` is the enqueue snapshot — the Parameters panel captured whole at the
+    moment the job was created, scale included. The panel may move on afterwards; a
+    queued job never does.
+    """
+
     id: int
     input_path: Path
     model: str
-    scale: int
     output_path: Path
     settings: JobSettings
     auto_download: bool
     status: str = "pending"
     message: str = ""
     warnings: list[str] = field(default_factory=list)
-
-
-def job_settings_defaults(config: AppConfig) -> JobSettings:
-    return JobSettings(
-        device=config.device,
-        output_format=config.output_format,
-        quality=config.quality,
-        tile=config.tile,
-    )
 
 
 def settings_for_model(settings: JobSettings, model: str) -> JobSettings:
@@ -64,12 +121,17 @@ def create_jobs(
     *,
     input_paths: list[Path],
     models: list[str],
-    scale: int,
     settings: JobSettings,
     existing_jobs: list[Job],
     auto_download: bool,
     job_ids: Iterator[int],
 ) -> list[Job]:
+    """Plan a batch of jobs from the panel snapshot in ``settings``.
+
+    ``settings`` carries every parameter the batch runs with — scale among them — so
+    the snapshot each job freezes is exactly the one the caller passed, with nothing
+    arriving alongside it to drift out of sync.
+    """
     # One reservation set for the whole batch, keyed by resolved absolute path, so
     # inputs whose stems differ only in case (Photo.png vs photo.png) disambiguate
     # against each other and not just against pre-existing files.
@@ -84,7 +146,7 @@ def create_jobs(
             output_path = default_output_path(
                 input_path,
                 model=model,
-                scale=scale,
+                scale=model_settings.scale,
                 output_format=model_settings.output_format,
                 reserved=reserved,
             )
@@ -94,7 +156,6 @@ def create_jobs(
                     id=next(job_ids),
                     input_path=input_path,
                     model=model,
-                    scale=scale,
                     output_path=output_path,
                     settings=model_settings,
                     auto_download=auto_download,
@@ -118,7 +179,7 @@ def retry_failed_jobs(jobs: list[Job]) -> list[int]:
         job.output_path = default_output_path(
             job.input_path,
             model=job.model,
-            scale=job.scale,
+            scale=job.settings.scale,
             output_format=job.settings.output_format,
             reserved=reserved,
         )
@@ -140,7 +201,7 @@ def options_for_job(job: Job) -> UpscaleOptions:
         input_path=job.input_path,
         output_arg=str(job.output_path),
         model=job.model,
-        scale=job.scale,
+        scale=job.settings.scale,
         tile=job.settings.tile,
         tile_pad=10,
         pre_pad=0,
@@ -174,6 +235,7 @@ def coerce_output_format(value: OutputFormat | str | object) -> OutputFormat:
 
 def job_settings_log_payload(settings: JobSettings) -> dict[str, object]:
     return {
+        "scale": settings.scale,
         "face_enhance": settings.face_enhance,
         "denoise_strength": settings.denoise_strength,
         "alpha_mode": settings.alpha_mode,
@@ -183,18 +245,6 @@ def job_settings_log_payload(settings: JobSettings) -> dict[str, object]:
         "tile": settings.tile,
         "strip_metadata": settings.strip_metadata,
         "target_profile": settings.target_profile,
-    }
-
-
-def config_log_payload(config: AppConfig) -> dict[str, object]:
-    return {
-        "max_concurrent_jobs": config.max_concurrent_jobs,
-        "output_format": config.output_format.value,
-        "quality": config.quality,
-        "tile": config.tile,
-        "device": config.device,
-        "auto_download": config.auto_download,
-        "font_family": config.font_family,
     }
 
 
@@ -220,10 +270,11 @@ def job_status_summary(statuses: Iterable[str]) -> str:
 
 
 def job_log_payload(job: Job) -> dict[str, object]:
+    # No top-level "scale": it lives in the settings payload now, and logging it twice
+    # would be two places to drift.
     return {
         "input_path": str(job.input_path),
         "model": job.model,
-        "scale": job.scale,
         "output_path": str(job.output_path),
         "settings": job_settings_log_payload(job.settings),
         "auto_download": job.auto_download,

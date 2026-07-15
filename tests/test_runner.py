@@ -57,7 +57,6 @@ def _make_job(job_id: int, tmp_path: Path) -> Job:
         id=job_id,
         input_path=tmp_path / f"in-{job_id}.png",
         model="realesr-general-x4v3",
-        scale=4,
         output_path=tmp_path / f"out-{job_id}.png",
         settings=JobSettings(),
         auto_download=False,

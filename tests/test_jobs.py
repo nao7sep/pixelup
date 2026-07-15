@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from itertools import count
 from pathlib import Path
 
 import pytest
 
-from pixelup.app_config import AppConfig
+from pixelup.devices import DEFAULT_DEVICE
 from pixelup.jobs import (
+    DEFAULT_SCALE,
+    DEFAULT_TILE,
+    MIN_TILE,
+    SCALE_CHOICES,
+    SCALE_VALUES,
     Job,
     JobSettings,
     coerce_output_format,
-    config_log_payload,
     create_jobs,
     job_log_payload,
-    job_settings_defaults,
     job_settings_log_payload,
     job_status_summary,
     options_for_job,
@@ -50,9 +54,9 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
         id=1,
         input_path=tmp_path / "a.png",
         model="realesr-general-x4v3",
-        scale=2,
         output_path=tmp_path / "out.jpg",
         settings=JobSettings(
+            scale=2,
             face_enhance=True,
             denoise_strength=0.5,
             alpha_mode="bicubic",
@@ -88,27 +92,55 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
     assert options.lock_timeout == 600
 
 
-def test_config_log_payload_shape() -> None:
-    payload = config_log_payload(
-        AppConfig(
-            max_concurrent_jobs=2,
-            output_format=OutputFormat.JPG,
-            quality=70,
-            tile=128,
-            device="cpu",
-            auto_download=False,
-        )
-    )
+def test_bare_job_settings_defaults_to_a_safe_tile() -> None:
+    # The whole point of the constant: tiling is ON by default, so peak memory scales
+    # with the tile rather than the image. tile=0 (a whole-image pass) can exhaust
+    # GPU/MPS memory and hard-crash on a large input, and JobSettings() is what the
+    # panel's reset hands the user, so the bare dataclass must never carry 0.
+    assert JobSettings().tile == DEFAULT_TILE
+    assert JobSettings().tile != MIN_TILE
+    assert DEFAULT_TILE == 256
 
-    assert payload == {
-        "max_concurrent_jobs": 2,
-        "output_format": "jpg",
-        "quality": 70,
-        "tile": 128,
-        "device": "cpu",
-        "auto_download": False,
-        "font_family": AppConfig().font_family,
-    }
+
+def test_bare_job_settings_are_the_built_in_defaults() -> None:
+    # JobSettings() *is* the single source of the built-ins — there is no second
+    # defaults layer to drift against — so every field must stand on its own as the
+    # value the app ships with, not a placeholder some other layer overwrites.
+    defaults = JobSettings()
+
+    assert defaults.scale == DEFAULT_SCALE
+    assert defaults.face_enhance is False
+    assert defaults.denoise_strength == 0.5
+    assert defaults.alpha_mode == "realesrgan"
+    assert defaults.device == DEFAULT_DEVICE
+    assert defaults.output_format == OutputFormat.PNG
+    assert defaults.quality == 95
+    assert defaults.tile == DEFAULT_TILE
+    assert defaults.strip_metadata is False
+    assert defaults.target_profile is None
+
+
+def test_bare_job_settings_defaults_to_the_scale_the_panel_always_opened_on() -> None:
+    # Scale folded into JobSettings, and the fold must not have moved the value: 4x is
+    # what the panel checked before it was persisted or resettable, so it is what the
+    # built-in has to be. Pinned against the constant *and* the literal, because the
+    # constant alone would happily follow a typo.
+    assert JobSettings().scale == DEFAULT_SCALE
+    assert DEFAULT_SCALE == 4
+
+
+def test_scale_choices_are_the_two_selectable_scales() -> None:
+    # The same 2x/4x the panel has always offered — enumerated once, beside
+    # JobSettings, for the panel and the config loader both.
+    assert SCALE_VALUES == (2, 4)
+    assert SCALE_CHOICES == (("2x", 2), ("4x", 4))
+    assert DEFAULT_SCALE in SCALE_VALUES
+
+
+def test_zero_tile_stays_selectable() -> None:
+    # 0 stops being the default; it does not stop being a choice a power user can make.
+    assert MIN_TILE == 0
+    assert JobSettings(tile=MIN_TILE).tile == 0
 
 
 def test_job_log_payload_includes_settings_and_paths(tmp_path: Path) -> None:
@@ -116,9 +148,8 @@ def test_job_log_payload_includes_settings_and_paths(tmp_path: Path) -> None:
         id=7,
         input_path=tmp_path / "a.png",
         model="realesr-general-x4v3",
-        scale=4,
         output_path=tmp_path / "o.png",
-        settings=JobSettings(),
+        settings=JobSettings(scale=2),
         auto_download=True,
     )
 
@@ -127,9 +158,12 @@ def test_job_log_payload_includes_settings_and_paths(tmp_path: Path) -> None:
     assert payload["input_path"] == str(tmp_path / "a.png")
     assert payload["output_path"] == str(tmp_path / "o.png")
     assert payload["model"] == "realesr-general-x4v3"
-    assert payload["scale"] == 4
     assert payload["auto_download"] is True
     assert payload["settings"]["output_format"] == "png"  # type: ignore[index]
+    # Scale is logged as part of the settings snapshot, and only there — a second
+    # top-level copy would be a place for the two to disagree.
+    assert payload["settings"]["scale"] == 2  # type: ignore[index]
+    assert "scale" not in payload
 
 
 def test_job_status_summary_empty() -> None:
@@ -160,22 +194,6 @@ def test_job_settings_log_payload_accepts_string_backed_output_format() -> None:
     assert payload["output_format"] == "webp"
 
 
-def test_job_settings_defaults_come_from_app_config() -> None:
-    settings = job_settings_defaults(
-        AppConfig(
-            output_format=OutputFormat.WEBP,
-            quality=82,
-            tile=256,
-            device="cpu",
-        )
-    )
-
-    assert settings.output_format == OutputFormat.WEBP
-    assert settings.quality == 82
-    assert settings.tile == 256
-    assert settings.device == "cpu"
-
-
 def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
     first = tmp_path / "a.png"
     second = tmp_path / "b.png"
@@ -185,7 +203,6 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
     jobs = create_jobs(
         input_paths=[first, second],
         models=["realesr-general-x4v3", "RealESRGAN_x4plus"],
-        scale=4,
         settings=JobSettings(output_format=OutputFormat.PNG),
         existing_jobs=[],
         auto_download=True,
@@ -207,6 +224,55 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
     }
 
 
+def test_create_jobs_takes_scale_from_the_settings_snapshot(tmp_path: Path) -> None:
+    # Scale arrives inside the settings snapshot, not beside it: the job freezes it,
+    # the output name is planned from it, and options_for_job hands that same value to
+    # the upscaler. One value, one carrier, all the way down.
+    source = tmp_path / "a.png"
+    source.write_bytes(b"")
+
+    jobs = create_jobs(
+        input_paths=[source],
+        models=["realesr-general-x4v3"],
+        settings=JobSettings(scale=2),
+        existing_jobs=[],
+        auto_download=True,
+        job_ids=count(1),
+    )
+
+    assert jobs[0].settings.scale == 2
+    assert jobs[0].output_path.name == "a-realesr-general-x4v3-2x.png"
+    assert options_for_job(jobs[0]).scale == 2
+
+
+def test_create_jobs_snapshot_is_frozen_against_later_panel_edits(tmp_path: Path) -> None:
+    # The enqueue-snapshot semantic, at the planner: the JobSettings a job holds is a
+    # frozen value, so nothing the panel does afterwards can reach back into queued
+    # work. dataclasses.replace models the panel moving on — it builds a new settings
+    # object and must leave the queued job's own untouched.
+    source = tmp_path / "a.png"
+    source.write_bytes(b"")
+    panel = JobSettings(scale=2)
+
+    jobs = create_jobs(
+        input_paths=[source],
+        models=["realesr-general-x4v3"],
+        settings=panel,
+        existing_jobs=[],
+        auto_download=True,
+        job_ids=count(1),
+    )
+    queued = jobs[0]
+
+    moved_on = replace(panel, scale=4)
+
+    assert moved_on.scale == 4
+    assert queued.settings.scale == 2
+    assert options_for_job(queued).scale == 2
+    # And the output it already planned still names the scale it was queued with.
+    assert queued.output_path.name == "a-realesr-general-x4v3-2x.png"
+
+
 def test_create_jobs_disambiguates_case_only_sibling_inputs(tmp_path: Path) -> None:
     # Photo.png and photo.png live in one directory; their default output stems
     # differ only in case and would clobber each other on macOS/Windows. The
@@ -219,7 +285,6 @@ def test_create_jobs_disambiguates_case_only_sibling_inputs(tmp_path: Path) -> N
     jobs = create_jobs(
         input_paths=[upper, lower],
         models=["realesr-general-x4v3"],
-        scale=4,
         settings=JobSettings(output_format=OutputFormat.PNG),
         existing_jobs=[],
         auto_download=True,
@@ -247,7 +312,6 @@ def test_create_jobs_separates_sidecars_across_output_formats(tmp_path: Path) ->
         id=1,
         input_path=source,
         model="realesr-general-x4v3",
-        scale=4,
         output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
         settings=JobSettings(output_format=OutputFormat.PNG),
         auto_download=True,
@@ -256,7 +320,6 @@ def test_create_jobs_separates_sidecars_across_output_formats(tmp_path: Path) ->
     jobs = create_jobs(
         input_paths=[source],
         models=["realesr-general-x4v3"],
-        scale=4,
         settings=JobSettings(output_format=OutputFormat.JPG),
         existing_jobs=[png_job],
         auto_download=True,
@@ -275,7 +338,6 @@ def test_create_jobs_reserves_existing_output_paths(tmp_path: Path) -> None:
         id=1,
         input_path=source,
         model="realesr-general-x4v3",
-        scale=4,
         output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
         settings=JobSettings(),
         auto_download=True,
@@ -284,7 +346,6 @@ def test_create_jobs_reserves_existing_output_paths(tmp_path: Path) -> None:
     jobs = create_jobs(
         input_paths=[source],
         models=["realesr-general-x4v3"],
-        scale=4,
         settings=JobSettings(output_format=OutputFormat.PNG),
         existing_jobs=[existing],
         auto_download=True,
@@ -301,7 +362,6 @@ def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
         id=1,
         input_path=source,
         model="realesr-general-x4v3",
-        scale=4,
         output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
         settings=JobSettings(),
         auto_download=True,
@@ -311,7 +371,6 @@ def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
         id=2,
         input_path=source,
         model="realesr-general-x4v3",
-        scale=4,
         output_path=tmp_path / "old.png",
         settings=JobSettings(),
         auto_download=True,

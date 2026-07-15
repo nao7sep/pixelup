@@ -1,13 +1,26 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_managed_text
-from pixelup.devices import DEFAULT_DEVICE, DEVICE_VALUES
+from pixelup.devices import DEVICE_VALUES
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
+from pixelup.jobs import (
+    ALPHA_MODE_VALUES,
+    MAX_DENOISE_STRENGTH,
+    MAX_QUALITY,
+    MAX_TILE,
+    MIN_DENOISE_STRENGTH,
+    MIN_QUALITY,
+    MIN_TILE,
+    SCALE_VALUES,
+    TARGET_PROFILE_VALUES,
+    JobSettings,
+    job_settings_log_payload,
+)
 from pixelup.paths import OutputFormat
 
 
@@ -21,33 +34,29 @@ def config_path() -> Path:
     """
     return resolve_state_dir() / "config.json"
 
-# Valid domains for the persisted settings. The UI controls and this loader both
-# reference these, so a value can never be representable in one place but not the
-# other.
+# Valid domain of the settings this module still owns. The settings dialog and this
+# loader both reference these, so a value can never be representable in one place but
+# not the other. The image-processing parameters' own domains live beside JobSettings
+# (see pixelup.jobs), which is where their meaning now lives.
 MIN_CONCURRENT_JOBS = 1
 MAX_CONCURRENT_JOBS = 8
-MIN_QUALITY = 0
-MAX_QUALITY = 100
-MIN_TILE = 0
-MAX_TILE = 4096
-TILE_STEP = 256
-# Tiling is on by default so peak memory scales with the tile, not the image: a
-# whole-image pass (tile=0) can exhaust GPU/MPS memory and hard-crash on large
-# inputs. 256 keeps peak memory low enough to run on modest GPUs and smaller-memory
-# machines; output is effectively identical to larger tiles, and a power user can
-# raise it in settings for a small speed gain.
-DEFAULT_TILE = 256
 
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
+    """Everything PixelUp persists in ``config.json``.
+
+    Two kinds of thing, one home each. The three scalars are the Settings modal's
+    whole content — what the main window does not show. ``parameters`` is the main
+    window's Parameters panel, persisted whole: the panel is the only place those
+    values are edited, and ``JobSettings()`` is the only place their built-in
+    defaults are written, so there is no second defaults layer to drift against.
+    """
+
     max_concurrent_jobs: int = MIN_CONCURRENT_JOBS
-    output_format: OutputFormat = OutputFormat.PNG
-    quality: int = 95
-    tile: int = DEFAULT_TILE
-    device: str = DEFAULT_DEVICE
     auto_download: bool = True
     font_family: str = DEFAULT_UI_FONT_FAMILY
+    parameters: JobSettings = field(default_factory=JobSettings)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,12 +127,9 @@ def load_app_config_result(path: Path | None = None) -> ConfigLoadResult:
                 MIN_CONCURRENT_JOBS,
                 MAX_CONCURRENT_JOBS,
             ),
-            output_format=_coerce_output_format(data.get("output_format"), defaults.output_format),
-            quality=_clamp_int(data.get("quality"), defaults.quality, MIN_QUALITY, MAX_QUALITY),
-            tile=_clamp_int(data.get("tile"), defaults.tile, MIN_TILE, MAX_TILE),
-            device=_coerce_device(data.get("device"), defaults.device),
             auto_download=bool(data.get("auto_download", defaults.auto_download)),
             font_family=normalize_font_family(data.get("font_family"), defaults.font_family),
+            parameters=_load_parameters(data.get("parameters"), defaults.parameters),
         )
     )
 
@@ -159,6 +165,40 @@ def ensure_app_config(path: Path | None = None) -> bool:
     return True
 
 
+def _load_parameters(value: Any, defaults: JobSettings) -> JobSettings:
+    """Load the Parameters panel field by field, each falling back to its built-in.
+
+    Same lenient-load contract as the scalars above: a missing, absent-typed, or
+    out-of-domain field quietly becomes its ``JobSettings()`` default rather than
+    failing the load, because config.json is disposable preferences and one bad
+    field must not cost the user the other nine. Only whole-file corruption is
+    escalated (quarantine-then-reset, see load_app_config_result); a ``parameters``
+    key that is not an object is just a field that cannot be read, so the whole
+    panel falls back to the built-ins.
+    """
+    if not isinstance(value, dict):
+        return defaults
+    return JobSettings(
+        scale=_coerce_scale(value.get("scale"), defaults.scale),
+        face_enhance=bool(value.get("face_enhance", defaults.face_enhance)),
+        denoise_strength=_clamp_float(
+            value.get("denoise_strength"),
+            defaults.denoise_strength,
+            MIN_DENOISE_STRENGTH,
+            MAX_DENOISE_STRENGTH,
+        ),
+        alpha_mode=_coerce_alpha_mode(value.get("alpha_mode"), defaults.alpha_mode),
+        device=_coerce_device(value.get("device"), defaults.device),
+        output_format=_coerce_output_format(value.get("output_format"), defaults.output_format),
+        quality=_clamp_int(value.get("quality"), defaults.quality, MIN_QUALITY, MAX_QUALITY),
+        tile=_clamp_int(value.get("tile"), defaults.tile, MIN_TILE, MAX_TILE),
+        strip_metadata=bool(value.get("strip_metadata", defaults.strip_metadata)),
+        target_profile=_coerce_target_profile(
+            value.get("target_profile"), defaults.target_profile
+        ),
+    )
+
+
 def _clamp_int(value: Any, default: int, low: int, high: int) -> int:
     try:
         number = int(value)
@@ -167,11 +207,58 @@ def _clamp_int(value: Any, default: int, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
+def _clamp_float(value: Any, default: float, low: float, high: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, number))
+
+
+def _coerce_scale(value: Any, default: int) -> int:
+    """Read a persisted scale, falling back to the built-in unless it names a real choice.
+
+    Enumerated, not clamped — the difference matters. ``tile`` and ``quality`` are
+    ranges, where snapping a stray value to the nearest end is a faithful reading of
+    what the user meant. Scale is a choice between 2x and 4x: a 3 is not "close to"
+    either one, so it falls back to the built-in the way an unknown ``alpha_mode``
+    does. Membership is therefore tested against the value itself rather than an
+    ``int()`` of it, so a hand-edited 2.5 cannot truncate into a selectable 2 the user
+    never picked; a numeric string is still read, matching the other loaders' tolerance.
+    """
+    if isinstance(value, str):
+        try:
+            value = int(value.strip())
+        except ValueError:
+            return default
+    for scale in SCALE_VALUES:
+        if value == scale:
+            return scale
+    return default
+
+
 def _coerce_device(value: Any, default: str) -> str:
     if value is None:
         return default
     text = str(value).lower()
     return text if text in DEVICE_VALUES else default
+
+
+def _coerce_alpha_mode(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    text = str(value).lower()
+    return text if text in ALPHA_MODE_VALUES else default
+
+
+def _coerce_target_profile(value: Any, default: str | None) -> str | None:
+    # ``None`` is itself a valid target profile ("Default", no conversion), and it is
+    # also the built-in, so a missing key and an explicit null land on the same value
+    # through the default.
+    if value is None:
+        return default
+    text = str(value).lower()
+    return text if text in TARGET_PROFILE_VALUES else default
 
 
 def _coerce_output_format(value: Any, default: OutputFormat) -> OutputFormat:
@@ -186,10 +273,31 @@ def _coerce_output_format(value: Any, default: OutputFormat) -> OutputFormat:
 def _to_json(config: AppConfig) -> dict[str, Any]:
     return {
         "auto_download": config.auto_download,
-        "device": config.device,
         "font_family": config.font_family,
         "max_concurrent_jobs": config.max_concurrent_jobs,
-        "output_format": config.output_format.value,
-        "quality": config.quality,
-        "tile": config.tile,
+        "parameters": _parameters_to_json(config.parameters),
+    }
+
+
+def _parameters_to_json(parameters: JobSettings) -> dict[str, Any]:
+    return {
+        "alpha_mode": parameters.alpha_mode,
+        "denoise_strength": parameters.denoise_strength,
+        "device": parameters.device,
+        "face_enhance": parameters.face_enhance,
+        "output_format": parameters.output_format.value,
+        "quality": parameters.quality,
+        "scale": parameters.scale,
+        "strip_metadata": parameters.strip_metadata,
+        "target_profile": parameters.target_profile,
+        "tile": parameters.tile,
+    }
+
+
+def config_log_payload(config: AppConfig) -> dict[str, object]:
+    return {
+        "max_concurrent_jobs": config.max_concurrent_jobs,
+        "auto_download": config.auto_download,
+        "font_family": config.font_family,
+        "parameters": job_settings_log_payload(config.parameters),
     }

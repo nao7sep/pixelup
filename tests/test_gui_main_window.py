@@ -6,11 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 
 from pixelup import gui
-from pixelup.app_config import AppConfig, ConfigLoadResult
+from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
 from pixelup.gui import MainWindow
+from pixelup.jobs import DEFAULT_SCALE, JobSettings
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
 
@@ -35,7 +36,11 @@ def make_window(
     monkeypatch: pytest.MonkeyPatch,
 ):
     # No real scheduling (no threads / inference), and a clean in-memory config
-    # rather than the developer's real ~/.pixelup/config.json.
+    # rather than the developer's real ~/.pixelup/config.json. PIXELUP_HOME is
+    # redirected as well as the load stubbed, because the window now *writes*:
+    # ensure_app_config() and the Parameters panel's save both resolve config.json
+    # through the storage root, and neither may land in the real one.
+    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     log_file = tmp_path / "logs" / "session.log"
@@ -70,6 +75,7 @@ def test_build_app_wires_application_and_opens_argv_paths(
     # build_app is everything main() does except the blocking app.exec(); driving it headlessly
     # is the whole point of extracting it (main() is then a 3-line untestable shell). log_file and
     # runtime_dirs are injected at a temp location so nothing touches the real ~/.pixelup.
+    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     image = _png(tmp_path, "a.png")
     log_file = tmp_path / "logs" / "session.log"
@@ -239,6 +245,21 @@ def test_action_buttons_reflect_state(make_window, tmp_path: Path) -> None:
     assert window.queue_all_selected_models_button.isEnabled() is True
 
 
+def test_settings_only_options_have_no_main_window_control(make_window) -> None:
+    # One home per thing, checked from the other side. auto_download and
+    # max_concurrent_jobs are the settings dialog's; a control for either here would
+    # rebuild the exact half-persisted/half-transient split this design removed. The
+    # Models group is model *selection* only — no download toggle rides along in it.
+    window = make_window()
+
+    assert set(window.model_checks) == set(gui.UPSCALE_MODELS)
+    checkbox_labels = {box.text() for box in window.findChildren(QCheckBox)}
+    assert checkbox_labels == set(gui.UPSCALE_MODELS) | {"Face enhancement", "Strip metadata"}
+    # The window reads both from config and never offers a widget onto them.
+    assert not hasattr(window, "auto_download")
+    assert not hasattr(window, "concurrent")
+
+
 def test_reveal_log_file_survives_failure(
     make_window, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -283,3 +304,207 @@ def test_reveal_in_file_browser_windows_assumes_success(
     monkeypatch.setattr(gui.subprocess, "run", _run)
     assert gui._reveal_in_file_browser(target) is True
     assert ran
+
+
+def _reset_button(window: MainWindow) -> QPushButton:
+    return next(
+        button
+        for button in window.findChildren(QPushButton)
+        if button.text() == "Reset parameters"
+    )
+
+
+def _wander_from_defaults(window: MainWindow) -> None:
+    window.scale_buttons[2].setChecked(True)
+    window.face_enhance.setChecked(True)
+    window.denoise_strength.setValue(0.75)
+    window.quality.setValue(10)
+    window.tile.setValue(1024)
+    window.strip_metadata.setChecked(True)
+    window.device.setCurrentIndex(window.device.findData("cpu"))
+
+
+def test_reset_parameters_button_restores_the_built_ins(make_window) -> None:
+    # Drives the real button rather than the handler, so the label, the wiring, and
+    # the reset behavior are pinned together. It restores JobSettings() — the
+    # built-ins — and not the user's persisted config, which is what a reset exists
+    # to escape. The font is an app-appearance setting owned by the settings dialog
+    # and must be no business of this reset.
+    window = make_window()
+    reset = _reset_button(window)
+
+    _wander_from_defaults(window)
+    assert window.current_job_settings() != JobSettings()
+
+    reset.click()
+
+    assert window.current_job_settings() == JobSettings()
+    assert window.tile.value() == JobSettings().tile == 256
+    assert window.config.font_family == AppConfig().font_family
+
+
+def test_reset_parameters_button_restores_the_built_in_scale(make_window) -> None:
+    # Scale is a panel parameter like any other now, so the real button restores it
+    # too — the holdout that used to sit outside both persistence and reset. Driven by
+    # the button's label text, and asserted on the radios themselves, so the widget
+    # the user actually looks at is what got reset.
+    window = make_window()
+    window.scale_buttons[2].setChecked(True)
+    window._flush_parameters_save()
+    # Persisted first, deliberately: with 2x saved, a reset that reached for the user's
+    # config instead of the built-ins would land back on 2x and still look like it had
+    # worked. Only a persisted-then-reset run can tell the two apart.
+    assert window.config.parameters.scale == 2
+    assert window.current_job_settings().scale == 2
+
+    _reset_button(window).click()
+
+    assert window.current_job_settings().scale == DEFAULT_SCALE
+    assert window.scale_buttons[DEFAULT_SCALE].isChecked() is True
+    assert window.scale_buttons[2].isChecked() is False
+    # And the reset is persisted like any other panel edit, so it survives a relaunch.
+    assert window.config.parameters.scale == DEFAULT_SCALE
+
+
+def test_reset_parameters_ignores_the_persisted_config(make_window) -> None:
+    # The pin that the deleted defaults layer cannot come back: even with a persisted
+    # panel far from the built-ins, reset goes to the built-ins, not back to what the
+    # user had saved.
+    window = make_window()
+    window.quality.setValue(10)
+    window.tile.setValue(1024)
+    window._flush_parameters_save()
+    assert window.config.parameters.quality == 10
+
+    _reset_button(window).click()
+
+    assert window.current_job_settings() == JobSettings()
+    # And the reset is itself persisted, so it survives the next launch.
+    assert window.config.parameters == JobSettings()
+
+
+def test_parameter_edits_persist_to_config_json(make_window) -> None:
+    # The panel is durable: an edit reaches config.json, so a relaunch reads it back.
+    # Loaded from disk (not from window.config) so the serializer is in the loop.
+    window = make_window()
+
+    _wander_from_defaults(window)
+    window._flush_parameters_save()
+
+    persisted = load_app_config(config_path()).parameters
+    assert persisted == window.current_job_settings()
+    assert persisted.quality == 10
+    assert persisted.tile == 1024
+    assert persisted.face_enhance is True
+    assert persisted.device == "cpu"
+    assert persisted.scale == 2
+    assert persisted != JobSettings()
+
+
+def test_scale_edit_persists_to_config_json(make_window) -> None:
+    # Scale rides the same debounced save as the rest of the panel: clicking the radio
+    # (not calling a setter) reaches config.json, so the next launch opens on it. Read
+    # back from disk so the serializer and the loader are both in the loop.
+    window = make_window()
+    assert window.current_job_settings().scale == DEFAULT_SCALE
+    assert window._parameters_save_timer.isActive() is False
+
+    window.scale_buttons[2].click()
+
+    # The click alone schedules the debounced save. Asserted before the flush, because
+    # a flush would hide an unwired radio: closeEvent flushes too, so a scale that only
+    # ever saved at close would still pass a flush-then-read check while quietly losing
+    # the edit on a crash or a force-quit.
+    assert window._parameters_save_timer.isActive() is True
+
+    window._flush_parameters_save()
+
+    assert load_app_config(config_path()).parameters.scale == 2
+
+
+def test_window_seeds_the_panel_from_the_persisted_parameters(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Startup reads the persisted panel, not a defaults factory: whatever the user
+    # left behind is what the panel opens on.
+    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    parameters = JobSettings(
+        scale=2, quality=42, tile=512, alpha_mode="bicubic", target_profile="p3"
+    )
+    monkeypatch.setattr(
+        "pixelup.gui.load_app_config_result",
+        lambda: ConfigLoadResult(AppConfig(parameters=parameters)),
+    )
+    log_file = tmp_path / "logs" / "session.log"
+    configure_session_logging(log_file)
+
+    window = MainWindow(log_file=log_file)
+    try:
+        assert window.current_job_settings() == parameters
+        assert window.quality.value() == 42
+        assert window.tile.value() == 512
+        assert window.alpha_mode.currentData() == "bicubic"
+        assert window.target_profile.currentData() == "p3"
+        # The persisted scale reaches the radios, not just the settings snapshot.
+        assert window.scale_buttons[2].isChecked() is True
+        assert window.scale_buttons[4].isChecked() is False
+    finally:
+        window._session_shutdown = True
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_queued_jobs_keep_their_snapshot_when_the_panel_changes(
+    make_window, tmp_path: Path
+) -> None:
+    # Persisting the panel must not reach backwards into work already queued: each job
+    # captures the panel at creation and holds that snapshot, so editing the panel
+    # afterwards changes the next job, never the queued one.
+    window = make_window()
+    window.open_paths([_png(tmp_path, "a.png")])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    window.tile.setValue(128)
+    window._queue_selected_image()
+    queued = window.jobs[0]
+    assert queued.settings.tile == 128
+
+    window.tile.setValue(1024)
+    window._flush_parameters_save()
+
+    assert queued.settings.tile == 128
+    assert window.config.parameters.tile == 1024
+    window._queue_selected_image()
+    assert window.jobs[1].settings.tile == 1024
+
+
+def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_path: Path) -> None:
+    # The enqueue snapshot, through the real window, for the field that just joined it.
+    # Scale is now persisted and resettable, so it is exactly the field that could
+    # start leaking backwards into queued work — a job must keep the scale the panel
+    # had when the user pressed Queue, in its settings, its planned output name, and
+    # the row the queue table shows.
+    window = make_window()
+    window.open_paths([_png(tmp_path, "a.png")])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    window.scale_buttons[2].click()
+    window._queue_selected_image()
+    queued = window.jobs[0]
+
+    assert queued.settings.scale == 2
+    assert queued.output_path.name == "a-realesr-general-x4v3-2x.png"
+    assert window.queue_table.item(0, 2).text() == "2x"
+
+    # The panel moves on, and the reset button is the most forceful way it can.
+    _reset_button(window).click()
+
+    assert queued.settings.scale == 2
+    assert queued.output_path.name == "a-realesr-general-x4v3-2x.png"
+    assert window.queue_table.item(0, 2).text() == "2x"
+    assert window.config.parameters.scale == DEFAULT_SCALE
+
+    # The next job takes the panel as it now stands.
+    window._queue_selected_image()
+    assert window.jobs[1].settings.scale == DEFAULT_SCALE
+    assert window.queue_table.item(1, 2).text() == "4x"

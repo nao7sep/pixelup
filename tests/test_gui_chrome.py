@@ -24,7 +24,10 @@ def make_window(
     monkeypatch: pytest.MonkeyPatch,
 ):
     # No real scheduling (no threads / inference), and a clean in-memory config
-    # rather than the developer's real ~/.pixelup/config.json.
+    # rather than the developer's real ~/.pixelup/config.json. PIXELUP_HOME is
+    # redirected as well as the load stubbed, because the window also writes
+    # config.json (first-run materialize, and the Parameters panel's own save).
+    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     log_file = tmp_path / "logs" / "session.log"

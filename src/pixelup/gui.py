@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from collections import defaultdict
+from dataclasses import replace
 from itertools import count
 from pathlib import Path
 
@@ -44,9 +45,7 @@ from PySide6.QtWidgets import (
 from pixelup import __version__
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import (
-    MAX_QUALITY,
-    MAX_TILE,
-    TILE_STEP,
+    config_log_payload,
     config_path,
     ensure_app_config,
     load_app_config_result,
@@ -57,14 +56,24 @@ from pixelup.errors import PixelupError
 from pixelup.fonts import apply_ui_font
 from pixelup.imaging import read_image_size, register_image_plugins
 from pixelup.jobs import (
+    ALPHA_MODE_CHOICES,
+    DEFAULT_SCALE,
+    DENOISE_STRENGTH_STEP,
+    MAX_DENOISE_STRENGTH,
+    MAX_QUALITY,
+    MAX_TILE,
+    MIN_DENOISE_STRENGTH,
+    MIN_QUALITY,
+    MIN_TILE,
+    SCALE_CHOICES,
+    TARGET_PROFILE_CHOICES,
+    TILE_STEP,
     ImageEntry,
     Job,
     JobSettings,
     coerce_output_format,
-    config_log_payload,
     create_jobs,
     job_log_payload,
-    job_settings_defaults,
     job_settings_log_payload,
     job_status_summary,
     retry_failed_jobs,
@@ -107,6 +116,14 @@ _CELL_PADDING = 24
 # Minimum readable width for a filename column: a fixed filename column elides to
 # this (with a tooltip), and a stretch filename column uses it as its floor.
 _NAME_MIN_WIDTH = 180
+
+# How long the Parameters panel waits after the last edit before writing config.json.
+# The panel saves as it is edited rather than only at a well-behaved quit, so a crash
+# or a force-quit cannot cost the user their parameters — but the two spin boxes emit
+# a change per typed digit, and every save is an atomic rewrite plus a backup record,
+# so the writes are coalesced. Long enough to absorb typing "1024", short enough that
+# the save is landed by the time the user has moved on.
+_PARAMETERS_SAVE_DELAY_MS = 500
 
 
 def _fit_columns(widget: QWidget, *samples: str) -> int:
@@ -188,6 +205,13 @@ class MainWindow(QMainWindow):
         self.runner.progress.connect(self._job_progress)
         self.runner.finished.connect(self._job_finished)
         self._session_shutdown = False
+        # Coalesces the Parameters panel's edits into one save (see
+        # _PARAMETERS_SAVE_DELAY_MS). Built before the UI, because building the panel
+        # connects the widget-change signals that start it.
+        self._parameters_save_timer = QTimer(self)
+        self._parameters_save_timer.setSingleShot(True)
+        self._parameters_save_timer.setInterval(_PARAMETERS_SAVE_DELAY_MS)
+        self._parameters_save_timer.timeout.connect(self._save_parameters)
 
         self.setWindowTitle("PixelUp")
         self.setAcceptDrops(True)
@@ -200,7 +224,10 @@ class MainWindow(QMainWindow):
         hint = self.centralWidget().sizeHint()
         self.setMinimumSize(hint)
         self.resize(hint.width() + 160, hint.height() + 120)
-        self._apply_job_settings(job_settings_defaults(self.config))
+        # The panel opens on what the user last left it at, not on a defaults layer:
+        # config.parameters is the persisted panel, and on a fresh install the loader
+        # has already filled it with JobSettings() — the built-ins.
+        self._apply_job_settings(self.config.parameters)
         self._update_selected_image()
         self._update_action_buttons()
 
@@ -234,6 +261,10 @@ class MainWindow(QMainWindow):
         self._session_shutdown = True
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # Land any edit still inside the debounce window before the app can go away.
+        # Safe on every branch below, including a cancelled quit: the user made the
+        # edit, and deciding not to quit is no reason to drop it.
+        self._flush_parameters_save()
         app = QGuiApplication.instance()
         is_saving_session = app.isSavingSession() if app is not None else False
         if self._session_shutdown or is_saving_session:
@@ -422,34 +453,38 @@ class MainWindow(QMainWindow):
 
         scale_row = QWidget()
         scale_layout = QHBoxLayout(scale_row)
-        self.scale_group = QButtonGroup(self)
-        self.scale_2 = QRadioButton("2x")
-        self.scale_4 = QRadioButton("4x")
-        self.scale_4.setChecked(True)
-        self.scale_group.addButton(self.scale_2)
-        self.scale_group.addButton(self.scale_4)
         scale_layout.setContentsMargins(0, 0, 0, 0)
-        scale_layout.addWidget(self.scale_2)
-        scale_layout.addWidget(self.scale_4)
+        self.scale_group = QButtonGroup(self)
+        # Built from SCALE_CHOICES, like the enumerated combos below: the selectable
+        # scales are enumerated once, beside JobSettings, for the panel and the config
+        # loader both. The built-in is checked here so the group is never all-unchecked;
+        # the startup seed (_apply_job_settings) then applies the persisted value.
+        self.scale_buttons: dict[int, QRadioButton] = {}
+        for label, scale in SCALE_CHOICES:
+            button = QRadioButton(label)
+            button.setChecked(scale == DEFAULT_SCALE)
+            self.scale_group.addButton(button)
+            self.scale_buttons[scale] = button
+            scale_layout.addWidget(button)
         scale_layout.addStretch()
 
         self.face_enhance = QCheckBox("Face enhancement")
         self.denoise_strength = NoWheelDoubleSpinBox()
-        self.denoise_strength.setRange(0.0, 1.0)
-        self.denoise_strength.setSingleStep(0.1)
+        self.denoise_strength.setRange(MIN_DENOISE_STRENGTH, MAX_DENOISE_STRENGTH)
+        self.denoise_strength.setSingleStep(DENOISE_STRENGTH_STEP)
         self.denoise_strength.setDecimals(2)
 
         self.alpha_mode = NoWheelComboBox()
-        self.alpha_mode.addItem("Real-ESRGAN", "realesrgan")
-        self.alpha_mode.addItem("Bicubic", "bicubic")
+        for label, alpha_mode in ALPHA_MODE_CHOICES:
+            self.alpha_mode.addItem(label, alpha_mode)
 
         self.output_format = output_format_combo()
 
         self.quality = NoWheelSpinBox()
-        self.quality.setRange(0, MAX_QUALITY)
+        self.quality.setRange(MIN_QUALITY, MAX_QUALITY)
 
         self.tile = NoWheelSpinBox()
-        self.tile.setRange(0, MAX_TILE)
+        self.tile.setRange(MIN_TILE, MAX_TILE)
         self.tile.setSingleStep(TILE_STEP)
 
         self.device = device_combo()
@@ -457,13 +492,11 @@ class MainWindow(QMainWindow):
         self.strip_metadata = QCheckBox("Strip metadata")
 
         self.target_profile = NoWheelComboBox()
-        self.target_profile.addItem("Default", None)
-        self.target_profile.addItem("sRGB", "srgb")
-        self.target_profile.addItem("Display P3", "p3")
-        self.target_profile.addItem("Adobe RGB", "adobergb")
+        for label, profile in TARGET_PROFILE_CHOICES:
+            self.target_profile.addItem(label, profile)
 
-        restore = QPushButton("Restore defaults")
-        restore.clicked.connect(self._restore_job_settings_defaults)
+        reset = QPushButton("Reset parameters")
+        reset.clicked.connect(self._reset_parameters_to_defaults)
 
         form.addRow("Scale", scale_row)
         form.addRow("", self.face_enhance)
@@ -476,7 +509,24 @@ class MainWindow(QMainWindow):
         form.addRow("Device", self.device)
         form.addRow("", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
-        form.addRow("", restore)
+        form.addRow("", reset)
+
+        # Every control the panel persists, wired to the debounced save. Connected
+        # after the panel is populated so building it (addItem, setChecked) does not
+        # schedule a save of values nobody edited.
+        for changed in (
+            self.scale_group.buttonToggled,
+            self.face_enhance.toggled,
+            self.denoise_strength.valueChanged,
+            self.alpha_mode.currentIndexChanged,
+            self.output_format.currentIndexChanged,
+            self.quality.valueChanged,
+            self.tile.valueChanged,
+            self.device.currentIndexChanged,
+            self.strip_metadata.toggled,
+            self.target_profile.currentIndexChanged,
+        ):
+            changed.connect(self._parameters_edited)
         return group
 
     def _build_actions_group(self) -> QWidget:
@@ -551,11 +601,14 @@ class MainWindow(QMainWindow):
         self.open_paths([Path(file) for file in files])
 
     def _settings_dialog(self) -> None:
+        # Land any pending panel edit first, so the config the dialog opens on — and
+        # carries the unshown settings through from — is the current one. Otherwise a
+        # debounce firing behind the modal would be undone on OK.
+        self._flush_parameters_save()
         log.info("settings.dialog_opened")
         dialog = SettingsDialog(self.config, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             previous_config = self.config
-            previous_defaults = job_settings_defaults(self.config)
             self.config = dialog.config()
             save_app_config(self.config)
             # Re-apply the UI font so a changed family takes effect immediately,
@@ -567,8 +620,6 @@ class MainWindow(QMainWindow):
                 previous=config_log_payload(previous_config),
                 current=config_log_payload(self.config),
             )
-            if self.current_job_settings() == previous_defaults:
-                self._apply_job_settings(job_settings_defaults(self.config))
             self.runner.schedule(self.config.max_concurrent_jobs)
             return
         log.info("settings.dialog_cancelled")
@@ -655,11 +706,15 @@ class MainWindow(QMainWindow):
         return [model for model, checkbox in self.model_checks.items() if checkbox.isChecked()]
 
     def _current_scale(self) -> int:
-        return 2 if self.scale_2.isChecked() else 4
+        for scale, button in self.scale_buttons.items():
+            if button.isChecked():
+                return scale
+        return DEFAULT_SCALE
 
     def current_job_settings(self) -> JobSettings:
         profile = self.target_profile.currentData()
         return JobSettings(
+            scale=self._current_scale(),
             face_enhance=self.face_enhance.isChecked(),
             denoise_strength=self.denoise_strength.value(),
             alpha_mode=self.alpha_mode.currentData(),
@@ -672,6 +727,11 @@ class MainWindow(QMainWindow):
         )
 
     def _apply_job_settings(self, settings: JobSettings) -> None:
+        # Checking one button of an exclusive group unchecks the other, so the matching
+        # button is all that is set. An out-of-domain scale falls back to the built-in
+        # rather than raising: the loader already coerces against SCALE_VALUES, so this
+        # only guards a programmatic caller.
+        self.scale_buttons.get(settings.scale, self.scale_buttons[DEFAULT_SCALE]).setChecked(True)
         self.face_enhance.setChecked(settings.face_enhance)
         self.denoise_strength.setValue(settings.denoise_strength)
         self.alpha_mode.setCurrentIndex(self.alpha_mode.findData(settings.alpha_mode))
@@ -684,35 +744,73 @@ class MainWindow(QMainWindow):
         self.strip_metadata.setChecked(settings.strip_metadata)
         self.target_profile.setCurrentIndex(self.target_profile.findData(settings.target_profile))
 
-    def _restore_job_settings_defaults(self) -> None:
-        defaults = job_settings_defaults(self.config)
+    def _parameters_edited(self) -> None:
+        self._parameters_save_timer.start()
+
+    def _flush_parameters_save(self) -> None:
+        """Save any pending panel edit now, cancelling the debounce."""
+        self._parameters_save_timer.stop()
+        self._save_parameters()
+
+    def _save_parameters(self) -> None:
+        """Persist the Parameters panel as the user has it.
+
+        The panel is durable user intent, so it lives in config.json like every other
+        preference. This never touches an already-queued job: a job snapshots the panel
+        through current_job_settings() at the moment it is created (see _enqueue_jobs),
+        and holds its own frozen JobSettings from then on. Saving is a no-op when the
+        panel already matches what is on disk, which is what makes it safe to call from
+        the startup apply, from close, and from the settings dialog.
+        """
+        parameters = self.current_job_settings()
+        if parameters == self.config.parameters:
+            return
+        self.config = replace(self.config, parameters=parameters)
+        save_app_config(self.config)
+        log.info(
+            "parameters.saved",
+            path=str(config_path()),
+            values=job_settings_log_payload(parameters),
+        )
+
+    def _reset_parameters_to_defaults(self) -> None:
+        """Restore the panel to PixelUp's built-in parameters.
+
+        ``JobSettings()`` is the built-ins, and the only source of them — not the
+        user's persisted config, which is what the reset exists to get *away* from.
+        The restored values are then persisted like any other panel edit: pressing
+        reset is a decision, so it is flushed rather than left to the debounce.
+        """
+        defaults = JobSettings()
         self._apply_job_settings(defaults)
-        log.info("parameters.restored_defaults", defaults=job_settings_log_payload(defaults))
+        log.info("parameters.reset", defaults=job_settings_log_payload(defaults))
+        self._flush_parameters_save()
 
     def _queue_selected_image(self) -> None:
-        self._enqueue_jobs(self._selected_paths(), self._selected_models(), self._current_scale())
+        self._enqueue_jobs(self._selected_paths(), self._selected_models())
 
     def _queue_selected_image_all_models(self) -> None:
-        self._enqueue_jobs(self._selected_paths(), list(UPSCALE_MODELS), self._current_scale())
+        self._enqueue_jobs(self._selected_paths(), list(UPSCALE_MODELS))
 
     def _queue_all_images_selected_models(self) -> None:
-        self._enqueue_jobs(list(self._image_order), self._selected_models(), self._current_scale())
+        self._enqueue_jobs(list(self._image_order), self._selected_models())
 
     def _queue_all_images_all_models(self) -> None:
-        self._enqueue_jobs(list(self._image_order), list(UPSCALE_MODELS), self._current_scale())
+        self._enqueue_jobs(list(self._image_order), list(UPSCALE_MODELS))
 
-    def _enqueue_jobs(self, input_paths: list[Path], models: list[str], scale: int) -> None:
+    def _enqueue_jobs(self, input_paths: list[Path], models: list[str]) -> None:
         if not input_paths:
             warn_no_images(self)
             return
         if not models:
             warn_no_models(self)
             return
+        # The enqueue snapshot: the panel captured whole, scale included, at the moment
+        # the user pressed the button. Later panel edits do not reach these jobs.
         settings = self.current_job_settings()
         new_jobs = create_jobs(
             input_paths=input_paths,
             models=models,
-            scale=scale,
             settings=settings,
             existing_jobs=self.jobs,
             auto_download=self.config.auto_download,
@@ -722,7 +820,6 @@ class MainWindow(QMainWindow):
             "enqueue.requested",
             inputs=[str(path) for path in input_paths],
             models=models,
-            scale=scale,
             settings=job_settings_log_payload(settings),
             auto_download=self.config.auto_download,
         )
@@ -745,7 +842,7 @@ class MainWindow(QMainWindow):
                 _item(job.input_path.name, tooltip=str(job.input_path)),
             )
             self.queue_table.setItem(row, 1, _item(job.model, tooltip=job.model))
-            self.queue_table.setItem(row, 2, _item(f"{job.scale}x"))
+            self.queue_table.setItem(row, 2, _item(f"{job.settings.scale}x"))
             self.queue_table.setItem(
                 row,
                 3,
