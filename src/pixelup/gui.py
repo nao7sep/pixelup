@@ -743,6 +743,11 @@ class MainWindow(QMainWindow):
         self.device.setCurrentIndex(self.device.findData(settings.device))
         self.strip_metadata.setChecked(settings.strip_metadata)
         self.target_profile.setCurrentIndex(self.target_profile.findData(settings.target_profile))
+        # Applying settings is not a user edit: the setters above fire the panel's
+        # change signals (a freshly built spin box sits at 0, so seeding it to the
+        # persisted value reads as a change), which would leave a save armed for values
+        # nobody touched. Reset flushes explicitly, so cancelling here costs it nothing.
+        self._parameters_save_timer.stop()
 
     def _parameters_edited(self) -> None:
         self._parameters_save_timer.start()
