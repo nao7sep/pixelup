@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,8 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 from pixelup import gui
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
 from pixelup.gui import MainWindow
-from pixelup.jobs import DEFAULT_SCALE, JobSettings
+from pixelup.jobs import JobSettings
+from pixelup.parameters import DEFAULT_SCALE, TILE_VALUES
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
 
@@ -319,7 +321,7 @@ def _wander_from_defaults(window: MainWindow) -> None:
     window.face_enhance.setChecked(True)
     window.denoise_strength.setValue(0.75)
     window.quality.setValue(10)
-    window.tile.setValue(1024)
+    window.tile.setCurrentIndex(window.tile.findData(1024))
     window.strip_metadata.setChecked(True)
     window.device.setCurrentIndex(window.device.findData("cpu"))
 
@@ -339,7 +341,7 @@ def test_reset_parameters_button_restores_the_built_ins(make_window) -> None:
     reset.click()
 
     assert window.current_job_settings() == JobSettings()
-    assert window.tile.value() == JobSettings().tile == 256
+    assert window.tile.currentData() == JobSettings().tile == 256
     assert window.config.font_family == AppConfig().font_family
 
 
@@ -372,7 +374,7 @@ def test_reset_parameters_ignores_the_persisted_config(make_window) -> None:
     # user had saved.
     window = make_window()
     window.quality.setValue(10)
-    window.tile.setValue(1024)
+    window.tile.setCurrentIndex(window.tile.findData(1024))
     window._flush_parameters_save()
     assert window.config.parameters.quality == 10
 
@@ -443,7 +445,7 @@ def test_window_seeds_the_panel_from_the_persisted_parameters(
     try:
         assert window.current_job_settings() == parameters
         assert window.quality.value() == 42
-        assert window.tile.value() == 512
+        assert window.tile.currentData() == 512
         assert window.alpha_mode.currentData() == "bicubic"
         assert window.target_profile.currentData() == "p3"
         # The persisted scale reaches the radios, not just the settings snapshot.
@@ -465,12 +467,12 @@ def test_queued_jobs_keep_their_snapshot_when_the_panel_changes(
     window = make_window()
     window.open_paths([_png(tmp_path, "a.png")])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
-    window.tile.setValue(128)
+    window.tile.setCurrentIndex(window.tile.findData(128))
     window._queue_selected_image()
     queued = window.jobs[0]
     assert queued.settings.tile == 128
 
-    window.tile.setValue(1024)
+    window.tile.setCurrentIndex(window.tile.findData(1024))
     window._flush_parameters_save()
 
     assert queued.settings.tile == 128
@@ -508,3 +510,40 @@ def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_pat
     window._queue_selected_image()
     assert window.jobs[1].settings.scale == DEFAULT_SCALE
     assert window.queue_table.item(1, 2).text() == "4x"
+
+
+def test_a_stray_persisted_tile_seeds_the_panel_without_blanking_it(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The panel's combo seeds via findData, which answers -1 for a value it does not
+    # hold — and setCurrentIndex(-1) blanks the box, making currentData() None. That
+    # None would flow straight back into JobSettings.tile on the next enqueue or save.
+    #
+    # Nothing in the panel prevents it: _coerce_tile in the config loader is the only
+    # thing that does, and that dependency is invisible from here. So this walks the
+    # REAL loader (not an injected AppConfig) with a tile that is not a choice, and
+    # pins the whole chain — corrupt file -> coerced load -> a panel that shows a real
+    # value. It fails if tile ever stops being coerced on the way in.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text(
+        json.dumps({"max_concurrent_jobs": 1, "auto_download": True,
+                    "font_family": "", "parameters": {"tile": 9999}})
+    )
+    monkeypatch.setenv("PIXELUP_HOME", str(home))
+    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    log_file = tmp_path / "logs" / "session.log"
+    configure_session_logging(log_file)
+
+    window = MainWindow(log_file=log_file)
+    try:
+        assert window.tile.currentIndex() != -1, "the combo blanked on an unknown tile"
+        assert window.tile.currentData() is not None
+        assert window.tile.currentData() == JobSettings().tile
+        # And the value the panel would hand a job is a real one, not None.
+        assert window.current_job_settings().tile in TILE_VALUES
+    finally:
+        window._session_shutdown = True
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()

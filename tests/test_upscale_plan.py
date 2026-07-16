@@ -133,21 +133,26 @@ def test_run_upscale_calls_inference_and_writes_output(
     models_dir.mkdir()
     temp_dir.mkdir()
     (models_dir / "custom-model.pth").write_bytes(b"weights")
-    Image.new("RGB", (2, 2), "white").save(input_path)
+    # 300px at the smallest offered tile (128) is genuinely tiled: ceil(300/128) = 3
+    # per axis, so on_start must report 9. This used to be a 2x2 image at tile=1 —
+    # a size no longer in the domain, since tile is now a choice among doublings.
+    Image.new("RGB", (300, 300), "white").save(input_path)
     events: list[tuple[str, object]] = []
     _stub_successful_inference(monkeypatch)
 
     result = run_upscale(
-        options(input_path, str(output_path), model="custom-model", tile=1),
+        options(input_path, str(output_path), model="custom-model", tile=128),
         RuntimeDirs(models_dir, temp_dir),
         on_start=lambda plan, tiles: events.append(("start", tiles)),
         on_progress=lambda phase: events.append(("progress", phase)),
     )
 
     assert result["ok"] is True
+    # 8x8 is the stubbed inference's output, measured from the written file — it does
+    # not track the input size, so growing the input above does not move it.
     assert result["output_size"] == [8, 8]
     assert output_path.is_file()
-    assert ("start", 4) in events
+    assert ("start", 9) in events
     assert ("progress", "encode") in events
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices, QPalette
+from PySide6.QtGui import QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QLayout
 
 REGULAR_SPACING = 10
@@ -61,12 +61,43 @@ def title_label(text: str) -> QLabel:
 def secondary_label(text: str) -> QLabel:
     """A muted label for supporting text (version, captions, copyright).
 
-    Uses the palette's placeholder-text role so the de-emphasis follows the OS
-    light/dark theme rather than a hard-coded gray.
+    Uses the placeholder-text role, whose value apply_palette_fixes corrects.
     """
     label = QLabel(text)
     label.setForegroundRole(QPalette.ColorRole.PlaceholderText)
     return label
+
+
+# Qt ships PlaceholderText at 63/255 — right for ghost text in an empty field, too
+# faint for captions meant to be read. Body text is 216/255; this sits below it.
+_SECONDARY_TEXT_ALPHA = 150
+
+_GROUPS = (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled)
+
+
+def apply_palette_fixes(app: QApplication) -> None:
+    """Fix two palette roles Qt gets wrong. Call once, after setStyle.
+
+    ButtonText: Qt hands the Inactive group opaque black in both themes, so in dark
+    mode every combo and button turns black-on-dark once the window loses focus.
+    Copying Active over it fixes dark and is near-identical in light. (Highlight also
+    differs between the groups, but that one is correct — macOS greys out a selection
+    in an unfocused window — so it is left alone.)
+
+    PlaceholderText: see _SECONDARY_TEXT_ALPHA. No real placeholders exist here, so
+    this role serves only secondary_label.
+    """
+    pal = QPalette(app.palette())
+    pal.setColor(
+        QPalette.ColorGroup.Inactive,
+        QPalette.ColorRole.ButtonText,
+        pal.color(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText),
+    )
+    for group in _GROUPS:
+        secondary = QColor(pal.color(group, QPalette.ColorRole.WindowText))
+        secondary.setAlpha(_SECONDARY_TEXT_ALPHA)
+        pal.setColor(group, QPalette.ColorRole.PlaceholderText, secondary)
+    app.setPalette(pal)
 
 
 def apply_scrollbar_style(app: QApplication) -> None:

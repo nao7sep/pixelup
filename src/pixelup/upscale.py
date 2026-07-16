@@ -30,9 +30,9 @@ from pixelup.parameters import (
     MAX_QUALITY,
     MIN_DENOISE_STRENGTH,
     MIN_QUALITY,
-    MIN_TILE,
     SCALE_VALUES,
     TARGET_PROFILE_VALUES,
+    TILE_VALUES,
 )
 from pixelup.paths import (
     OutputContext,
@@ -268,8 +268,11 @@ def validate_options(options: UpscaleOptions) -> None:
     # the panel offer a value this function would reject at runtime.
     if options.scale not in SCALE_VALUES:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Scale must be 2x or 4x.")
-    if options.tile < MIN_TILE:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Tile size must be 0 or greater.")
+    if options.tile not in TILE_VALUES:
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT,
+            "Tile size must be one of the offered sizes.",
+        )
     if options.tile_pad < 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Tile padding must be 0 or greater.")
     if options.pre_pad < 0:

@@ -79,19 +79,22 @@ from pixelup.parameters import (
     DENOISE_STRENGTH_STEP,
     MAX_DENOISE_STRENGTH,
     MAX_QUALITY,
-    MAX_TILE,
     MIN_DENOISE_STRENGTH,
     MIN_QUALITY,
-    MIN_TILE,
     SCALE_CHOICES,
     TARGET_PROFILE_CHOICES,
-    TILE_STEP,
+    TILE_CHOICES,
 )
 from pixelup.quit_dialog import QuitConfirmDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, log
 from pixelup.settings_dialog import SettingsDialog
-from pixelup.ui_common import apply_scrollbar_style, secondary_label, use_regular_spacing
+from pixelup.ui_common import (
+    apply_palette_fixes,
+    apply_scrollbar_style,
+    secondary_label,
+    use_regular_spacing,
+)
 from pixelup.widgets import (
     NoWheelComboBox,
     NoWheelDoubleSpinBox,
@@ -121,10 +124,10 @@ _NAME_MIN_WIDTH = 180
 
 # How long the Parameters panel waits after the last edit before writing config.json.
 # The panel saves as it is edited rather than only at a well-behaved quit, so a crash
-# or a force-quit cannot cost the user their parameters — but the two spin boxes emit
-# a change per typed digit, and every save is an atomic rewrite plus a backup record,
-# so the writes are coalesced. Long enough to absorb typing "1024", short enough that
-# the save is landed by the time the user has moved on.
+# or a force-quit cannot cost the user their parameters — but the quality and denoise
+# spin boxes emit a change per typed digit, and every save is an atomic rewrite plus a
+# backup record, so the writes are coalesced. Long enough to absorb typing "100" or
+# "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
 
 
@@ -485,9 +488,9 @@ class MainWindow(QMainWindow):
         self.quality = NoWheelSpinBox()
         self.quality.setRange(MIN_QUALITY, MAX_QUALITY)
 
-        self.tile = NoWheelSpinBox()
-        self.tile.setRange(MIN_TILE, MAX_TILE)
-        self.tile.setSingleStep(TILE_STEP)
+        self.tile = NoWheelComboBox()
+        for label, tile in TILE_CHOICES:
+            self.tile.addItem(label, tile)
 
         self.device = device_combo()
 
@@ -500,11 +503,8 @@ class MainWindow(QMainWindow):
         reset = QPushButton("Reset parameters")
         reset.clicked.connect(self._reset_parameters_to_defaults)
 
-        # Captions travelled here with their controls when the parameters left the
-        # Settings dialog; they explain what a value does, which the label alone
-        # cannot — tile especially, where 0 is not "least" but a different mode.
-        # secondary_label (not a bare QLabel) is what every other caption in the app
-        # uses: muted via the palette, so it follows the OS light/dark theme.
+        # Captions came here with their controls when the parameters left the Settings
+        # dialog. secondary_label, not a bare QLabel, so they stay muted via the palette.
         form.addRow("Scale", scale_row)
         form.addRow("", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
@@ -514,9 +514,7 @@ class MainWindow(QMainWindow):
         form.addRow("Quality", self.quality)
         form.addRow("", secondary_label("Used for JPG and WebP. Ignored for PNG."))
         form.addRow("Tile size", self.tile)
-        form.addRow(
-            "", secondary_label("Lower uses less memory; 0 processes the whole image at once.")
-        )
+        form.addRow("", secondary_label("Smaller uses less memory."))
         form.addRow("Device", self.device)
         form.addRow("", secondary_label("Auto lets Real-ESRGAN choose the best available device."))
         form.addRow("", self.strip_metadata)
@@ -533,7 +531,7 @@ class MainWindow(QMainWindow):
             self.alpha_mode.currentIndexChanged,
             self.output_format.currentIndexChanged,
             self.quality.valueChanged,
-            self.tile.valueChanged,
+            self.tile.currentIndexChanged,
             self.device.currentIndexChanged,
             self.strip_metadata.toggled,
             self.target_profile.currentIndexChanged,
@@ -733,7 +731,7 @@ class MainWindow(QMainWindow):
             device=self.device.currentData(),
             output_format=coerce_output_format(self.output_format.currentData()),
             quality=self.quality.value(),
-            tile=self.tile.value(),
+            tile=self.tile.currentData(),
             strip_metadata=self.strip_metadata.isChecked(),
             target_profile=profile,
         )
@@ -751,7 +749,7 @@ class MainWindow(QMainWindow):
             self.output_format.findData(coerce_output_format(settings.output_format).value)
         )
         self.quality.setValue(settings.quality)
-        self.tile.setValue(settings.tile)
+        self.tile.setCurrentIndex(self.tile.findData(settings.tile))
         self.device.setCurrentIndex(self.device.findData(settings.device))
         self.strip_metadata.setChecked(settings.strip_metadata)
         self.target_profile.setCurrentIndex(self.target_profile.findData(settings.target_profile))
@@ -1067,7 +1065,16 @@ def build_app(
     app = QApplication.instance() or QApplication(argv)
     if "Fusion" in QStyleFactory.keys():
         app.setStyle("Fusion")
-    # No owned QPalette: PixelUp deliberately follows the OS light/dark theme.
+    # PixelUp follows the OS light/dark theme; it owns no colours, only two
+    # corrections to what Fusion resolves (apply_palette_fixes).
+    #
+    # Applied once, at launch, and NOT re-applied when the OS theme changes mid-run.
+    # That is deliberate, not an oversight: flip the theme with PixelUp open and the
+    # window follows, but these corrections revert until relaunch. Accepted — this is
+    # an upscaler you open, run and close. A colorSchemeChanged handler was tried and
+    # removed: Qt re-derives the palette after the signal and silently undid the
+    # ButtonText fix, so it only looked like it worked.
+    apply_palette_fixes(app)
     # The scroll-bar QSS is palette-based so it stays consistent with whatever
     # theme the OS resolves, while replacing Fusion's thick square bar.
     apply_scrollbar_style(app)

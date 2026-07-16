@@ -16,12 +16,11 @@ from pixelup.parameters import (
     ALPHA_MODE_VALUES,
     MAX_DENOISE_STRENGTH,
     MAX_QUALITY,
-    MAX_TILE,
     MIN_DENOISE_STRENGTH,
     MIN_QUALITY,
-    MIN_TILE,
     SCALE_VALUES,
     TARGET_PROFILE_VALUES,
+    TILE_VALUES,
 )
 from pixelup.paths import OutputFormat
 
@@ -193,7 +192,7 @@ def _load_parameters(value: Any, defaults: JobSettings) -> JobSettings:
         device=_coerce_device(value.get("device"), defaults.device),
         output_format=_coerce_output_format(value.get("output_format"), defaults.output_format),
         quality=_clamp_int(value.get("quality"), defaults.quality, MIN_QUALITY, MAX_QUALITY),
-        tile=_clamp_int(value.get("tile"), defaults.tile, MIN_TILE, MAX_TILE),
+        tile=_coerce_tile(value.get("tile"), defaults.tile),
         strip_metadata=bool(value.get("strip_metadata", defaults.strip_metadata)),
         target_profile=_coerce_target_profile(
             value.get("target_profile"), defaults.target_profile
@@ -220,9 +219,9 @@ def _clamp_float(value: Any, default: float, low: float, high: float) -> float:
 def _coerce_scale(value: Any, default: int) -> int:
     """Read a persisted scale, falling back to the built-in unless it names a real choice.
 
-    Enumerated, not clamped — the difference matters. ``tile`` and ``quality`` are
-    ranges, where snapping a stray value to the nearest end is a faithful reading of
-    what the user meant. Scale is a choice between 2x and 4x: a 3 is not "close to"
+    Enumerated, not clamped — the difference matters. ``quality`` is a range, where
+    snapping a stray value to the nearest end is a faithful reading of what the user
+    meant. Scale is a choice between 2x and 4x: a 3 is not "close to"
     either one, so it falls back to the built-in the way an unknown ``alpha_mode``
     does. Membership is therefore tested against the value itself rather than an
     ``int()`` of it, so a hand-edited 2.5 cannot truncate into a selectable 2 the user
@@ -236,6 +235,26 @@ def _coerce_scale(value: Any, default: int) -> int:
     for scale in SCALE_VALUES:
         if value == scale:
             return scale
+    return default
+
+
+def _coerce_tile(value: Any, default: int) -> int:
+    """Read a persisted tile size, falling back to the built-in unless it names a real choice.
+
+    Enumerated for the same reason as scale, and it changed camps: tile used to be a
+    clamped range, so a hand-edited 3000 became 2816 or 4096 — a size no one picked and
+    the panel can no longer show. The sizes are doublings, not points on a continuum, so
+    a stray value is not "near" one of them. 0 is a real choice here (the whole-image
+    pass), not the bottom of a range.
+    """
+    if isinstance(value, str):
+        try:
+            value = int(value.strip())
+        except ValueError:
+            return default
+    for tile in TILE_VALUES:
+        if value == tile:
+            return tile
     return default
 
 

@@ -22,9 +22,10 @@ from pixelup.jobs import (
 from pixelup.parameters import (
     DEFAULT_SCALE,
     DEFAULT_TILE,
-    MIN_TILE,
     SCALE_CHOICES,
     SCALE_VALUES,
+    TILE_CHOICES,
+    TILE_VALUES,
 )
 from pixelup.paths import OutputFormat
 
@@ -100,7 +101,7 @@ def test_bare_job_settings_defaults_to_a_safe_tile() -> None:
     # GPU/MPS memory and hard-crash on a large input, and JobSettings() is what the
     # panel's reset hands the user, so the bare dataclass must never carry 0.
     assert JobSettings().tile == DEFAULT_TILE
-    assert JobSettings().tile != MIN_TILE
+    assert JobSettings().tile != 0
     assert DEFAULT_TILE == 256
 
 
@@ -139,10 +140,27 @@ def test_scale_choices_are_the_two_selectable_scales() -> None:
     assert DEFAULT_SCALE in SCALE_VALUES
 
 
-def test_zero_tile_stays_selectable() -> None:
+def test_zero_tile_stays_selectable_as_the_whole_image_pass() -> None:
     # 0 stops being the default; it does not stop being a choice a power user can make.
-    assert MIN_TILE == 0
-    assert JobSettings(tile=MIN_TILE).tile == 0
+    # It is now a labelled one — "Whole image" — rather than a bare 0 a spin box put
+    # directly below 128 and implied was "less".
+    assert 0 in TILE_VALUES
+    assert JobSettings(tile=0).tile == 0
+    assert ("Whole image", 0) in TILE_CHOICES
+
+
+def test_tile_choices_are_doublings_ordered_by_ascending_memory() -> None:
+    # Peak memory scales with the tile's AREA, so only doublings are meaningful; the
+    # stepped spin box that produced 768 and 2816 offered arithmetic, not choices.
+    # "Whole image" (0) sits LAST because it is the largest tile, not the smallest —
+    # the ordering the old control inverted.
+    assert TILE_VALUES == (128, 256, 512, 1024, 2048, 0)
+    assert [v for v in TILE_VALUES if v] == [128, 256, 512, 1024, 2048]
+    assert TILE_CHOICES[-1] == ("Whole image", 0)
+    assert DEFAULT_TILE in TILE_VALUES
+    # 128 must be one rung below the default: the machine that cannot fit 256 has
+    # somewhere to go. The old 256-step spin box's only move below the default was 0.
+    assert TILE_VALUES[TILE_VALUES.index(DEFAULT_TILE) - 1] == 128
 
 
 def test_job_log_payload_includes_settings_and_paths(tmp_path: Path) -> None:

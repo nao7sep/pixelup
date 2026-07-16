@@ -241,15 +241,25 @@ def test_load_app_config_clamps_concurrent_jobs(tmp_path: Path) -> None:
     assert load_app_config(path).max_concurrent_jobs == 4
 
 
-def test_load_parameters_clamps_out_of_range_values(tmp_path: Path) -> None:
+def test_load_parameters_clamps_out_of_range_ranges(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    _write(path, quality=250, tile=-5, denoise_strength=9.5)
+    _write(path, quality=250, denoise_strength=9.5)
 
     parameters = load_app_config(path).parameters
 
     assert parameters.quality == 100
-    assert parameters.tile == 0
     assert parameters.denoise_strength == 1.0
+
+
+def test_load_parameters_falls_back_rather_than_clamping_a_stray_tile(tmp_path: Path) -> None:
+    # Tile is enumerated now, not a range, and the difference is not academic: when it
+    # was clamped, a hand-edited -5 snapped to the NEAREST END — 0 — which is the
+    # whole-image pass, the one value documented as able to hard-crash the machine. A
+    # stray value is not "near" a choice, so it falls back to the built-in like scale.
+    path = tmp_path / "config.json"
+    _write(path, tile=-5)
+
+    assert load_app_config(path).parameters.tile == JobSettings().tile
 
 
 def test_load_parameters_clamps_lower_bounds(tmp_path: Path) -> None:
@@ -262,11 +272,22 @@ def test_load_parameters_clamps_lower_bounds(tmp_path: Path) -> None:
     assert parameters.denoise_strength == 0.0
 
 
-def test_load_parameters_clamps_upper_tile(tmp_path: Path) -> None:
+def test_load_parameters_falls_back_on_a_tile_that_is_not_a_choice(tmp_path: Path) -> None:
+    # 9999 used to clamp to 4096 — a size the panel can no longer show, and one that
+    # for a typical photo is a single tile, i.e. the whole-image pass under another
+    # name. It falls back to the built-in instead.
     path = tmp_path / "config.json"
     _write(path, tile=9999)
 
-    assert load_app_config(path).parameters.tile == 4096
+    assert load_app_config(path).parameters.tile == JobSettings().tile
+
+
+def test_load_parameters_keeps_a_tile_that_is_a_real_choice(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    _write(path, tile=0)
+
+    # "Whole image" is a genuine choice, not a stray value to fall back from.
+    assert load_app_config(path).parameters.tile == 0
 
 
 def test_load_parameters_coerces_numeric_strings(tmp_path: Path) -> None:

@@ -83,7 +83,8 @@ def test_validate_options_rejects_bad_values(overrides: dict[str, object], code:
     ("overrides", "expected_message"),
     [
         ({"scale": 3}, "Scale must be 2x or 4x."),
-        ({"tile": -1}, "Tile size must be 0 or greater."),
+        ({"tile": -1}, "Tile size must be one of the offered sizes."),
+        ({"tile": 2816}, "Tile size must be one of the offered sizes."),
         ({"quality": 101}, "Quality must be between 0 and 100."),
         ({"device": "vulkan"}, "Device must be one of Auto, MPS, CUDA, or CPU."),
         (

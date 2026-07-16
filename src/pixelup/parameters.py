@@ -14,9 +14,6 @@ from __future__ import annotations
 
 MIN_QUALITY = 0
 MAX_QUALITY = 100
-MIN_TILE = 0
-MAX_TILE = 4096
-TILE_STEP = 256
 MIN_DENOISE_STRENGTH = 0.0
 MAX_DENOISE_STRENGTH = 1.0
 DENOISE_STRENGTH_STEP = 0.1
@@ -45,12 +42,35 @@ TARGET_PROFILE_VALUES: tuple[str | None, ...] = tuple(
     value for _label, value in TARGET_PROFILE_CHOICES
 )
 
-# Tiling is on by default so peak memory scales with the tile, not the image: a
-# whole-image pass (tile=0) can exhaust GPU/MPS memory and hard-crash on large
-# inputs. 256 keeps peak memory low enough to run on modest GPUs and smaller-memory
-# machines; output is effectively identical to larger tiles, and a power user can
-# raise it — or deliberately choose 0, which stays selectable (MIN_TILE) — in the
-# Parameters panel.
+# Tile size is a choice, not a range. Peak memory scales with the tile's AREA, so
+# only doublings are meaningful — each rung below is 4x the one before it, and the
+# in-between values a stepped spin box used to produce (768, 2816, ...) were
+# arithmetic artefacts nobody would choose on purpose.
+#
+# Ordered by ascending peak memory, which is why "Whole image" comes LAST rather
+# than leading as a 0. 0 is not the smallest tile: it disables tiling, making the
+# tile the whole image — the largest possible, and the one that can exhaust GPU/MPS
+# memory and hard-crash on big inputs. A spin box put it directly below 128 and
+# called it "less"; here it reads as the end of the scale it actually is.
+#
+# The top is 2048 because tiling self-cancels above it: at 4096 a typical photo is a
+# single tile, which already *is* "Whole image". The bottom is 128 because tile_pad
+# overlap (~8% per edge there) and tile count both worsen sharply below it.
+TILE_CHOICES: tuple[tuple[str, int], ...] = (
+    ("128", 128),
+    ("256", 256),
+    ("512", 512),
+    ("1024", 1024),
+    ("2048", 2048),
+    ("Whole image", 0),
+)
+TILE_VALUES: tuple[int, ...] = tuple(value for _label, value in TILE_CHOICES)
+
+# 256 keeps peak memory low enough for modest GPUs and smaller-memory machines while
+# giving output effectively identical to larger tiles. 128 sits one rung below for
+# hardware where even 256 will not fit — reachable in one click, which the old
+# 256-step spin box could not do (its only move below the default was straight to
+# the whole-image pass).
 DEFAULT_TILE = 256
 
 # 4x is the scale PixelUp has always opened on, and the one every bundled model is
