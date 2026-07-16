@@ -116,7 +116,11 @@ def test_dialog_has_no_reset_button(qapp: QApplication) -> None:
     try:
         labels = [button.text() for button in dialog.findChildren(QPushButton)]
         assert not any("Reset" in label for label in labels)
-        assert not hasattr(dialog, "_reset_settings_to_defaults")
+        # `_restore_defaults` is the name the removed handler actually had (it backed
+        # a "Restore defaults" button). This asserted `_reset_settings_to_defaults`
+        # before — a name that has never existed in this codebase, so it passed
+        # unconditionally and would have passed with the real handler still in place.
+        assert not hasattr(dialog, "_restore_defaults")
     finally:
         dialog.deleteLater()
 

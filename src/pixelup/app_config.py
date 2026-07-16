@@ -9,6 +9,10 @@ from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_man
 from pixelup.devices import DEVICE_VALUES
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
 from pixelup.jobs import (
+    JobSettings,
+    job_settings_log_payload,
+)
+from pixelup.parameters import (
     ALPHA_MODE_VALUES,
     MAX_DENOISE_STRENGTH,
     MAX_QUALITY,
@@ -18,8 +22,6 @@ from pixelup.jobs import (
     MIN_TILE,
     SCALE_VALUES,
     TARGET_PROFILE_VALUES,
-    JobSettings,
-    job_settings_log_payload,
 )
 from pixelup.paths import OutputFormat
 

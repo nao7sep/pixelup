@@ -56,18 +56,6 @@ from pixelup.errors import PixelupError
 from pixelup.fonts import apply_ui_font
 from pixelup.imaging import read_image_size, register_image_plugins
 from pixelup.jobs import (
-    ALPHA_MODE_CHOICES,
-    DEFAULT_SCALE,
-    DENOISE_STRENGTH_STEP,
-    MAX_DENOISE_STRENGTH,
-    MAX_QUALITY,
-    MAX_TILE,
-    MIN_DENOISE_STRENGTH,
-    MIN_QUALITY,
-    MIN_TILE,
-    SCALE_CHOICES,
-    TARGET_PROFILE_CHOICES,
-    TILE_STEP,
     ImageEntry,
     Job,
     JobSettings,
@@ -85,11 +73,25 @@ from pixelup.message_dialogs import (
     warn_no_models,
 )
 from pixelup.models import KNOWN_MODELS
+from pixelup.parameters import (
+    ALPHA_MODE_CHOICES,
+    DEFAULT_SCALE,
+    DENOISE_STRENGTH_STEP,
+    MAX_DENOISE_STRENGTH,
+    MAX_QUALITY,
+    MAX_TILE,
+    MIN_DENOISE_STRENGTH,
+    MIN_QUALITY,
+    MIN_TILE,
+    SCALE_CHOICES,
+    TARGET_PROFILE_CHOICES,
+    TILE_STEP,
+)
 from pixelup.quit_dialog import QuitConfirmDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, log
 from pixelup.settings_dialog import SettingsDialog
-from pixelup.ui_common import apply_scrollbar_style, use_regular_spacing
+from pixelup.ui_common import apply_scrollbar_style, secondary_label, use_regular_spacing
 from pixelup.widgets import (
     NoWheelComboBox,
     NoWheelDoubleSpinBox,
@@ -498,15 +500,25 @@ class MainWindow(QMainWindow):
         reset = QPushButton("Reset parameters")
         reset.clicked.connect(self._reset_parameters_to_defaults)
 
+        # Captions travelled here with their controls when the parameters left the
+        # Settings dialog; they explain what a value does, which the label alone
+        # cannot — tile especially, where 0 is not "least" but a different mode.
+        # secondary_label (not a bare QLabel) is what every other caption in the app
+        # uses: muted via the palette, so it follows the OS light/dark theme.
         form.addRow("Scale", scale_row)
         form.addRow("", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
-        form.addRow("", QLabel("Only for realesr-general-x4v3."))
+        form.addRow("", secondary_label("Only for realesr-general-x4v3."))
         form.addRow("Alpha mode", self.alpha_mode)
         form.addRow("Output format", self.output_format)
         form.addRow("Quality", self.quality)
+        form.addRow("", secondary_label("Used for JPG and WebP. Ignored for PNG."))
         form.addRow("Tile size", self.tile)
+        form.addRow(
+            "", secondary_label("Lower uses less memory; 0 processes the whole image at once.")
+        )
         form.addRow("Device", self.device)
+        form.addRow("", secondary_label("Auto lets Real-ESRGAN choose the best available device."))
         form.addRow("", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
         form.addRow("", reset)

@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGridLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QVBoxLayout,
@@ -20,33 +19,26 @@ from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
 from pixelup.ui_common import secondary_label, use_regular_spacing
 from pixelup.widgets import NoWheelSpinBox
 
-# A settled column width for the value fields so a control and its wrapped
-# caption share one edge, and captions wrap predictably instead of stretching
+# A settled column width for the value field so the control and its wrapped
+# caption share one edge, and the caption wraps predictably instead of stretching
 # the dialog to the widest single line.
 _FIELD_WIDTH = 320
 
 
-def _captioned(control: QWidget, caption: str, *, fill: bool = False) -> QWidget:
+def _captioned(control: QWidget, caption: str) -> QWidget:
     """Group a control with a muted caption directly beneath it.
 
     The caption reads as sub-text of its control (a tight 2px gap) rather than a
-    peer form row a full row-gap away. ``fill`` lets a wide field (the font line
-    edit) span the column, while compact controls (spin boxes, combos) stay left.
+    peer form row a full row-gap away. The control spans the column: the font line
+    edit is the only captioned field left here, now that the parameters live in the
+    main window's panel.
     """
     container = QWidget()
     container.setFixedWidth(_FIELD_WIDTH)
     box = QVBoxLayout(container)
     box.setContentsMargins(0, 0, 0, 0)
     box.setSpacing(2)
-    if fill:
-        box.addWidget(control)
-    else:
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
-        row.addWidget(control)
-        row.addStretch()
-        box.addLayout(row)
+    box.addWidget(control)
     cap = secondary_label(caption)
     cap.setWordWrap(True)
     box.addWidget(cap)
@@ -104,7 +96,6 @@ class SettingsDialog(QDialog):
             _captioned(
                 self.font_family,
                 "Comma-separated; the first font installed on this system is used.",
-                fill=True,
             ),
             row,
             1,

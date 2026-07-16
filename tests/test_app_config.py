@@ -11,7 +11,8 @@ from pixelup.app_config import (
     load_app_config_result,
     save_app_config,
 )
-from pixelup.jobs import DEFAULT_SCALE, JobSettings, job_settings_log_payload
+from pixelup.jobs import JobSettings, job_settings_log_payload
+from pixelup.parameters import DEFAULT_SCALE
 from pixelup.paths import OutputFormat
 
 

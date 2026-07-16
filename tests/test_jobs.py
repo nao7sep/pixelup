@@ -8,11 +8,6 @@ import pytest
 
 from pixelup.devices import DEFAULT_DEVICE
 from pixelup.jobs import (
-    DEFAULT_SCALE,
-    DEFAULT_TILE,
-    MIN_TILE,
-    SCALE_CHOICES,
-    SCALE_VALUES,
     Job,
     JobSettings,
     coerce_output_format,
@@ -23,6 +18,13 @@ from pixelup.jobs import (
     options_for_job,
     retry_failed_jobs,
     settings_for_model,
+)
+from pixelup.parameters import (
+    DEFAULT_SCALE,
+    DEFAULT_TILE,
+    MIN_TILE,
+    SCALE_CHOICES,
+    SCALE_VALUES,
 )
 from pixelup.paths import OutputFormat
 

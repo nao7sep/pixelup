@@ -199,3 +199,73 @@ def test_validate_output_path_rejects_unwritable_parent(
     with pytest.raises(PixelupError) as exc_info:
         validate_output_path(tmp_path / "out.png", overwrite=False)
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
+
+
+# validate_options must READ pixelup.parameters, never restate it. It used to
+# hardcode five domains as literals — scale {2,4}, alpha {"realesrgan","bicubic"},
+# target profile, and the quality/denoise bounds — because the constants lived in
+# jobs.py, which imports upscale.py, so importing them back would have cycled. The
+# panel and the loader read the real constants, so any edit to them (a third scale,
+# a new alpha mode) would have produced a value the panel offers and this function
+# rejects at runtime. The constants now live in the leaf pixelup.parameters and both
+# sides import it.
+#
+# These tests fail if the coupling is ever broken, by extending each domain and
+# asserting the validator follows. A test that only checked today's literals would
+# pass just as happily against a hardcoded copy — which is the whole bug.
+def test_validate_options_follows_the_shared_scale_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup import upscale as upscale_module
+
+    monkeypatch.setattr(upscale_module, "SCALE_VALUES", (2, 4, 8))
+    validate_options(make_options(scale=8))
+
+
+def test_validate_options_follows_the_shared_alpha_mode_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup import upscale as upscale_module
+
+    monkeypatch.setattr(upscale_module, "ALPHA_MODE_VALUES", ("realesrgan", "bicubic", "lanczos"))
+    validate_options(make_options(alpha_mode="lanczos"))
+
+
+def test_validate_options_follows_the_shared_target_profile_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup import upscale as upscale_module
+
+    monkeypatch.setattr(
+        upscale_module, "TARGET_PROFILE_VALUES", (None, "srgb", "p3", "adobergb", "rec2020")
+    )
+    validate_options(make_options(target_profile="rec2020"))
+
+
+def test_validate_options_follows_the_shared_quality_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup import upscale as upscale_module
+
+    monkeypatch.setattr(upscale_module, "MAX_QUALITY", 200)
+    validate_options(make_options(quality=150))
+
+
+def test_validate_options_follows_the_shared_denoise_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup import upscale as upscale_module
+
+    monkeypatch.setattr(upscale_module, "MAX_DENOISE_STRENGTH", 2.0)
+    validate_options(make_options(model="realesr-general-x4v3", denoise_strength=1.5))
+
+
+def test_the_panel_and_the_validator_cannot_disagree() -> None:
+    # The leaf is the single home: upscale.py must hold the very same objects, not
+    # equal copies. Identity, not equality — a copied literal can start equal.
+    from pixelup import parameters
+    from pixelup import upscale as upscale_module
+
+    assert upscale_module.SCALE_VALUES is parameters.SCALE_VALUES
+    assert upscale_module.ALPHA_MODE_VALUES is parameters.ALPHA_MODE_VALUES
+    assert upscale_module.TARGET_PROFILE_VALUES is parameters.TARGET_PROFILE_VALUES

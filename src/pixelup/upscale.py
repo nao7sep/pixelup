@@ -24,6 +24,16 @@ from pixelup.models import (
     known_model,
     require_model_present,
 )
+from pixelup.parameters import (
+    ALPHA_MODE_VALUES,
+    MAX_DENOISE_STRENGTH,
+    MAX_QUALITY,
+    MIN_DENOISE_STRENGTH,
+    MIN_QUALITY,
+    MIN_TILE,
+    SCALE_VALUES,
+    TARGET_PROFILE_VALUES,
+)
 from pixelup.paths import (
     OutputContext,
     OutputFormat,
@@ -253,15 +263,18 @@ def run_upscale(
 
 
 def validate_options(options: UpscaleOptions) -> None:
-    if options.scale not in {2, 4}:
+    # Every domain below comes from pixelup.parameters, the same leaf the Parameters
+    # panel and the config loader read. Hardcoding them here (as this once did) let
+    # the panel offer a value this function would reject at runtime.
+    if options.scale not in SCALE_VALUES:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Scale must be 2x or 4x.")
-    if options.tile < 0:
+    if options.tile < MIN_TILE:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Tile size must be 0 or greater.")
     if options.tile_pad < 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Tile padding must be 0 or greater.")
     if options.pre_pad < 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Pre-padding must be 0 or greater.")
-    if not 0 <= options.denoise_strength <= 1:
+    if not MIN_DENOISE_STRENGTH <= options.denoise_strength <= MAX_DENOISE_STRENGTH:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
             "Denoise strength must be between 0 and 1.",
@@ -269,14 +282,14 @@ def validate_options(options: UpscaleOptions) -> None:
     # Denoise on a non-general model is not an error: it simply does not apply and is normalized
     # to the neutral value (see effective_denoise_strength). Rejecting a non-neutral value here
     # only ever bit direct callers — the GUI already coerces it away per model before validating.
-    if options.alpha_mode not in {"realesrgan", "bicubic"}:
+    if options.alpha_mode not in ALPHA_MODE_VALUES:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
             "Alpha mode must be Real-ESRGAN or Bicubic.",
         )
-    if not 0 <= options.quality <= 100:
+    if not MIN_QUALITY <= options.quality <= MAX_QUALITY:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Quality must be between 0 and 100.")
-    if options.target_profile not in {None, "srgb", "p3", "adobergb"}:
+    if options.target_profile not in TARGET_PROFILE_VALUES:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
             "Target profile must be one of sRGB, Display P3, or Adobe RGB.",
