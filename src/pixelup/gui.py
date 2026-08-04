@@ -85,6 +85,7 @@ from pixelup.parameters import (
     TARGET_PROFILE_CHOICES,
     TILE_CHOICES,
 )
+from pixelup.parameters_help_dialog import ParametersHelpDialog
 from pixelup.quit_dialog import QuitConfirmDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, log
@@ -92,7 +93,6 @@ from pixelup.settings_dialog import SettingsDialog
 from pixelup.ui_common import (
     apply_palette_fixes,
     apply_scrollbar_style,
-    secondary_label,
     use_regular_spacing,
 )
 from pixelup.widgets import (
@@ -503,23 +503,26 @@ class MainWindow(QMainWindow):
         reset = QPushButton("Reset parameters")
         reset.clicked.connect(self._reset_parameters_to_defaults)
 
-        # Captions came here with their controls when the parameters left the Settings
-        # dialog. secondary_label, not a bare QLabel, so they stay muted via the palette.
+        # Per-control captions live in the Parameters Help dialog, not the panel:
+        # always-visible help text was the main driver of the window's minimum
+        # width, which had outgrown small screens.
+        help_button = QPushButton("Help")
+        help_button.clicked.connect(self._parameters_help_dialog)
+
         form.addRow("Scale", scale_row)
         form.addRow("", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
-        form.addRow("", secondary_label("Only for realesr-general-x4v3."))
         form.addRow("Alpha mode", self.alpha_mode)
         form.addRow("Output format", self.output_format)
         form.addRow("Quality", self.quality)
-        form.addRow("", secondary_label("Used for JPG and WebP. Ignored for PNG."))
         form.addRow("Tile size", self.tile)
-        form.addRow("", secondary_label("Smaller uses less memory."))
         form.addRow("Device", self.device)
-        form.addRow("", secondary_label("Auto lets Real-ESRGAN choose the best available device."))
         form.addRow("", self.strip_metadata)
         form.addRow("Target profile", self.target_profile)
+        # Reset and Help stack as two rows: side by side they would be the widest
+        # field in the form and re-widen the group the Help dialog exists to slim.
         form.addRow("", reset)
+        form.addRow("", help_button)
 
         # Every control the panel persists, wired to the debounced save. Connected
         # after the panel is populated so building it (addItem, setChecked) does not
@@ -633,6 +636,10 @@ class MainWindow(QMainWindow):
             self.runner.schedule(self.config.max_concurrent_jobs)
             return
         log.info("settings.dialog_cancelled")
+
+    def _parameters_help_dialog(self) -> None:
+        log.info("parameters_help.dialog_opened")
+        ParametersHelpDialog(self).exec()
 
     def _about_dialog(self) -> None:
         log.info("about.dialog_opened")
