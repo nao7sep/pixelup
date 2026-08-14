@@ -205,8 +205,8 @@ def _create_upsampler(
         gpu_id=config.gpu_id if concrete_device == "cuda" else None,
     )
     if cls is not RealESRGANer:
-        upsampler._pixelup_on_tile = on_tile  # type: ignore[attr-defined]
-        upsampler._pixelup_should_cancel = should_cancel  # type: ignore[attr-defined]
+        upsampler._pixelup_on_tile = on_tile
+        upsampler._pixelup_should_cancel = should_cancel
     return upsampler
 
 
@@ -221,7 +221,7 @@ def _tile_reporting_upsampler_class(base: type) -> type:
     # If a future release breaks any of these, the override silently falls back
     # to plain super().tile_process() and emits no per-tile events. The actual
     # upscale always proceeds. Callback exceptions are swallowed.
-    class _TileReportingUpsampler(base):  # type: ignore[misc, valid-type]
+    class _TileReportingUpsampler(base):
         def tile_process(self) -> Any:
             callback: TileCallback | None = getattr(self, "_pixelup_on_tile", None)
             should_cancel: CancelCheck | None = getattr(self, "_pixelup_should_cancel", None)
@@ -298,7 +298,7 @@ def _run_face_enhance(
             "GFPGAN is not installed.",
         ) from exc
 
-    class _PixelupFaceRestoreHelper(FaceRestoreHelper):  # type: ignore[misc, valid-type]
+    class _PixelupFaceRestoreHelper(FaceRestoreHelper):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             kwargs["model_rootpath"] = str(config.models_dir)
             super().__init__(*args, **kwargs)
