@@ -13,17 +13,18 @@ authors = [
   { name = "Yoshinao Inoguchi", email = "yoshinao@inoguchi.com" },
 ]
 dependencies = [
-  "PySide6==6.11.1",
+  "PySide6==6.11.2",
   "Pillow==12.3.0",
-  "pillow-heif==1.4.0",
-  "filelock==3.29.7",
-  # Held at 2.4.6: numpy 2.5.0 is the latest, but the transitive chain
-  # realesrgan -> facexlib -> numba requires numpy<2.5 (even numba's latest
-  # 0.66.0 caps at <2.5), and no released numba supports numpy 2.5. numba is a
-  # hard (non-optional) dep of facexlib, so it cannot be dropped. Bump to 2.5.0
-  # once a numba release lifts the <2.5 cap. Unrelated to the Python floor
-  # (raised to 3.12 below): 2.5.0 is blocked on 3.12+ too.
-  "numpy==2.4.6",
+  "pillow-heif==1.5.0",
+  "filelock==3.32.3",
+  # UNBLOCKED 2026-08-20 and bumped. This was held at 2.4.6 because the transitive
+  # chain realesrgan -> facexlib -> numba capped numpy at <2.5, and numba is a hard
+  # (non-optional) dep of facexlib so it could not be dropped. numba 0.67.0 lifted
+  # the cap to numpy<2.6, which admits 2.5.x — the exact release the old note said
+  # to wait for. Re-measured against numba's published requires_dist rather than
+  # assumed, which is the only reason it was noticed at all: a hold with no expiry
+  # date outlives its cause silently.
+  "numpy==2.5.2",
   "torch==2.13.0",
   "torchvision==0.28.0",
   "opencv-python==5.0.0.93",
@@ -36,13 +37,13 @@ dependencies = [
 dev = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "ruff==0.15.21",
+  "ruff==0.16.3",
 ]
 # Packaging-only: the freezer that builds the double-click .app/.exe. Kept out of the
 # runtime deps (test_packaging.py pins those) and out of dev so a normal test/dev sync
 # stays lean — `uv sync --extra build` is only needed by scripts/package.* and CI.
 build = [
-  "pyinstaller==6.21.0",
+  "pyinstaller==6.22.2",
 ]
 
 [project.gui-scripts]
