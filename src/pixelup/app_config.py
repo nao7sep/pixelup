@@ -55,7 +55,11 @@ class AppConfig:
     """
 
     max_concurrent_jobs: int = MIN_CONCURRENT_JOBS
-    auto_download: bool = True
+    # Off by default: nothing downloads without the user turning it on (the
+    # managed-runtime-dependencies-conventions' nothing-automatic rule). A job
+    # whose model is missing fails with a message naming this setting, so the
+    # way in is shown at the moment it is needed.
+    auto_download: bool = False
     font_family: str = DEFAULT_UI_FONT_FAMILY
     parameters: JobSettings = field(default_factory=JobSettings)
 

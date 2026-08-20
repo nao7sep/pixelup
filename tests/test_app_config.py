@@ -80,6 +80,12 @@ def test_missing_app_config_uses_defaults(tmp_path: Path) -> None:
     assert load_app_config(tmp_path / "missing.json") == AppConfig()
 
 
+def test_model_downloads_are_off_until_the_user_turns_them_on() -> None:
+    # The managed-runtime-dependencies conventions: nothing downloads on its own.
+    # A fresh install downloads only after the user flips the Settings toggle.
+    assert AppConfig().auto_download is False
+
+
 def test_ensure_app_config_writes_defaults_on_first_run(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     assert not path.exists()

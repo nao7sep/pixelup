@@ -14,6 +14,7 @@ from pixelup.runner import (
     _download_text,
     _progress_text,
     _tile_progress_text,
+    failure_message,
 )
 from pixelup.session_log import configure_session_logging
 
@@ -141,6 +142,24 @@ def test_finished_emits_outcome_to_listeners(qapp: QApplication, tmp_path: Path)
     qapp.processEvents()
 
     assert finished == [(1, False, "Cancelled", {"cancelled": True}, ["w"])]
+
+
+def test_failure_message_carries_the_hint_when_there_is_one() -> None:
+    # The queue row is the only surface a failed job gets, so the remedy — e.g.
+    # the Settings toggle that fixes a missing model — must ride along with the
+    # diagnosis rather than existing only in the log.
+    with_hint = PixelupError(
+        ErrorCode.MODEL_NOT_FOUND,
+        "Model 'x4plus' is not present in the models directory.",
+        hint="Turn on \u201cDownload missing models automatically\u201d in Settings.",
+    )
+    assert failure_message(with_hint) == (
+        "Model 'x4plus' is not present in the models directory. "
+        "Turn on \u201cDownload missing models automatically\u201d in Settings."
+    )
+
+    bare = PixelupError(ErrorCode.OUT_OF_MEMORY, "Ran out of memory.")
+    assert failure_message(bare) == "Ran out of memory."
 
 
 def test_request_cancel_for_unknown_job_is_a_noop(tmp_path: Path) -> None:

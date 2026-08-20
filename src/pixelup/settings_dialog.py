@@ -30,8 +30,8 @@ def _captioned(control: QWidget, caption: str) -> QWidget:
 
     The caption reads as sub-text of its control (a tight 2px gap) rather than a
     peer form row a full row-gap away. The control spans the column: the font line
-    edit is the only captioned field left here, now that the parameters live in the
-    main window's panel.
+    edit and the model-download checkbox are the captioned fields here, now that
+    the parameters live in the main window's panel.
     """
     container = QWidget()
     container.setFixedWidth(_FIELD_WIDTH)
@@ -101,8 +101,16 @@ class SettingsDialog(QDialog):
             1,
         )
         row += 1
-        form.addWidget(QLabel(""), row, 0)
-        form.addWidget(self.auto_download, row, 1, Qt.AlignmentFlag.AlignLeft)
+        form.addWidget(QLabel("Models"), row, 0, label_align)
+        form.addWidget(
+            _captioned(
+                self.auto_download,
+                "Off by default: a job whose model is missing fails and points here "
+                "instead of downloading anything on its own.",
+            ),
+            row,
+            1,
+        )
         row += 1
         form.addWidget(QLabel("Concurrent jobs"), row, 0)
         form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)

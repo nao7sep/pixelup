@@ -156,7 +156,8 @@ def require_model_present(
             ErrorCode.MODEL_NOT_FOUND,
             f"Model '{name}' is not present in the models directory.",
             hint=(
-                "Enable automatic model downloads, or place the .pth file in the models directory."
+                "Turn on “Download missing models automatically” in Settings, "
+                "or place the .pth file in the models directory."
             ),
             details={"model": name, "models_dir": str(models_dir), "path": str(path)},
         )

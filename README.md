@@ -1,6 +1,6 @@
 # PixelUp
 
-PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and fetches the models it needs on first use. 0.x.
+PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and can fetch the models it needs on first use once you allow it in Settings. 0.x.
 
 ## Download
 
@@ -9,7 +9,7 @@ Prebuilt builds for **macOS (Apple Silicon)** and **Windows (x64)** are on the [
 - **macOS** — right-click the app and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/PixelUp.app`).
 - **Windows** — on the SmartScreen prompt, click **More info → Run anyway**.
 
-Model weights are still fetched on demand on first use (verified against a pinned SHA-256).
+Model weights are fetched on demand on first use (verified against a pinned SHA-256) once "Download missing models automatically" is turned on in Settings; it starts off, and a job whose model is missing tells you where the switch is. You can also place the .pth files in the models directory yourself.
 
 ## Features
 

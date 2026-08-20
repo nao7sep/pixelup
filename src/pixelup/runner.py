@@ -15,6 +15,16 @@ class JobSignals(QObject):
     finished = Signal(int, bool, str, object, object)
 
 
+def failure_message(exc: PixelupError) -> str:
+    """The queue-row text for a failed job: the diagnosis plus its remedy.
+
+    The row is the only place a failure surfaces, so a hint — e.g. the Settings
+    toggle that fixes a missing model — must ride along rather than existing only
+    in the log.
+    """
+    return f"{exc.message} {exc.hint}" if exc.hint else exc.message
+
+
 class JobWorker(QObject):
     def __init__(self, job: Job) -> None:
         super().__init__()
@@ -87,7 +97,7 @@ class JobWorker(QObject):
                 warnings=warnings,
                 details=job_log_payload(self.job),
             )
-            self.signals.finished.emit(self.job.id, False, exc.message, {}, warnings)
+            self.signals.finished.emit(self.job.id, False, failure_message(exc), {}, warnings)
         except Exception as exc:
             log.exception(
                 "job.failed_unexpectedly",
