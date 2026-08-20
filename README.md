@@ -1,10 +1,10 @@
 # PixelUp
 
-PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and fetches the models it needs on first use. Pre-release (0.x).
+PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and fetches the models it needs on first use. 0.x.
 
 ## Download
 
-Prebuilt builds for **macOS (Apple Silicon)** and **Windows (x64)** are on the [Releases](https://github.com/nao7sep/pixelup/releases) page — a `.dmg` / `setup.exe` installer or a portable `.zip`. The builds are **self-contained** (no Python or uv install needed) and **unsigned**, so the OS warns the first time you open one:
+Prebuilt builds for **macOS (Apple Silicon)** and **Windows (x64)** are on the [Releases](https://github.com/nao7sep/pixelup/releases/latest) page — a `.dmg` / `setup.exe` installer or a portable `.zip`. The builds are **self-contained** (no Python or uv install needed) and **unsigned**, so the OS warns the first time you open one:
 
 - **macOS** — right-click the app and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/PixelUp.app`).
 - **Windows** — on the SmartScreen prompt, click **More info → Run anyway**.
