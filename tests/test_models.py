@@ -55,7 +55,7 @@ def test_require_model_present_treats_empty_file_as_missing(tmp_path: Path) -> N
 def test_verify_model_file_rejects_wrong_size(tmp_path: Path) -> None:
     model_file = tmp_path / "model.pth"
     model_file.write_bytes(b"small")
-    info = ModelInfo("model", None, "model.pth", None, expected_size=10)
+    info = ModelInfo("model", "model.pth", None, expected_size=10)
 
     with pytest.raises(PixelupError) as excinfo:
         verify_model_file(model_file, info)
@@ -71,7 +71,6 @@ def test_verify_model_file_rejects_checksum_mismatch(tmp_path: Path) -> None:
     model_file.write_bytes(content)
     info = ModelInfo(
         "model",
-        None,
         "model.pth",
         None,
         expected_size=len(content),
@@ -91,7 +90,6 @@ def test_verify_model_file_requires_pinned_checksum_for_downloadable(tmp_path: P
     model_file.write_bytes(b"weights")
     info = ModelInfo(
         "downloadable",
-        None,
         "model.pth",
         "https://example.com/model.pth",
         expected_size=7,
@@ -111,7 +109,6 @@ def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=source.stat().st_size,
@@ -141,7 +138,6 @@ def test_download_model_info_temp_file_uses_stem_nanoid_shape(tmp_path: Path) ->
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=source.stat().st_size,
@@ -177,7 +173,6 @@ def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path
     source.write_bytes(b"different")
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=999,  # deliberately wrong
@@ -195,6 +190,35 @@ def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path
     assert target.read_bytes() == b"whatever is already on disk"
 
 
+def test_download_model_info_does_not_require_lock_directory_for_present_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    target = models_dir / "local-model.pth"
+    target.write_bytes(b"already present")
+    info = ModelInfo("local-model", target.name, "https://example.com/model.pth")
+    original_mkdir = Path.mkdir
+
+    def reject_lock_directory(path: Path, *args: object, **kwargs: object) -> None:
+        if path == models_dir / ".locks":
+            raise OSError("read-only models directory")
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", reject_lock_directory)
+
+    result = download_model_info(
+        models_dir,
+        info,
+        download_timeout=10,
+        lock_timeout=1,
+    )
+
+    assert result["status"] == "present"
+    assert not (models_dir / ".locks").exists()
+
+
 def test_download_model_info_removes_temp_on_verification_failure(tmp_path: Path) -> None:
     # A fully downloaded temp file whose bytes fail verification (wrong pinned
     # checksum) must be cleaned up: download_model_info raises model_corrupt, no
@@ -207,7 +231,6 @@ def test_download_model_info_removes_temp_on_verification_failure(tmp_path: Path
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=len(content),
@@ -245,7 +268,6 @@ def test_download_model_info_refuses_https_redirect_to_http(
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         "https://example.com/start",
         expected_size=7,
@@ -296,7 +318,6 @@ def test_download_model_info_enforces_total_download_deadline(
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         "https://example.com/model.pth",
         expected_size=1,
@@ -342,7 +363,6 @@ def test_download_model_info_rejects_advertised_size_above_pin(
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         "https://example.com/model.pth",
         expected_size=1,
@@ -391,7 +411,6 @@ def test_download_model_info_aborts_stream_above_pin_and_cleans_temp(
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         "https://example.com/model.pth",
         expected_size=1,
@@ -431,7 +450,6 @@ def test_download_model_info_cancels_during_blocking_connection_setup(
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         "https://example.com/model.pth",
         expected_size=1,
@@ -478,7 +496,6 @@ def test_download_model_info_deadline_abandons_blocking_connection_setup(
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         "https://example.com/model.pth",
         expected_size=1,
@@ -504,7 +521,6 @@ def test_verify_model_file_honors_cancellation_during_hash(tmp_path: Path) -> No
     path.write_bytes(content)
     info = ModelInfo(
         "local-model",
-        None,
         "model.pth",
         None,
         expected_size=len(content),
@@ -618,7 +634,6 @@ def test_download_model_info_checks_cancellation_immediately_before_publish(
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=len(content),
@@ -661,7 +676,6 @@ def test_download_model_info_cleans_temp_after_unexpected_progress_failure(tmp_p
     models_dir = tmp_path / "models"
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=len(content),
@@ -695,7 +709,6 @@ def test_download_model_info_cancels_while_waiting_for_lock(tmp_path: Path) -> N
     locks_dir.mkdir(parents=True)
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=source.stat().st_size,
@@ -730,7 +743,6 @@ def test_download_model_info_lock_timeout_leaves_existing_state(tmp_path: Path) 
     locks_dir.mkdir(parents=True)
     info = ModelInfo(
         "local-model",
-        None,
         "local-model.pth",
         source.resolve().as_uri(),
         expected_size=source.stat().st_size,

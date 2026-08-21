@@ -72,7 +72,7 @@ from pixelup.message_dialogs import (
     warn_no_images,
     warn_no_models,
 )
-from pixelup.models import KNOWN_MODELS
+from pixelup.model_registry import KNOWN_MODELS
 from pixelup.parameters import (
     ALPHA_MODE_CHOICES,
     DEFAULT_SCALE,
