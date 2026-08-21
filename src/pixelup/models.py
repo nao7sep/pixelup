@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import select
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.parse import urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, build_opener
 
 from filelock import FileLock, Timeout
 
@@ -25,6 +28,21 @@ GFPGAN_RELEASES = "https://github.com/TencentARC/GFPGAN/releases/download"
 FACEXLIB_RELEASES = "https://github.com/xinntao/facexlib/releases/download"
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 DOWNLOAD_REPORT_BYTES = 5 * 1024 * 1024
+DOWNLOAD_POLL_SECONDS = 0.25
+MAX_DOWNLOAD_REDIRECTS = 10
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+@dataclass(slots=True)
+class _ConnectionAttempt:
+    response: object | None = None
+    error: BaseException | None = None
+    abandoned: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,48 +266,50 @@ def download_model_info(
         temp_path = models_dir / f"{target.stem}-{nanoid()}.tmp"
         log.info("model.download_started", model=info.name, url=info.url)
         try:
-            _download_to_temp(
-                info,
-                temp_path,
-                download_timeout=download_timeout,
-                on_download=on_download,
-                should_cancel=should_cancel,
-            )
-            verify_model_file(temp_path, info)
-            # not recorded: model weights are large binaries, re-fetchable from
-            # their source and interchangeable with it — not hand-authored text the
-            # app owns as state. Binaries are out of scope for the text backup, and
-            # models/ is a binary-bearing directory excluded wholesale
-            # (data-backup-conventions).
-            os.replace(temp_path, target)
-        except PixelupError as exc:
-            temp_path.unlink(missing_ok=True)
-            # A cancellation is not a download failure; the job-level log records
-            # it. Any other PixelupError here is a real failure (e.g. the
-            # downloaded file failed verification) and gets a terminal event so
-            # every model.download_started has a matching outcome.
-            if exc.code != ErrorCode.JOB_CANCELLED:
+            try:
+                _download_to_temp(
+                    info,
+                    temp_path,
+                    download_timeout=download_timeout,
+                    on_download=on_download,
+                    should_cancel=should_cancel,
+                )
+                verify_model_file(temp_path, info, should_cancel=should_cancel)
+                _raise_if_cancelled(should_cancel)
+                # not recorded: model weights are large binaries, re-fetchable from
+                # their source and interchangeable with it — not hand-authored text the
+                # app owns as state. Binaries are out of scope for the text backup, and
+                # models/ is a binary-bearing directory excluded wholesale
+                # (data-backup-conventions).
+                os.replace(temp_path, target)
+            except PixelupError as exc:
+                # A cancellation is not a download failure; the job-level log records
+                # it. Any other PixelupError here is a real failure (e.g. the
+                # downloaded file failed verification) and gets a terminal event so
+                # every model.download_started has a matching outcome.
+                if exc.code != ErrorCode.JOB_CANCELLED:
+                    log.warning(
+                        "model.download_failed",
+                        model=info.name,
+                        url=info.url,
+                        code=exc.code.value,
+                        reason=exc.message,
+                    )
+                raise
+            except (HTTPError, URLError, TimeoutError, OSError) as exc:
                 log.warning(
                     "model.download_failed",
                     model=info.name,
                     url=info.url,
-                    code=exc.code.value,
-                    reason=exc.message,
+                    reason=str(exc),
                 )
-            raise
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            temp_path.unlink(missing_ok=True)
-            log.warning(
-                "model.download_failed",
-                model=info.name,
-                url=info.url,
-                reason=str(exc),
-            )
-            raise PixelupError(
-                ErrorCode.MODEL_DOWNLOAD_FAILED,
-                f"Could not download model '{info.name}'.",
-                details={"model": info.name, "url": info.url, "reason": str(exc)},
-            ) from exc
+                raise PixelupError(
+                    ErrorCode.MODEL_DOWNLOAD_FAILED,
+                    f"Could not download model '{info.name}'.",
+                    details={"model": info.name, "url": info.url, "reason": str(exc)},
+                ) from exc
+        finally:
+            _remove_staged_file(temp_path, info.name)
     finally:
         lock.release()
     result = _download_result(info, target, "downloaded")
@@ -297,7 +317,13 @@ def download_model_info(
     return result
 
 
-def verify_model_file(path: Path, info: ModelInfo | None = None) -> dict[str, object]:
+def verify_model_file(
+    path: Path,
+    info: ModelInfo | None = None,
+    *,
+    should_cancel: CancelCheck | None = None,
+) -> dict[str, object]:
+    _raise_if_cancelled(should_cancel)
     if not path.is_file():
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
@@ -314,7 +340,7 @@ def verify_model_file(path: Path, info: ModelInfo | None = None) -> dict[str, ob
             f"Model '{info.name}' has no pinned checksum; refusing to trust it.",
             details={"model": info.name, "path": str(path)},
         )
-    checksum = _sha256(path) if info and info.checksum_sha256 else None
+    checksum = _sha256(path, should_cancel) if info and info.checksum_sha256 else None
     ok = size > 0
     if info and info.expected_size is not None:
         ok = ok and size == info.expected_size
@@ -348,17 +374,42 @@ def _download_to_temp(
     should_cancel: CancelCheck | None = None,
 ) -> None:
     assert info.url is not None
+    deadline = time.monotonic() + download_timeout
     bytes_done = 0
     last_reported = 0
     last_percent = -1
-    with urlopen(info.url, timeout=download_timeout) as response:
-        bytes_total = _response_size(response.headers.get("Content-Length"), info.expected_size)
+    with _open_download_response(info.url, deadline, should_cancel) as response:
+        advertised_size = _response_size(response.headers.get("Content-Length"), None)
+        if (
+            info.expected_size is not None
+            and advertised_size is not None
+            and advertised_size > info.expected_size
+        ):
+            raise PixelupError(
+                ErrorCode.MODEL_DOWNLOAD_FAILED,
+                "Model download exceeds its pinned size.",
+                details={
+                    "model": info.name,
+                    "expected_size_bytes": info.expected_size,
+                    "advertised_size_bytes": advertised_size,
+                },
+            )
+        bytes_total = advertised_size if advertised_size is not None else info.expected_size
         with temp_path.open("wb") as output:
-            while chunk := response.read(DOWNLOAD_CHUNK_BYTES):
-                if should_cancel and should_cancel():
-                    raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+            while chunk := _read_download_chunk(response, deadline, should_cancel):
+                next_bytes_done = bytes_done + len(chunk)
+                if info.expected_size is not None and next_bytes_done > info.expected_size:
+                    raise PixelupError(
+                        ErrorCode.MODEL_DOWNLOAD_FAILED,
+                        "Model download exceeded its pinned size while streaming.",
+                        details={
+                            "model": info.name,
+                            "expected_size_bytes": info.expected_size,
+                            "received_size_bytes": next_bytes_done,
+                        },
+                    )
                 output.write(chunk)
-                bytes_done += len(chunk)
+                bytes_done = next_bytes_done
                 if _should_report_download(bytes_done, bytes_total, last_reported, last_percent):
                     if on_download:
                         on_download(info.name, bytes_done, bytes_total)
@@ -367,6 +418,206 @@ def _download_to_temp(
                         last_percent = bytes_done * 100 // bytes_total
     if on_download and bytes_done != last_reported:
         on_download(info.name, bytes_done, bytes_total)
+
+
+def _open_download_response(
+    url: str,
+    deadline: float,
+    should_cancel: CancelCheck | None,
+):
+    initial_scheme = urlsplit(url).scheme.lower()
+    allow_file = initial_scheme == "file"
+    _assert_safe_download_url(url, allow_file=allow_file)
+    opener = build_opener(_NoRedirectHandler())
+    current_url = url
+    for redirects in range(MAX_DOWNLOAD_REDIRECTS + 1):
+        _raise_if_cancelled(should_cancel)
+        try:
+            response = _open_response_cancellable(opener, current_url, deadline, should_cancel)
+        except HTTPError as exc:
+            if exc.code not in _REDIRECT_STATUSES:
+                exc.close()
+                raise
+            if redirects == MAX_DOWNLOAD_REDIRECTS:
+                exc.close()
+                raise PixelupError(
+                    ErrorCode.MODEL_DOWNLOAD_FAILED,
+                    "Model download followed too many redirects.",
+                    details={"url": url},
+                ) from exc
+            location = exc.headers.get("Location")
+            exc.close()
+            if not location:
+                raise PixelupError(
+                    ErrorCode.MODEL_DOWNLOAD_FAILED,
+                    "Model download redirect did not include a Location header.",
+                    details={"url": current_url},
+                ) from exc
+            current_url = urljoin(current_url, location)
+            _assert_safe_download_url(current_url, allow_file=False)
+            continue
+        effective_url = response.geturl()
+        try:
+            _assert_safe_download_url(effective_url, allow_file=allow_file)
+        except Exception:
+            response.close()
+            raise
+        return response
+    raise AssertionError("redirect loop must return or raise")
+
+
+def _open_response_cancellable(
+    opener,
+    url: str,
+    deadline: float,
+    should_cancel: CancelCheck | None,
+):
+    """Open without letting urllib's blocking DNS/connect/TLS hide cancel or deadline.
+
+    The daemon worker owns only connection setup. Response ownership transfers under
+    the lock; if the caller has already left, the worker closes a late response.
+    """
+    attempt = _ConnectionAttempt()
+    ready = threading.Event()
+    lock = threading.Lock()
+    open_timeout = _remaining_download_seconds(deadline)
+
+    def connect() -> None:
+        try:
+            response = opener.open(url, timeout=open_timeout)
+        except BaseException as exc:
+            with lock:
+                if attempt.abandoned:
+                    return
+                attempt.error = exc
+                ready.set()
+            return
+
+        with lock:
+            if attempt.abandoned:
+                close_abandoned = True
+            else:
+                attempt.response = response
+                ready.set()
+                close_abandoned = False
+        if close_abandoned:
+            _close_response(response)
+
+    threading.Thread(target=connect, name="pixelup-model-connect", daemon=True).start()
+
+    try:
+        while True:
+            _raise_if_cancelled(should_cancel)
+            remaining = _remaining_download_seconds(deadline)
+            if ready.wait(min(DOWNLOAD_POLL_SECONDS, remaining)):
+                break
+        # Cancellation or the total deadline wins until response ownership transfers.
+        _raise_if_cancelled(should_cancel)
+        _remaining_download_seconds(deadline)
+    except BaseException:
+        with lock:
+            attempt.abandoned = True
+            response = attempt.response
+            attempt.response = None
+        if response is not None:
+            _close_response(response)
+        raise
+
+    with lock:
+        response = attempt.response
+        error = attempt.error
+        attempt.response = None
+    if error is not None:
+        raise error
+    if response is None:
+        raise RuntimeError("Connection worker completed without a response or error.")
+    return response
+
+
+def _close_response(response: object) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
+def _read_download_chunk(response, deadline: float, should_cancel: CancelCheck | None) -> bytes:
+    sock = _response_socket(response)
+    if sock is None:
+        _raise_if_cancelled(should_cancel)
+        _remaining_download_seconds(deadline)
+        chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+        _raise_if_cancelled(should_cancel)
+        _remaining_download_seconds(deadline)
+        return chunk
+
+    while True:
+        _raise_if_cancelled(should_cancel)
+        remaining = _remaining_download_seconds(deadline)
+        pending = getattr(sock, "pending", None)
+        if not (callable(pending) and pending() > 0):
+            readable, _, _ = select.select(
+                [sock],
+                [],
+                [],
+                min(DOWNLOAD_POLL_SECONDS, remaining),
+            )
+            if not readable:
+                continue
+
+        remaining = _remaining_download_seconds(deadline)
+        set_timeout = getattr(sock, "settimeout", None)
+        if callable(set_timeout):
+            set_timeout(min(DOWNLOAD_POLL_SECONDS, remaining))
+        reader = getattr(response, "read1", None) or response.read
+        try:
+            chunk = reader(DOWNLOAD_CHUNK_BYTES)
+        except TimeoutError:
+            # A readable raw socket may still hold only part of a TLS record.
+            # Return to the polling loop so cancellation and the total deadline
+            # remain responsive without treating slow progress as a failure.
+            continue
+        _raise_if_cancelled(should_cancel)
+        _remaining_download_seconds(deadline)
+        return chunk
+
+
+def _response_socket(response):
+    fp = getattr(response, "fp", None)
+    raw = getattr(fp, "raw", None)
+    return getattr(raw, "_sock", None)
+
+
+def _assert_safe_download_url(url: str, *, allow_file: bool) -> None:
+    scheme = urlsplit(url).scheme.lower()
+    if scheme == "https" or (allow_file and scheme == "file"):
+        return
+    raise PixelupError(
+        ErrorCode.MODEL_DOWNLOAD_FAILED,
+        "Refusing an insecure model download URL; HTTPS is required.",
+        details={"url": url},
+    )
+
+
+def _remaining_download_seconds(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Model download exceeded its total timeout.")
+    return remaining
+
+
+def _raise_if_cancelled(should_cancel: CancelCheck | None) -> None:
+    if should_cancel and should_cancel():
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+
+
+def _remove_staged_file(path: Path, model: str) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning("model.temp_cleanup_failed", model=model, path=str(path), reason=str(exc))
 
 
 def _acquire_download_lock(
@@ -451,9 +702,12 @@ def _should_report_download(
     return False
 
 
-def _sha256(path: Path) -> str:
+def _sha256(path: Path, should_cancel: CancelCheck | None = None) -> str:
+    _raise_if_cancelled(should_cancel)
     digest = hashlib.sha256()
     with path.open("rb") as file:
         while chunk := file.read(1024 * 1024):
+            _raise_if_cancelled(should_cancel)
             digest.update(chunk)
+    _raise_if_cancelled(should_cancel)
     return digest.hexdigest()

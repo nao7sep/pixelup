@@ -1,10 +1,14 @@
 import hashlib
 import re
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 from filelock import FileLock
 
+import pixelup.models as models_module
 from pixelup.errors import PixelupError
 from pixelup.models import ModelInfo, download_model_info, require_model_present, verify_model_file
 
@@ -219,6 +223,463 @@ def test_download_model_info_removes_temp_on_verification_failure(tmp_path: Path
         )
 
     assert excinfo.value.code == "model_corrupt"
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
+def test_download_model_info_refuses_https_redirect_to_http(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RedirectingOpener:
+        calls = 0
+
+        def open(self, url: str, *, timeout: float):
+            self.calls += 1
+            headers = Message()
+            headers["Location"] = "http://example.com/model.pth"
+            raise HTTPError(url, 302, "Found", headers, BytesIO())
+
+    opener = RedirectingOpener()
+    monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: opener)
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        "https://example.com/start",
+        expected_size=7,
+        checksum_sha256=_sha256_hex(b"weights"),
+    )
+
+    with pytest.raises(PixelupError) as excinfo:
+        download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
+
+    assert excinfo.value.code == "model_download_failed"
+    assert "HTTPS is required" in excinfo.value.message
+    assert opener.calls == 1
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
+def test_download_model_info_enforces_total_download_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+    observed_timeouts: list[float] = []
+
+    class SlowResponse:
+        headers = {"Content-Length": "1"}
+        fp = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return "https://example.com/model.pth"
+
+        def read(self, _size: int) -> bytes:
+            clock[0] = 2.0
+            return b"x"
+
+    class SlowOpener:
+        def open(self, _url: str, *, timeout: float) -> SlowResponse:
+            observed_timeouts.append(timeout)
+            return SlowResponse()
+
+    monkeypatch.setattr(models_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: SlowOpener())
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        "https://example.com/model.pth",
+        expected_size=1,
+        checksum_sha256=_sha256_hex(b"x"),
+    )
+
+    with pytest.raises(PixelupError) as excinfo:
+        download_model_info(models_dir, info, download_timeout=1, lock_timeout=1)
+
+    assert excinfo.value.code == "model_download_failed"
+    assert "total timeout" in str(excinfo.value.details["reason"])
+    assert observed_timeouts == [1.0]
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
+def test_download_model_info_rejects_advertised_size_above_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OversizedResponse:
+        headers = {"Content-Length": "2"}
+        fp = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return "https://example.com/model.pth"
+
+        def read(self, _size: int) -> bytes:
+            raise AssertionError("an advertised oversize response must not be read")
+
+    class OversizedOpener:
+        def open(self, _url: str, *, timeout: float) -> OversizedResponse:
+            assert timeout > 0
+            return OversizedResponse()
+
+    monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: OversizedOpener())
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        "https://example.com/model.pth",
+        expected_size=1,
+        checksum_sha256=_sha256_hex(b"x"),
+    )
+
+    with pytest.raises(PixelupError) as excinfo:
+        download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
+
+    assert excinfo.value.code == "model_download_failed"
+    assert excinfo.value.details["advertised_size_bytes"] == 2
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
+def test_download_model_info_aborts_stream_above_pin_and_cleans_temp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OversizedStreamResponse:
+        headers: dict[str, str] = {}
+        fp = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return "https://example.com/model.pth"
+
+        def read(self, _size: int) -> bytes:
+            return b"xx"
+
+    class OversizedStreamOpener:
+        def open(self, _url: str, *, timeout: float) -> OversizedStreamResponse:
+            assert timeout > 0
+            return OversizedStreamResponse()
+
+    monkeypatch.setattr(
+        models_module,
+        "build_opener",
+        lambda *_handlers: OversizedStreamOpener(),
+    )
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        "https://example.com/model.pth",
+        expected_size=1,
+        checksum_sha256=_sha256_hex(b"x"),
+    )
+
+    with pytest.raises(PixelupError) as excinfo:
+        download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
+
+    assert excinfo.value.code == "model_download_failed"
+    assert excinfo.value.details["received_size_bytes"] == 2
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
+def test_download_model_info_cancels_during_blocking_connection_setup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = models_module.threading.Event()
+    release = models_module.threading.Event()
+    closed = models_module.threading.Event()
+
+    class LateResponse:
+        def close(self) -> None:
+            closed.set()
+
+    class BlockingOpener:
+        def open(self, _url: str, *, timeout: float) -> LateResponse:
+            assert timeout > 0
+            started.set()
+            release.wait(5)
+            return LateResponse()
+
+    monkeypatch.setattr(models_module, "DOWNLOAD_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: BlockingOpener())
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        "https://example.com/model.pth",
+        expected_size=1,
+        checksum_sha256=_sha256_hex(b"x"),
+    )
+
+    try:
+        with pytest.raises(PixelupError) as excinfo:
+            download_model_info(
+                models_dir,
+                info,
+                download_timeout=10,
+                lock_timeout=1,
+                should_cancel=started.is_set,
+            )
+    finally:
+        release.set()
+
+    assert excinfo.value.code == "job_cancelled"
+    assert closed.wait(1), "a response returned after cancellation must be closed"
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
+def test_download_model_info_deadline_abandons_blocking_connection_setup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = models_module.threading.Event()
+    closed = models_module.threading.Event()
+
+    class LateResponse:
+        def close(self) -> None:
+            closed.set()
+
+    class BlockingOpener:
+        def open(self, _url: str, *, timeout: float) -> LateResponse:
+            assert 0 < timeout <= 0.05
+            release.wait(5)
+            return LateResponse()
+
+    monkeypatch.setattr(models_module, "DOWNLOAD_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: BlockingOpener())
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        "https://example.com/model.pth",
+        expected_size=1,
+        checksum_sha256=_sha256_hex(b"x"),
+    )
+
+    try:
+        with pytest.raises(PixelupError) as excinfo:
+            download_model_info(models_dir, info, download_timeout=0.05, lock_timeout=1)
+    finally:
+        release.set()
+
+    assert excinfo.value.code == "model_download_failed"
+    assert "total timeout" in str(excinfo.value.details["reason"])
+    assert closed.wait(1), "a response returned after the deadline must be closed"
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
+def test_verify_model_file_honors_cancellation_during_hash(tmp_path: Path) -> None:
+    content = b"x" * (2 * 1024 * 1024)
+    path = tmp_path / "model.pth"
+    path.write_bytes(content)
+    info = ModelInfo(
+        "local-model",
+        None,
+        "model.pth",
+        None,
+        expected_size=len(content),
+        checksum_sha256=_sha256_hex(content),
+    )
+    calls = 0
+
+    def should_cancel() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls >= 3
+
+    with pytest.raises(PixelupError) as excinfo:
+        verify_model_file(path, info, should_cancel=should_cancel)
+
+    assert excinfo.value.code == "job_cancelled"
+
+
+def test_download_read_poll_honors_cancellation_while_socket_is_stalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StalledSocket:
+        def pending(self) -> int:
+            return 0
+
+    class Raw:
+        _sock = StalledSocket()
+
+    class File:
+        raw = Raw()
+
+    class StalledResponse:
+        fp = File()
+
+        def read(self, _size: int) -> bytes:
+            raise AssertionError("a stalled socket must not be read before it is ready")
+
+    polls = 0
+
+    def should_cancel() -> bool:
+        nonlocal polls
+        polls += 1
+        return polls >= 3
+
+    monkeypatch.setattr(models_module.select, "select", lambda *_args: ([], [], []))
+
+    with pytest.raises(PixelupError) as excinfo:
+        models_module._read_download_chunk(
+            StalledResponse(),
+            deadline=models_module.time.monotonic() + 60,
+            should_cancel=should_cancel,
+        )
+
+    assert excinfo.value.code == "job_cancelled"
+
+
+def test_download_read_timeout_returns_to_cancellation_poll() -> None:
+    timeouts: list[float] = []
+
+    class PartialTlsSocket:
+        def pending(self) -> int:
+            return 1
+
+        def settimeout(self, timeout: float) -> None:
+            timeouts.append(timeout)
+
+    class Raw:
+        _sock = PartialTlsSocket()
+
+    class File:
+        raw = Raw()
+
+    class PartialTlsResponse:
+        fp = File()
+        reads = 0
+
+        def read1(self, _size: int) -> bytes:
+            self.reads += 1
+            raise TimeoutError("partial TLS record")
+
+        def read(self, _size: int) -> bytes:
+            raise AssertionError("read1 should be used when available")
+
+    cancellation_checks = 0
+
+    def should_cancel() -> bool:
+        nonlocal cancellation_checks
+        cancellation_checks += 1
+        return cancellation_checks >= 2
+
+    response = PartialTlsResponse()
+    with pytest.raises(PixelupError) as excinfo:
+        models_module._read_download_chunk(
+            response,
+            deadline=models_module.time.monotonic() + 60,
+            should_cancel=should_cancel,
+        )
+
+    assert excinfo.value.code == "job_cancelled"
+    assert response.reads == 1
+    assert timeouts == [models_module.DOWNLOAD_POLL_SECONDS]
+
+
+def test_download_model_info_checks_cancellation_immediately_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"downloaded weights"
+    source = tmp_path / "source.pth"
+    source.write_bytes(content)
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        source.resolve().as_uri(),
+        expected_size=len(content),
+        checksum_sha256=_sha256_hex(content),
+    )
+    cancelled = False
+    original_verify = models_module.verify_model_file
+
+    def verify_then_cancel(
+        path: Path,
+        model_info: ModelInfo | None = None,
+        *,
+        should_cancel: models_module.CancelCheck | None = None,
+    ) -> dict[str, object]:
+        nonlocal cancelled
+        result = original_verify(path, model_info, should_cancel=should_cancel)
+        cancelled = True
+        return result
+
+    monkeypatch.setattr(models_module, "verify_model_file", verify_then_cancel)
+
+    with pytest.raises(PixelupError) as excinfo:
+        download_model_info(
+            models_dir,
+            info,
+            download_timeout=10,
+            lock_timeout=1,
+            should_cancel=lambda: cancelled,
+        )
+
+    assert excinfo.value.code == "job_cancelled"
+    assert not (models_dir / "local-model.pth").exists()
+    assert not list(models_dir.glob("*.tmp"))
+
+
+def test_download_model_info_cleans_temp_after_unexpected_progress_failure(tmp_path: Path) -> None:
+    content = b"downloaded weights"
+    source = tmp_path / "source.pth"
+    source.write_bytes(content)
+    models_dir = tmp_path / "models"
+    info = ModelInfo(
+        "local-model",
+        None,
+        "local-model.pth",
+        source.resolve().as_uri(),
+        expected_size=len(content),
+        checksum_sha256=_sha256_hex(content),
+    )
+
+    def fail_progress(_model: str, _done: int, _total: int | None) -> None:
+        raise RuntimeError("progress sink failed")
+
+    with pytest.raises(RuntimeError, match="progress sink failed"):
+        download_model_info(
+            models_dir,
+            info,
+            download_timeout=10,
+            lock_timeout=1,
+            on_download=fail_progress,
+        )
+
     assert not (models_dir / "local-model.pth").exists()
     assert not list(models_dir.glob("*.tmp"))
 
