@@ -120,7 +120,7 @@ def test_non_serializable_field_values_do_not_break_a_line(tmp_path: Path) -> No
     log.info("log.revealed", log_file=Path("/tmp/x.log"))
 
     entry = _read_jsonl(log_path)[-1]
-    assert entry["log_file"] == "/tmp/x.log"
+    assert entry["log_file"] == str(Path("/tmp/x.log"))
 
 
 def test_debug_enabled_reads_env() -> None:

@@ -35,6 +35,8 @@ CancelCheck = Callable[[], bool]
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 DOWNLOAD_REPORT_BYTES = 5 * 1024 * 1024
 DOWNLOAD_POLL_SECONDS = 0.25
+MIN_DOWNLOAD_RATE_BYTES_PER_SECOND = 128 * 1024
+LARGE_DOWNLOAD_FINALIZATION_SECONDS = 120
 MAX_DOWNLOAD_REDIRECTS = 10
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
@@ -84,7 +86,7 @@ def download_model(
     models_dir: Path,
     name: str,
     *,
-    download_timeout: int,
+    download_timeout: float,
     lock_timeout: int,
     on_download: DownloadCallback | None = None,
     on_waiting: WaitingCallback | None = None,
@@ -112,7 +114,7 @@ def download_model_info(
     models_dir: Path,
     info: ModelInfo,
     *,
-    download_timeout: int,
+    download_timeout: float,
     lock_timeout: int,
     on_download: DownloadCallback | None = None,
     on_waiting: WaitingCallback | None = None,
@@ -156,6 +158,8 @@ def download_model_info(
     try:
         if _model_file_present(target):
             return _download_result(info, target, "present")
+        acquisition_timeout = _acquisition_timeout_seconds(info, download_timeout)
+        deadline = time.monotonic() + acquisition_timeout
         # Stage the download as a per-download-unique file INSIDE models_dir —
         # deliberately, not under a separate temp/ dir. The convention's intent
         # (a deletable staging area, unique name, verify there, then atomic
@@ -165,24 +169,36 @@ def download_model_info(
         # that to a copy. (Image-output staging uses temp/ in imaging.py; model
         # publish needs the same-fs guarantee.)
         temp_path = models_dir / f"{target.stem}-{nanoid()}.tmp"
-        log.info("model.download_started", model=info.name, url=info.url)
+        log.info(
+            "model.download_started",
+            model=info.name,
+            url=info.url,
+            timeout_seconds=acquisition_timeout,
+        )
         try:
             try:
                 _download_to_temp(
                     info,
                     temp_path,
-                    download_timeout=download_timeout,
+                    deadline=deadline,
                     on_download=on_download,
                     should_cancel=should_cancel,
                 )
-                verify_model_file(temp_path, info, should_cancel=should_cancel)
-                _raise_if_cancelled(should_cancel)
+                verify_model_file(
+                    temp_path,
+                    info,
+                    deadline=deadline,
+                    should_cancel=should_cancel,
+                )
+                _sync_staged_file(temp_path, deadline, should_cancel)
+                _check_acquisition(deadline, should_cancel)
                 # not recorded: model weights are large binaries, re-fetchable from
                 # their source and interchangeable with it — not hand-authored text the
                 # app owns as state. Binaries are out of scope for the text backup, and
                 # models/ is a binary-bearing directory excluded wholesale
                 # (data-backup-conventions).
                 os.replace(temp_path, target)
+                _sync_directory_best_effort(models_dir)
             except PixelupError as exc:
                 # A cancellation is not a download failure; the job-level log records
                 # it. Any other PixelupError here is a real failure (e.g. the
@@ -222,9 +238,10 @@ def verify_model_file(
     path: Path,
     info: ModelInfo | None = None,
     *,
+    deadline: float | None = None,
     should_cancel: CancelCheck | None = None,
 ) -> dict[str, object]:
-    _raise_if_cancelled(should_cancel)
+    _check_acquisition(deadline, should_cancel)
     if not path.is_file():
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
@@ -241,7 +258,11 @@ def verify_model_file(
             f"Model '{info.name}' has no pinned checksum; refusing to trust it.",
             details={"model": info.name, "path": str(path)},
         )
-    checksum = _sha256(path, should_cancel) if info and info.checksum_sha256 else None
+    checksum = (
+        _sha256(path, deadline=deadline, should_cancel=should_cancel)
+        if info and info.checksum_sha256
+        else None
+    )
     ok = size > 0
     if info and info.expected_size is not None:
         ok = ok and size == info.expected_size
@@ -270,12 +291,11 @@ def _download_to_temp(
     info: ModelInfo,
     temp_path: Path,
     *,
-    download_timeout: int,
+    deadline: float,
     on_download: DownloadCallback | None,
     should_cancel: CancelCheck | None = None,
 ) -> None:
     assert info.url is not None
-    deadline = time.monotonic() + download_timeout
     bytes_done = 0
     last_reported = 0
     last_percent = -1
@@ -505,13 +525,60 @@ def _assert_safe_download_url(url: str, *, allow_file: bool) -> None:
 def _remaining_download_seconds(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise TimeoutError("Model download exceeded its total timeout.")
+        raise TimeoutError("Model acquisition exceeded its total timeout.")
     return remaining
 
 
 def _raise_if_cancelled(should_cancel: CancelCheck | None) -> None:
     if should_cancel and should_cancel():
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+
+
+def _check_acquisition(deadline: float | None, should_cancel: CancelCheck | None) -> None:
+    _raise_if_cancelled(should_cancel)
+    if deadline is not None:
+        _remaining_download_seconds(deadline)
+
+
+def _acquisition_timeout_seconds(info: ModelInfo, minimum_timeout: float) -> float:
+    """Use the caller's floor, extending it for pinned large artifacts.
+
+    128 KiB/s is intentionally conservative for a healthy but slow connection. The
+    same resulting bound covers transport, verification, durable staging, and publish.
+    """
+    if info.expected_size is None:
+        return float(minimum_timeout)
+    size_bound = info.expected_size / MIN_DOWNLOAD_RATE_BYTES_PER_SECOND
+    if size_bound <= minimum_timeout:
+        return float(minimum_timeout)
+    return size_bound + LARGE_DOWNLOAD_FINALIZATION_SECONDS
+
+
+def _sync_staged_file(
+    path: Path, deadline: float, should_cancel: CancelCheck | None
+) -> None:
+    _check_acquisition(deadline, should_cancel)
+    # Open with write access because Windows FlushFileBuffers, which backs fsync,
+    # requires it even though the completed staged bytes are no longer modified.
+    with path.open("r+b") as file:
+        os.fsync(file.fileno())
+    _check_acquisition(deadline, should_cancel)
+
+
+def _sync_directory_best_effort(path: Path) -> None:
+    """Persist the rename on platforms that permit directory fsync."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            # Windows cannot fsync directories and macOS may treat it as a no-op.
+            pass
+    finally:
+        os.close(descriptor)
 
 
 def _remove_staged_file(path: Path, model: str) -> None:
@@ -603,12 +670,17 @@ def _should_report_download(
     return False
 
 
-def _sha256(path: Path, should_cancel: CancelCheck | None = None) -> str:
-    _raise_if_cancelled(should_cancel)
+def _sha256(
+    path: Path,
+    *,
+    deadline: float | None = None,
+    should_cancel: CancelCheck | None = None,
+) -> str:
+    _check_acquisition(deadline, should_cancel)
     digest = hashlib.sha256()
     with path.open("rb") as file:
         while chunk := file.read(1024 * 1024):
-            _raise_if_cancelled(should_cancel)
+            _check_acquisition(deadline, should_cancel)
             digest.update(chunk)
-    _raise_if_cancelled(should_cancel)
+    _check_acquisition(deadline, should_cancel)
     return digest.hexdigest()

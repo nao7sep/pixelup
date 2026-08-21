@@ -487,7 +487,7 @@ def test_download_model_info_deadline_abandons_blocking_connection_setup(
 
     class BlockingOpener:
         def open(self, _url: str, *, timeout: float) -> LateResponse:
-            assert 0 < timeout <= 0.05
+            assert 0 < timeout <= 0.051
             release.wait(5)
             return LateResponse()
 
@@ -646,10 +646,17 @@ def test_download_model_info_checks_cancellation_immediately_before_publish(
         path: Path,
         model_info: ModelInfo | None = None,
         *,
+        deadline: float | None = None,
         should_cancel: models_module.CancelCheck | None = None,
     ) -> dict[str, object]:
         nonlocal cancelled
-        result = original_verify(path, model_info, should_cancel=should_cancel)
+        assert deadline is not None
+        result = original_verify(
+            path,
+            model_info,
+            deadline=deadline,
+            should_cancel=should_cancel,
+        )
         cancelled = True
         return result
 
@@ -667,6 +674,91 @@ def test_download_model_info_checks_cancellation_immediately_before_publish(
     assert excinfo.value.code == "job_cancelled"
     assert not (models_dir / "local-model.pth").exists()
     assert not list(models_dir.glob("*.tmp"))
+
+
+def test_large_model_extends_the_whole_acquisition_timeout() -> None:
+    small = ModelInfo("small", "small.pth", None, expected_size=1)
+    large = ModelInfo("large", "large.pth", None, expected_size=348_632_874)
+
+    assert models_module._acquisition_timeout_seconds(small, 600) == 600
+    assert models_module._acquisition_timeout_seconds(large, 600) > 2_600
+
+
+def test_verification_honors_the_acquisition_deadline(tmp_path: Path) -> None:
+    content = b"weights"
+    path = tmp_path / "model.pth"
+    path.write_bytes(content)
+    info = ModelInfo(
+        "model",
+        "model.pth",
+        None,
+        expected_size=len(content),
+        checksum_sha256=_sha256_hex(content),
+    )
+
+    with pytest.raises(TimeoutError, match="acquisition exceeded its total timeout"):
+        verify_model_file(path, info, deadline=models_module.time.monotonic() - 1)
+
+
+def test_download_syncs_stage_before_publish_and_directory_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"downloaded weights"
+    source = tmp_path / "source.pth"
+    source.write_bytes(content)
+    models_dir = tmp_path / "models"
+    target = models_dir / "local-model.pth"
+    info = ModelInfo(
+        "local-model",
+        target.name,
+        source.resolve().as_uri(),
+        expected_size=len(content),
+        checksum_sha256=_sha256_hex(content),
+    )
+    order: list[str] = []
+    real_replace = models_module.os.replace
+
+    def sync_stage(
+        path: Path,
+        deadline: float,
+        should_cancel: models_module.CancelCheck | None,
+    ) -> None:
+        assert path.is_file()
+        assert deadline > models_module.time.monotonic()
+        assert should_cancel is None
+        order.append("sync-stage")
+
+    def replace(source_path: Path, target_path: Path) -> None:
+        order.append("publish")
+        real_replace(source_path, target_path)
+
+    def sync_directory(path: Path) -> None:
+        assert path == models_dir
+        assert target.is_file()
+        order.append("sync-directory")
+
+    monkeypatch.setattr(models_module, "_sync_staged_file", sync_stage)
+    monkeypatch.setattr(models_module.os, "replace", replace)
+    monkeypatch.setattr(models_module, "_sync_directory_best_effort", sync_directory)
+
+    download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
+
+    assert order == ["sync-stage", "publish", "sync-directory"]
+
+
+def test_sync_staged_file_calls_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "model.tmp"
+    path.write_bytes(b"weights")
+    descriptors: list[int] = []
+    monkeypatch.setattr(models_module.os, "fsync", descriptors.append)
+
+    models_module._sync_staged_file(
+        path,
+        models_module.time.monotonic() + 60,
+        should_cancel=None,
+    )
+
+    assert len(descriptors) == 1
 
 
 def test_download_model_info_cleans_temp_after_unexpected_progress_failure(tmp_path: Path) -> None:

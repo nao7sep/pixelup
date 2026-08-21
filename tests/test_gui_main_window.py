@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 
 from pixelup import gui
@@ -117,6 +118,24 @@ def test_open_paths_adds_unique_rows_and_focuses_existing(
     window.open_paths([first])
     assert window.image_table.rowCount() == 2
     assert window._selected_path() == first.resolve()
+
+
+def test_shortcuts_help_chords_open_the_catalogue(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[object] = []
+    monkeypatch.setattr(
+        "pixelup.gui.ShortcutsDialog.exec", lambda dialog: opened.append(dialog.parent())
+    )
+    window = make_window()
+
+    assert window.shortcuts_shortcut.key() == QKeySequence("Ctrl+/")
+    assert window.shortcuts_question_shortcut.key() == QKeySequence("Ctrl+?")
+
+    window.shortcuts_shortcut.activated.emit()
+    window.shortcuts_question_shortcut.activated.emit()
+
+    assert opened == [window, window]
 
 
 def test_open_paths_ignores_non_files(make_window, tmp_path: Path) -> None:
@@ -512,18 +531,16 @@ def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_pat
     assert window.queue_table.item(1, 2).text() == "4x"
 
 
-def test_a_stray_persisted_tile_seeds_the_panel_without_blanking_it(
+def test_a_stray_persisted_tile_is_quarantined_before_the_panel_is_seeded(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The panel's combo seeds via findData, which answers -1 for a value it does not
     # hold — and setCurrentIndex(-1) blanks the box, making currentData() None. That
     # None would flow straight back into JobSettings.tile on the next enqueue or save.
     #
-    # Nothing in the panel prevents it: _coerce_tile in the config loader is the only
-    # thing that does, and that dependency is invisible from here. So this walks the
-    # REAL loader (not an injected AppConfig) with a tile that is not a choice, and
-    # pins the whole chain — corrupt file -> coerced load -> a panel that shows a real
-    # value. It fails if tile ever stops being coerced on the way in.
+    # Nothing in the panel prevents it, so this walks the real loader (not an injected
+    # AppConfig) with a tile that is not a choice and pins the whole recovery chain:
+    # invalid store -> quarantine/reset -> a panel that shows a real default value.
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.json").write_text(
@@ -532,16 +549,24 @@ def test_a_stray_persisted_tile_seeds_the_panel_without_blanking_it(
     )
     monkeypatch.setenv("PIXELUP_HOME", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    notices: list[str] = []
+    monkeypatch.setattr(
+        "pixelup.gui.warn_config_reset",
+        lambda _parent, name: notices.append(name),
+    )
     log_file = tmp_path / "logs" / "session.log"
     configure_session_logging(log_file)
 
     window = MainWindow(log_file=log_file)
     try:
+        assert window._config_quarantined_to is not None
         assert window.tile.currentIndex() != -1, "the combo blanked on an unknown tile"
         assert window.tile.currentData() is not None
         assert window.tile.currentData() == JobSettings().tile
         # And the value the panel would hand a job is a real one, not None.
         assert window.current_job_settings().tile in TILE_VALUES
+        qapp.processEvents()
+        assert notices == [window._config_quarantined_to.name]
     finally:
         window._session_shutdown = True
         window.close()

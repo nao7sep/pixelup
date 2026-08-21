@@ -17,7 +17,7 @@ class JobSettings:
     single source of PixelUp's built-in parameter defaults.
 
     ``JobSettings()`` *is* the built-ins: the Parameters panel's "Reset parameters"
-    restores exactly this, and the config loader falls back to it field by field.
+    restores exactly this, and the config loader uses it for absent persisted fields.
     There is deliberately no second defaults layer to drift against — the field
     defaults below are the only place a built-in parameter value is written.
     """

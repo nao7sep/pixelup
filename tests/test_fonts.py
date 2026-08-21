@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
@@ -33,23 +34,33 @@ def test_parse_font_families_splits_strips_quotes_and_drops_empties() -> None:
     ]
 
 
-def test_resolve_ui_font_family_returns_first_installed(qapp: QApplication) -> None:
-    installed = QFontDatabase.families()
-    assert installed  # offscreen Qt still ships built-in families
-    present = installed[0]
+@pytest.fixture
+def installed_font(monkeypatch: pytest.MonkeyPatch) -> str:
+    # Windows' offscreen Qt plugin can expose no system font database at all. Patch
+    # the toolkit query so these tests exercise PixelUp's selection logic rather than
+    # depending on fonts supplied by the headless platform plugin.
+    present = "PixelUp Test Font"
+    monkeypatch.setattr(QFontDatabase, "families", staticmethod(lambda: [present]))
+    return present
+
+
+def test_resolve_ui_font_family_returns_first_installed(
+    qapp: QApplication, installed_font: str
+) -> None:
     # An absent family listed first must be skipped in favor of the installed one.
-    assert resolve_ui_font_family(f"No Such Font 99999, {present}") == present
+    assert resolve_ui_font_family(f"No Such Font 99999, {installed_font}") == installed_font
 
 
 def test_resolve_ui_font_family_returns_none_when_nothing_installed(qapp: QApplication) -> None:
     assert resolve_ui_font_family("No Such Font 99999, Also Missing 88888") is None
 
 
-def test_build_ui_font_uses_fixed_size_and_resolved_family(qapp: QApplication) -> None:
-    present = QFontDatabase.families()[0]
-    font = build_ui_font(f"No Such Font 99999, {present}")
+def test_build_ui_font_uses_fixed_size_and_resolved_family(
+    qapp: QApplication, installed_font: str
+) -> None:
+    font = build_ui_font(f"No Such Font 99999, {installed_font}")
     assert font.pointSize() == DEFAULT_UI_FONT_SIZE
-    assert font.family() == present
+    assert font.family() == installed_font
 
 
 def test_build_ui_font_keeps_size_when_family_unresolved(qapp: QApplication) -> None:
@@ -59,12 +70,13 @@ def test_build_ui_font_keeps_size_when_family_unresolved(qapp: QApplication) -> 
     assert font.pointSize() == DEFAULT_UI_FONT_SIZE
 
 
-def test_apply_ui_font_sets_application_font(qapp: QApplication) -> None:
+def test_apply_ui_font_sets_application_font(
+    qapp: QApplication, installed_font: str
+) -> None:
     saved = qapp.font()
     try:
-        present = QFontDatabase.families()[0]
-        apply_ui_font(qapp, present)
-        assert qapp.font().family() == present
+        apply_ui_font(qapp, installed_font)
+        assert qapp.font().family() == installed_font
         assert qapp.font().pointSize() == DEFAULT_UI_FONT_SIZE
     finally:
         qapp.setFont(saved)

@@ -106,7 +106,9 @@ class SettingsDialog(QDialog):
             _captioned(
                 self.auto_download,
                 "Off by default: a job whose model is missing fails and points here "
-                "instead of downloading anything on its own.",
+                "instead of downloading anything on its own. A selected upscaler is "
+                "about 3–67 MB; face enhancement can add about 543 MB of downloads "
+                "and disk use.",
             ),
             row,
             1,

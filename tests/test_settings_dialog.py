@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig
 from pixelup.jobs import JobSettings
@@ -93,6 +93,18 @@ def test_auto_download_toggle_marks_dirty(qapp: QApplication) -> None:
         dialog.auto_download.setChecked(False)
         assert dialog.config().auto_download is False
         assert dialog.is_dirty() is True
+    finally:
+        dialog.deleteLater()
+
+
+def test_auto_download_opt_in_discloses_material_download_size(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig())
+    try:
+        text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
+
+        assert "3–67 MB" in text
+        assert "543 MB" in text
+        assert "disk use" in text
     finally:
         dialog.deleteLater()
 

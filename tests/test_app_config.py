@@ -12,7 +12,6 @@ from pixelup.app_config import (
     save_app_config,
 )
 from pixelup.jobs import JobSettings, job_settings_log_payload
-from pixelup.parameters import DEFAULT_SCALE
 from pixelup.paths import OutputFormat
 
 
@@ -127,14 +126,17 @@ def test_load_app_config_normalizes_font_family(tmp_path: Path) -> None:
     assert load_app_config(path).font_family == "Arial"
 
 
-def test_load_app_config_falls_back_on_unusable_font_family(tmp_path: Path) -> None:
+@pytest.mark.parametrize("font_family", ["   ", 42])
+def test_load_app_config_quarantines_unusable_font_family(
+    tmp_path: Path, font_family: object
+) -> None:
     path = tmp_path / "config.json"
+    path.write_text(json.dumps({"font_family": font_family}), encoding="utf-8")
 
-    path.write_text(json.dumps({"font_family": "   "}), encoding="utf-8")
-    assert load_app_config(path).font_family == AppConfig().font_family
+    result = load_app_config_result(path)
 
-    path.write_text(json.dumps({"font_family": 42}), encoding="utf-8")
-    assert load_app_config(path).font_family == AppConfig().font_family
+    assert result.config == AppConfig()
+    assert result.quarantined_to is not None
 
 
 def test_corrupt_config_is_quarantined_then_reset(tmp_path: Path) -> None:
@@ -234,226 +236,127 @@ def _write(path: Path, **parameters: object) -> None:
     path.write_text(json.dumps({"parameters": parameters}), encoding="utf-8")
 
 
-def test_load_app_config_clamps_concurrent_jobs(tmp_path: Path) -> None:
+def _assert_invalid_config_is_quarantined(path: Path) -> None:
+    original = path.read_text(encoding="utf-8")
+
+    result = load_app_config_result(path)
+
+    assert result.config == AppConfig()
+    assert result.quarantined_to is not None
+    assert result.quarantined_to.read_text(encoding="utf-8") == original
+    assert load_app_config(path) == AppConfig()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"auto_download": "false"},
+        {"auto_download": 0},
+        {"max_concurrent_jobs": 0},
+        {"max_concurrent_jobs": 99},
+        {"max_concurrent_jobs": "4"},
+        {"max_concurrent_jobs": True},
+        {"parameters": "nope"},
+        {"parameters": {"face_enhance": "false"}},
+        {"parameters": {"strip_metadata": "false"}},
+        {"parameters": {"quality": 250}},
+        {"parameters": {"quality": "80"}},
+        {"parameters": {"denoise_strength": 9.5}},
+        {"parameters": {"denoise_strength": "0.25"}},
+        {"parameters": {"scale": 2.0}},
+        {"parameters": {"scale": "2"}},
+        {"parameters": {"scale": 3}},
+        {"parameters": {"tile": 9999}},
+        {"parameters": {"tile": "512"}},
+        {"parameters": {"device": "CPU"}},
+        {"parameters": {"device": "gpu"}},
+        {"parameters": {"output_format": "WEBP"}},
+        {"parameters": {"output_format": "gif"}},
+        {"parameters": {"alpha_mode": "nearest"}},
+        {"parameters": {"target_profile": "cmyk"}},
+    ],
+)
+def test_present_malformed_field_quarantines_the_whole_config(
+    tmp_path: Path, data: dict[str, object]
+) -> None:
     path = tmp_path / "config.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
 
-    path.write_text(json.dumps({"max_concurrent_jobs": 0}), encoding="utf-8")
-    assert load_app_config(path).max_concurrent_jobs == 1
-
-    path.write_text(json.dumps({"max_concurrent_jobs": 99}), encoding="utf-8")
-    assert load_app_config(path).max_concurrent_jobs == 8
-
-    path.write_text(json.dumps({"max_concurrent_jobs": "4"}), encoding="utf-8")
-    assert load_app_config(path).max_concurrent_jobs == 4
+    _assert_invalid_config_is_quarantined(path)
 
 
-def test_load_parameters_clamps_out_of_range_ranges(tmp_path: Path) -> None:
+def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    _write(path, quality=250, denoise_strength=9.5)
-
-    parameters = load_app_config(path).parameters
-
-    assert parameters.quality == 100
-    assert parameters.denoise_strength == 1.0
-
-
-def test_load_parameters_falls_back_rather_than_clamping_a_stray_tile(tmp_path: Path) -> None:
-    # Tile is enumerated now, not a range, and the difference is not academic: when it
-    # was clamped, a hand-edited -5 snapped to the NEAREST END — 0 — which is the
-    # whole-image pass, the one value documented as able to hard-crash the machine. A
-    # stray value is not "near" a choice, so it falls back to the built-in like scale.
-    path = tmp_path / "config.json"
-    _write(path, tile=-5)
-
-    assert load_app_config(path).parameters.tile == JobSettings().tile
-
-
-def test_load_parameters_clamps_lower_bounds(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, quality=-10, denoise_strength=-1.0)
-
-    parameters = load_app_config(path).parameters
-
-    assert parameters.quality == 0
-    assert parameters.denoise_strength == 0.0
-
-
-def test_load_parameters_falls_back_on_a_tile_that_is_not_a_choice(tmp_path: Path) -> None:
-    # 9999 used to clamp to 4096 — a size the panel can no longer show, and one that
-    # for a typical photo is a single tile, i.e. the whole-image pass under another
-    # name. It falls back to the built-in instead.
-    path = tmp_path / "config.json"
-    _write(path, tile=9999)
-
-    assert load_app_config(path).parameters.tile == JobSettings().tile
-
-
-def test_load_parameters_keeps_a_tile_that_is_a_real_choice(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, tile=0)
-
-    # "Whole image" is a genuine choice, not a stray value to fall back from.
-    assert load_app_config(path).parameters.tile == 0
-
-
-def test_load_parameters_coerces_numeric_strings(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, tile="512", quality="80", denoise_strength="0.25")
-
-    parameters = load_app_config(path).parameters
-
-    assert parameters.tile == 512
-    assert parameters.quality == 80
-    assert parameters.denoise_strength == 0.25
-
-
-def test_load_parameters_reads_a_persisted_scale(tmp_path: Path) -> None:
-    # The other selectable scale survives a load on its own, straight from the JSON the
-    # user's file actually holds.
-    path = tmp_path / "config.json"
-    _write(path, scale=2)
-
-    assert load_app_config(path).parameters.scale == 2
-
-
-def test_load_parameters_coerces_numeric_string_scale(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, scale="2")
-
-    assert load_app_config(path).parameters.scale == 2
-
-
-@pytest.mark.parametrize("bad", [3, 0, -4, 8, "4x", None, "", [], {}, 2.5, "2.5", True])
-def test_load_parameters_falls_back_to_the_built_in_scale(tmp_path: Path, bad: object) -> None:
-    # Scale is enumerated, not a range: an unselectable value is not clamped toward a
-    # neighbour the user never chose, it falls back to the built-in. 2.5 and "2.5" are
-    # the pins that int() truncation cannot quietly manufacture a selectable 2.
-    path = tmp_path / "config.json"
-    _write(path, scale=bad)
-
-    assert load_app_config(path).parameters.scale == DEFAULT_SCALE
-
-
-def test_load_parameters_reads_an_integral_float_scale(tmp_path: Path) -> None:
-    # 2.0 is unambiguously the 2x choice — JSON has one number type, so a hand-edited
-    # or re-serialized file can carry it — and it comes back as the canonical int.
-    path = tmp_path / "config.json"
-    _write(path, scale=2.0)
-
-    scale = load_app_config(path).parameters.scale
-    assert scale == 2
-    assert isinstance(scale, int)
-
-
-def test_load_parameters_keeps_the_panel_when_only_scale_is_bad(tmp_path: Path) -> None:
-    # The per-field lenient-load contract, checked on the new field: one unreadable
-    # scale must cost the user the scale, not the other nine parameters.
-    path = tmp_path / "config.json"
-    _write(path, scale=99, quality=42, tile=512, device="cpu")
-
-    parameters = load_app_config(path).parameters
-
-    assert parameters.scale == DEFAULT_SCALE
-    assert parameters.quality == 42
-    assert parameters.tile == 512
-    assert parameters.device == "cpu"
-
-
-def test_load_parameters_coerces_unknown_device_to_default(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, device="gpu")
-
-    assert load_app_config(path).parameters.device == JobSettings().device
-
-
-def test_load_parameters_lowercases_device(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, device="CPU")
-
-    assert load_app_config(path).parameters.device == "cpu"
-
-
-def test_load_parameters_coerces_unknown_output_format_to_default(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, output_format="gif")
-
-    assert load_app_config(path).parameters.output_format == JobSettings().output_format
-
-
-def test_load_parameters_lowercases_output_format(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, output_format="WEBP")
-
-    assert load_app_config(path).parameters.output_format == OutputFormat.WEBP
-
-
-def test_load_parameters_coerces_unknown_alpha_mode_to_default(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, alpha_mode="nearest")
-
-    assert load_app_config(path).parameters.alpha_mode == JobSettings().alpha_mode
-
-
-def test_load_parameters_accepts_known_alpha_mode(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, alpha_mode="bicubic")
-
-    assert load_app_config(path).parameters.alpha_mode == "bicubic"
-
-
-def test_load_parameters_coerces_unknown_target_profile_to_default(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, target_profile="cmyk")
-
-    assert load_app_config(path).parameters.target_profile is None
-
-
-def test_load_parameters_accepts_null_and_known_target_profile(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-
-    # null is itself a valid profile ("Default"), not a bad value to fall back from.
-    _write(path, target_profile=None)
-    assert load_app_config(path).parameters.target_profile is None
-
-    _write(path, target_profile="adobergb")
-    assert load_app_config(path).parameters.target_profile == "adobergb"
-
-
-def test_load_parameters_falls_back_on_non_numeric_value(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    _write(path, quality="high", tile=None, denoise_strength="loud")
-
-    parameters = load_app_config(path).parameters
-
-    assert parameters.quality == JobSettings().quality
-    assert parameters.tile == JobSettings().tile
-    assert parameters.denoise_strength == JobSettings().denoise_strength
-
-
-def test_load_parameters_keeps_good_fields_beside_a_bad_one(tmp_path: Path) -> None:
-    # Per-field fallback, not all-or-nothing: one unreadable field must not cost the
-    # user the rest of the panel.
-    path = tmp_path / "config.json"
-    _write(path, tile="nonsense", quality=60, device="cpu")
-
-    parameters = load_app_config(path).parameters
-
-    assert parameters.tile == JobSettings().tile
-    assert parameters.quality == 60
-    assert parameters.device == "cpu"
-
-
-def test_load_parameters_falls_back_when_not_an_object(tmp_path: Path) -> None:
-    # A parameters key of the wrong shape is a field that cannot be read, not
-    # whole-file corruption: the panel falls back, the load does not quarantine.
-    path = tmp_path / "config.json"
-    path.write_text(json.dumps({"parameters": "nope", "max_concurrent_jobs": 3}), encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            {
+                "max_concurrent_jobs": 4,
+                "future_setting": {"future": True},
+                "parameters": {"scale": 2, "future_parameter": "ignored"},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = load_app_config_result(path)
 
     assert result.quarantined_to is None
-    assert result.config.parameters == JobSettings()
-    assert result.config.max_concurrent_jobs == 3
+    assert result.config.max_concurrent_jobs == 4
+    assert result.config.auto_download is False
+    assert result.config.parameters.scale == 2
+    assert result.config.parameters.quality == JobSettings().quality
+
+
+def test_exact_boolean_values_are_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "auto_download": False,
+                "parameters": {"face_enhance": True, "strip_metadata": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_app_config(path)
+
+    assert config.auto_download is False
+    assert config.parameters.face_enhance is True
+    assert config.parameters.strip_metadata is False
+
+
+def test_valid_parameter_boundaries_and_choices_are_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    _write(
+        path,
+        quality=0,
+        denoise_strength=1.0,
+        scale=2,
+        tile=0,
+        device="cpu",
+        output_format="webp",
+        alpha_mode="bicubic",
+        target_profile="adobergb",
+    )
+
+    parameters = load_app_config(path).parameters
+
+    assert parameters.quality == 0
+    assert parameters.denoise_strength == 1.0
+    assert parameters.scale == 2
+    assert parameters.tile == 0
+    assert parameters.device == "cpu"
+    assert parameters.output_format == OutputFormat.WEBP
+    assert parameters.alpha_mode == "bicubic"
+    assert parameters.target_profile == "adobergb"
+
+
+def test_null_target_profile_is_a_valid_choice(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    _write(path, target_profile=None)
+
+    assert load_app_config(path).parameters.target_profile is None
 
 
 def test_old_flat_keys_are_inert(tmp_path: Path) -> None:

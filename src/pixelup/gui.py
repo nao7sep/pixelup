@@ -19,6 +19,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QPixmap,
     QResizeEvent,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -90,6 +91,7 @@ from pixelup.quit_dialog import QuitConfirmDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, log
 from pixelup.settings_dialog import SettingsDialog
+from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.ui_common import (
     apply_palette_fixes,
     apply_scrollbar_style,
@@ -221,6 +223,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("PixelUp")
         self.setAcceptDrops(True)
         self._build_ui()
+        self._bind_shortcuts()
         # Window minimum = the layout's content-based size hint: the central widget
         # sums the panes' needs, and each table's minimum is its measured column
         # widths plus a filename floor (see _fit_columns). Open a little roomier than
@@ -348,12 +351,21 @@ class MainWindow(QMainWindow):
         )
         about_button = QPushButton("About")
         about_button.clicked.connect(self._about_dialog)
+        shortcuts_button = QPushButton("Shortcuts")
+        shortcuts_button.clicked.connect(self._shortcuts_dialog)
 
         layout.addStretch()
         layout.addWidget(logs_button)
         layout.addWidget(settings_button)
+        layout.addWidget(shortcuts_button)
         layout.addWidget(about_button)
         return row
+
+    def _bind_shortcuts(self) -> None:
+        self.shortcuts_shortcut = QShortcut(QKeySequence("Ctrl+/"), self)
+        self.shortcuts_shortcut.activated.connect(self._shortcuts_dialog)
+        self.shortcuts_question_shortcut = QShortcut(QKeySequence("Ctrl+?"), self)
+        self.shortcuts_question_shortcut.activated.connect(self._shortcuts_dialog)
 
     def _build_image_panel(self) -> QWidget:
         panel = QWidget()
@@ -640,6 +652,10 @@ class MainWindow(QMainWindow):
     def _parameters_help_dialog(self) -> None:
         log.info("parameters_help.dialog_opened")
         ParametersHelpDialog(self).exec()
+
+    def _shortcuts_dialog(self) -> None:
+        log.info("shortcuts.dialog_opened")
+        ShortcutsDialog(self).exec()
 
     def _about_dialog(self) -> None:
         log.info("about.dialog_opened")

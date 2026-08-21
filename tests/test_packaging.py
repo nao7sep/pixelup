@@ -19,7 +19,7 @@ EXPECTED_RUNTIME_PINS = {
 
 
 def test_runtime_dependencies_pin_inference_stack() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     dependencies = pyproject["project"]["dependencies"]
 
     assert dependencies == [
@@ -29,16 +29,22 @@ def test_runtime_dependencies_pin_inference_stack() -> None:
 
 
 def test_inference_extra_is_not_declared() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     extras = pyproject["project"].get("optional-dependencies", {})
 
     assert "inference" not in extras
 
 
 def test_script_starts_gui() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["gui-scripts"]["pixelup"] == "pixelup.gui:main"
+
+
+def test_source_python_range_matches_the_supported_dependency_stack() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["requires-python"] == ">=3.12,<3.13"
 
 
 def test_spec_derives_bundle_version_from_pyproject_ssot() -> None:
@@ -57,5 +63,7 @@ def test_spec_derives_bundle_version_from_pyproject_ssot() -> None:
     assert '"CFBundleVersion": _VERSION,' in spec
 
     # And there is no hardcoded copy of the current version anywhere in the spec.
-    version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+    version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
     assert version not in spec
