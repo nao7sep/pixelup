@@ -247,6 +247,38 @@ def _assert_invalid_config_is_quarantined(path: Path) -> None:
     assert load_app_config(path) == AppConfig()
 
 
+def test_invalid_utf8_config_is_quarantined_then_reset(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    original = b'{"font_family": "\xff"}'
+    path.write_bytes(original)
+
+    result = load_app_config_result(path)
+
+    assert result.config == AppConfig()
+    assert result.quarantined_to is not None
+    assert result.quarantined_to.read_bytes() == original
+    assert load_app_config(path) == AppConfig()
+
+
+def test_config_read_oserror_propagates_without_touching_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    original = b'{"auto_download": false}'
+    path.write_bytes(original)
+
+    def fail_read(_path: Path, *args: object, **kwargs: object) -> str:
+        raise OSError("read failed")
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+
+    with pytest.raises(OSError, match="read failed"):
+        load_app_config_result(path)
+
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob("*.invalid"))
+
+
 @pytest.mark.parametrize(
     "data",
     [
@@ -263,6 +295,7 @@ def _assert_invalid_config_is_quarantined(path: Path) -> None:
         {"parameters": {"quality": "80"}},
         {"parameters": {"denoise_strength": 9.5}},
         {"parameters": {"denoise_strength": "0.25"}},
+        {"parameters": {"denoise_strength": 10**1000}},
         {"parameters": {"scale": 2.0}},
         {"parameters": {"scale": "2"}},
         {"parameters": {"scale": 3}},

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -114,8 +113,8 @@ def load_app_config_result(path: Path | None = None) -> ConfigLoadResult:
     # that fails with an OSError (a permission or I/O problem) is a transient access
     # failure, not corruption, and must not cost the user their real settings, so it
     # is left to propagate rather than quarantining a file we simply could not read.
-    text = path.read_text(encoding="utf-8")
     try:
+        text = path.read_text(encoding="utf-8")
         data = json.loads(text)
         config = _decode_app_config(data)
     except ValueError:
@@ -258,7 +257,6 @@ def _optional_float_range(
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
-        or not math.isfinite(value)
         or not low <= value <= high
     ):
         raise ValueError(f"{key} is outside its valid numeric range")

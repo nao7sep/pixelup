@@ -42,7 +42,7 @@ class ShortcutsDialog(QDialog):
         shortcuts.addRow("Open Settings", QLabel(f"{modifier}+Comma"))
         shortcuts.addRow(
             "Show keyboard shortcuts",
-            QLabel(f"{modifier}+Slash / {modifier}+Question"),
+            QLabel(f"{modifier}+Slash/Question"),
         )
         layout.addLayout(shortcuts)
 
