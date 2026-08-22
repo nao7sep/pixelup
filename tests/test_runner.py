@@ -147,6 +147,28 @@ def test_finished_emits_outcome_to_listeners(qapp: QApplication, tmp_path: Path)
     assert finished == [(1, False, "Cancelled", {"cancelled": True}, ["w"])]
 
 
+def test_shutdown_cancels_pending_jobs_and_never_reschedules_them(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    jobs = [_make_job(i, tmp_path) for i in range(1, 4)]
+    runner = _RecordingRunner(jobs)
+    finished: list[tuple[object, ...]] = []
+    runner.finished.connect(lambda *args: finished.append(args))
+    runner.schedule(1)
+    assert runner.started_ids == [1]
+
+    runner.begin_shutdown()
+    runner._job_finished(1, False, "Cancelled", {"cancelled": True}, [])
+    qapp.processEvents()
+    runner.schedule(3)
+
+    assert runner.started_ids == [1]
+    assert [job.status for job in jobs[1:]] == ["cancelled", "cancelled"]
+    assert [job.message for job in jobs[1:]] == ["Cancelled", "Cancelled"]
+    assert [record[0] for record in finished] == [2, 3, 1]
+
+
 def test_failure_message_carries_the_hint_when_there_is_one() -> None:
     # The queue row is the only surface a failed job gets, so the remedy — e.g.
     # the Settings toggle that fixes a missing model — must ride along with the
@@ -284,10 +306,15 @@ def test_cleanup_for_quit_retains_ownership_when_a_thread_is_still_running(
     assert worker.signals.finished.disconnected == []
 
 
-def test_cleanup_for_quit_is_a_noop_without_threads(_session_log: None) -> None:
-    runner = JobRunner([])
+def test_cleanup_for_quit_is_a_noop_without_threads(
+    _session_log: None,
+    tmp_path: Path,
+) -> None:
+    jobs = [_make_job(1, tmp_path)]
+    runner = JobRunner(jobs)
     assert runner.cleanup_for_quit() is True
     assert runner._threads == {}
+    assert jobs[0].status == "cancelled"
 
 
 def test_thread_finished_releases_registry_and_emits_idle(tmp_path: Path) -> None:

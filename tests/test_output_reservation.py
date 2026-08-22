@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 from pathlib import Path
 
 import pytest
 
 from pixelup.errors import PixelupError
-from pixelup.output_reservation import _output_lock_key, reserve_output_bundle
+from pixelup.output_reservation import (
+    PublishedFile,
+    _output_lock_key,
+    remove_published_file,
+    reserve_output_bundle,
+)
 
 
 def _hold_reservation(
@@ -102,6 +108,35 @@ def test_case_variant_broken_symlink_occupies_the_normalized_bundle(tmp_path: Pa
             raise AssertionError("a broken symlink entry was missed")
 
     assert occupied.is_symlink()
+
+
+@pytest.mark.parametrize("name", ["result.png", "result.json"])
+def test_claimed_cleanup_restores_an_exact_boundary_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    path = tmp_path / name
+    path.write_bytes(b"pixelup")
+    identity = os.lstat(path)
+    claim = PublishedFile(path, identity.st_dev, identity.st_ino)
+    winner = tmp_path / "winner.tmp"
+    winner.write_bytes(b"external winner")
+    real_rename = os.rename
+    replaced = False
+
+    def replace_at_move(source: Path, hold: Path) -> None:
+        nonlocal replaced
+        if not replaced and Path(source) == path:
+            replaced = True
+            os.replace(winner, path)
+        real_rename(source, hold)
+
+    monkeypatch.setattr("pixelup.output_reservation.os.rename", replace_at_move)
+
+    assert remove_published_file(claim) is False
+    assert path.read_bytes() == b"external winner"
+    assert list(tmp_path.glob("*.pixelup-hold")) == []
 
 
 def test_reservation_serializes_a_separate_process_through_a_symlink_alias(

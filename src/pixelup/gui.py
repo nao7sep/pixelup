@@ -309,6 +309,7 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def _finish_or_defer_close(self, event: QCloseEvent, *, surface_wait: bool) -> None:
+        self.runner.begin_shutdown()
         if self.runner.cleanup_for_quit():
             event.accept()
             return

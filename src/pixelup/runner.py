@@ -167,8 +167,11 @@ class JobRunner(QObject):
         self._threads: dict[int, tuple[QThread, JobWorker]] = {}
         self._active_jobs = 0
         self._max_concurrent_jobs = 1
+        self._shutting_down = False
 
     def schedule(self, max_concurrent_jobs: int) -> None:
+        if self._shutting_down:
+            return
         self._max_concurrent_jobs = max(1, max_concurrent_jobs)
         while self._active_jobs < self._max_concurrent_jobs:
             job = self._next_pending_job()
@@ -182,15 +185,30 @@ class JobRunner(QObject):
             _, worker = entry
             worker.request_cancel()
 
-    def cleanup_for_quit(self) -> bool:
-        if not self._threads:
-            return True
-        entries = list(self._threads.values())
-        for _thread, worker in entries:
+    def begin_shutdown(self) -> None:
+        """Irreversibly stop queue scheduling and cancel every unstarted job."""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        cancelled: list[int] = []
+        for job in self._jobs:
+            if job.status == "pending":
+                job.status = "cancelled"
+                job.message = "Cancelled"
+                cancelled.append(job.id)
+        for _thread, worker in self._threads.values():
             try:
                 worker.request_cancel()
             except Exception:
                 log.debug("quit.cancel_request_failed", job_id=worker.job.id)
+        for job_id in cancelled:
+            self.finished.emit(job_id, False, "Cancelled", {"cancelled": True}, [])
+
+    def cleanup_for_quit(self) -> bool:
+        self.begin_shutdown()
+        if not self._threads:
+            return True
+        entries = list(self._threads.values())
         deadline = time.monotonic() + 2.0
         stopped = True
         for thread, worker in entries:
@@ -263,7 +281,8 @@ class JobRunner(QObject):
     ) -> None:
         self._active_jobs = max(0, self._active_jobs - 1)
         self.finished.emit(job_id, ok, message, result, warnings)
-        QTimer.singleShot(0, lambda: self.schedule(self._max_concurrent_jobs))
+        if not self._shutting_down:
+            QTimer.singleShot(0, lambda: self.schedule(self._max_concurrent_jobs))
 
 
 def _download_text(model: str, done: int, total: int | None) -> str:

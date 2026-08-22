@@ -4,6 +4,7 @@ import hashlib
 import os
 import time
 import unicodedata
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -111,13 +112,45 @@ def published_file_is_current(published: PublishedFile) -> bool:
 
 
 def remove_published_file(published: PublishedFile) -> bool:
-    if not published_file_is_current(published):
-        return False
+    hold = published.path.with_name(f".{uuid.uuid4().hex}.pixelup-hold")
     try:
-        published.path.unlink()
+        # Rename first: this preserves whichever inode occupies the public pathname
+        # at the destructive boundary. Ownership is checked only after the entry is
+        # safely under our private sibling, so a replacement can never be unlinked.
+        os.rename(published.path, hold)
+    except OSError:
+        return False
+
+    try:
+        displaced = os.lstat(hold)
+    except OSError:
+        return False
+    if (displaced.st_dev, displaced.st_ino) != (published.device, published.inode):
+        _restore_displaced_file(hold, published.path)
+        return False
+
+    try:
+        hold.unlink()
     except OSError:
         return False
     return True
+
+
+def _restore_displaced_file(hold: Path, destination: Path) -> None:
+    """Restore a non-owned entry without replacing a later destination winner.
+
+    A hard link preserves the exact inode and is an atomic no-clobber operation.
+    On a filesystem without hard links, leaving the entry at the private hold is
+    safer than copying or replacing bytes PixelUp does not own.
+    """
+    try:
+        os.link(hold, destination, follow_symlinks=False)
+    except OSError:
+        return
+    try:
+        hold.unlink()
+    except OSError:
+        pass
 
 
 def published_file(path: Path, descriptor: int) -> PublishedFile:

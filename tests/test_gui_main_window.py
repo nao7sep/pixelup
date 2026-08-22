@@ -471,6 +471,8 @@ def test_close_waits_for_worker_ownership_to_end(
     window = make_window()
     cleanup_results = iter((False, True))
     warnings: list[object] = []
+    shutdown_calls: list[bool] = []
+    monkeypatch.setattr(window.runner, "begin_shutdown", lambda: shutdown_calls.append(True))
     monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: next(cleanup_results, True))
     monkeypatch.setattr("pixelup.gui.warn_jobs_stopping", warnings.append)
 
@@ -479,6 +481,7 @@ def test_close_waits_for_worker_ownership_to_end(
 
     assert first.isAccepted() is False
     assert window._quit_when_workers_idle is True
+    assert shutdown_calls == [True]
     assert warnings == [window]
 
     second = QCloseEvent()
