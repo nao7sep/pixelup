@@ -6,6 +6,7 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
 from pixelup.config import resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.imaging import PublishedImage, remove_published_image
 from pixelup.jobs import Job, job_log_payload, options_for_job
 from pixelup.output_reservation import reserve_output_bundle
 from pixelup.session_log import log
@@ -44,6 +45,12 @@ class JobWorker(QObject):
     @Slot()
     def run(self) -> None:
         warnings: list[str] = []
+        published_image: PublishedImage | None = None
+
+        def capture_published_image(published: PublishedImage) -> None:
+            nonlocal published_image
+            published_image = published
+
         log.info("job.started", job_id=self.job.id, details=job_log_payload(self.job))
         try:
             options = options_for_job(self.job)
@@ -74,14 +81,20 @@ class JobWorker(QObject):
                     ),
                     on_warning=warnings.append,
                     should_cancel=self._is_cancelled,
+                    on_output_published=capture_published_image,
                 )
-                sidecar = write_sidecar(
-                    input_path=self.job.input_path,
-                    output_path=self.job.output_path,
-                    options=options,
-                    result=result,
-                    warnings=warnings,
-                )
+                try:
+                    sidecar = write_sidecar(
+                        input_path=self.job.input_path,
+                        output_path=self.job.output_path,
+                        options=options,
+                        result=result,
+                        warnings=warnings,
+                    )
+                except Exception:
+                    if published_image is not None:
+                        remove_published_image(published_image)
+                    raise
             result["sidecar"] = str(sidecar)
             log.info(
                 "job.finished",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.imaging import PublishedImage
 from pixelup.jobs import Job, JobSettings
 from pixelup.runner import (
     JobRunner,
@@ -413,6 +415,70 @@ def test_worker_rejects_occupied_output_before_inference(
     assert called is False
     assert finished[0][1] is False
     assert "already exists" in finished[0][2]
+
+
+def test_worker_removes_its_image_when_sidecar_publication_loses(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(9, tmp_path)
+
+    def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
+        job.output_path.write_bytes(b"pixelup")
+        written = os.lstat(job.output_path)
+        kwargs["on_output_published"](
+            PublishedImage(job.output_path, written.st_dev, written.st_ino)
+        )
+        return {"ok": True}
+
+    def _lose_sidecar(**kwargs: object) -> Path:
+        job.output_path.with_suffix(".json").write_bytes(b"external-sidecar")
+        raise PixelupError(ErrorCode.OUTPUT_EXISTS, "Sidecar exists.")
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
+    monkeypatch.setattr("pixelup.runner.write_sidecar", _lose_sidecar)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert not job.output_path.exists()
+    assert job.output_path.with_suffix(".json").read_bytes() == b"external-sidecar"
+    assert finished[0][1] is False
+
+
+def test_sidecar_loss_cleanup_preserves_a_replacement_image_winner(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(10, tmp_path)
+
+    def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
+        job.output_path.write_bytes(b"pixelup")
+        written = os.lstat(job.output_path)
+        kwargs["on_output_published"](
+            PublishedImage(job.output_path, written.st_dev, written.st_ino)
+        )
+        return {"ok": True}
+
+    def _replace_then_lose(**kwargs: object) -> Path:
+        job.output_path.unlink()
+        job.output_path.write_bytes(b"external-winner")
+        raise PixelupError(ErrorCode.OUTPUT_EXISTS, "Sidecar exists.")
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
+    monkeypatch.setattr("pixelup.runner.write_sidecar", _replace_then_lose)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert job.output_path.read_bytes() == b"external-winner"
+    assert finished[0][1] is False
 
 
 def test_worker_run_cancelled_emits_cancelled_result(

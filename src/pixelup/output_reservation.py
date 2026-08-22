@@ -71,19 +71,41 @@ def reserve_output_bundle(
 
 
 def assert_output_bundle_available(output_path: Path) -> None:
+    occupied = next((path for path in _bundle_paths(output_path) if os.path.lexists(path)), None)
+    if occupied is not None:
+        raise _bundle_exists(output_path, occupied)
+
+
+def assert_output_companions_available(output_path: Path) -> None:
+    occupied = next(
+        (
+            path
+            for path in _bundle_paths(output_path)
+            if path != output_path and os.path.lexists(path)
+        ),
+        None,
+    )
+    if occupied is not None:
+        raise _bundle_exists(output_path, occupied)
+
+
+def _bundle_paths(output_path: Path) -> list[Path]:
     sidecar_path = output_path.with_suffix(".json")
-    bundle_paths = [
+    return [
         *(output_path.with_suffix(suffix) for suffix in _OUTPUT_SUFFIXES),
         sidecar_path,
     ]
-    occupied = next((path for path in bundle_paths if path.exists()), None)
-    if occupied is not None:
-        raise PixelupError(
-            ErrorCode.OUTPUT_EXISTS,
-            "The output file or its settings sidecar already exists.",
-            hint="Retry the job to choose a new unused filename.",
-            details={"output": str(output_path), "occupied": str(occupied)},
-        )
+
+
+def _bundle_exists(output_path: Path, occupied: Path) -> PixelupError:
+    # lexists, unlike Path.exists, treats a broken symlink as an occupied path.
+    # Publication must never replace any pre-existing directory entry.
+    return PixelupError(
+        ErrorCode.OUTPUT_EXISTS,
+        "The output file or its settings sidecar already exists.",
+        hint="Retry the job to choose a new unused filename.",
+        details={"output": str(output_path), "occupied": str(occupied)},
+    )
 
 
 def _output_lock_key(output_path: Path) -> str:

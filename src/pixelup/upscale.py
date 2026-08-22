@@ -11,6 +11,7 @@ from pixelup.config import RuntimeDirs
 from pixelup.devices import DEVICE_VALUES, resolve_device
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import (
+    PublishedCallback,
     image_from_bgr_array,
     load_source_metadata,
     read_image_size,
@@ -165,6 +166,7 @@ def run_upscale(
     on_warning: WarningCallback | None = None,
     on_tile: TileCallback | None = None,
     should_cancel: CancelCheck | None = None,
+    on_output_published: PublishedCallback | None = None,
 ) -> dict[str, object]:
     started = time.perf_counter()
     plan = build_plan(
@@ -248,6 +250,7 @@ def run_upscale(
         source_metadata=load_source_metadata(plan.input_path),
         strip_metadata=options.strip_metadata,
         target_profile=options.target_profile,
+        on_published=on_output_published,
     )
     return {
         "ok": True,
@@ -384,4 +387,3 @@ def validate_output_path(path: Path, *, overwrite: bool) -> None:
             "Output parent directory is not writable.",
             details={"output": str(path), "parent": str(parent)},
         )
-

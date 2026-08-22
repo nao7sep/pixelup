@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import os
-from collections.abc import Iterator
+import shutil
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
@@ -13,6 +15,10 @@ from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageEr
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
 from pixelup.nanoid import nanoid
+from pixelup.output_reservation import (
+    assert_output_bundle_available,
+    assert_output_companions_available,
+)
 from pixelup.paths import OutputFormat
 from pixelup.session_log import log
 
@@ -22,6 +28,16 @@ class SourceMetadata:
     icc_profile: bytes | None = None
     exif: bytes | None = None
     xmp: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedImage:
+    path: Path
+    device: int
+    inode: int
+
+
+PublishedCallback = Callable[[PublishedImage], None]
 
 
 def register_image_plugins() -> None:
@@ -109,6 +125,7 @@ def save_output_image(
     source_metadata: SourceMetadata | None,
     strip_metadata: bool,
     target_profile: str | None,
+    on_published: PublishedCallback | None = None,
 ) -> tuple[int, int]:
     encoded = _prepare_image_for_save(
         image,
@@ -129,18 +146,25 @@ def save_output_image(
     try:
         with temp_file_guard(temp_path):
             encoded.save(temp_path, **save_kwargs)
+            _fsync_file(temp_path)
             # not recorded: this is the harvest-then-discard OUTPUT image, a binary
             # written for the user at a user-chosen location — not managed text the
             # app owns and reloads as state. Binaries are out of scope for the text
             # backup, and output is never recorded (data-backup-conventions).
-            if output_path.exists():
-                raise PixelupError(
-                    ErrorCode.OUTPUT_EXISTS,
-                    "Output file already exists.",
-                    hint="Retry the job to choose a new unused filename.",
-                    details={"output": str(output_path)},
-                )
-            os.replace(temp_path, output_path)
+            # Revalidate every member of the shared-stem bundle after encoding,
+            # immediately before publication. The final path itself is still
+            # claimed atomically below, so an exact-boundary winner is preserved.
+            assert_output_bundle_available(output_path)
+            published = _publish_image_no_clobber(temp_path, output_path)
+            try:
+                if not _published_image_is_current(published):
+                    raise _output_exists(output_path)
+                assert_output_companions_available(output_path)
+            except PixelupError:
+                remove_published_image(published)
+                raise
+            if on_published:
+                on_published(published)
     except PixelupError:
         temp_path.unlink(missing_ok=True)
         raise
@@ -152,6 +176,83 @@ def save_output_image(
             details={"output": str(output_path), "reason": str(exc)},
         ) from exc
     return encoded.size
+
+
+def remove_published_image(published: PublishedImage) -> bool:
+    """Remove PixelUp's image only while its exact filesystem identity still owns the path."""
+    if not _published_image_is_current(published):
+        return False
+    try:
+        published.path.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def _published_image_is_current(published: PublishedImage) -> bool:
+    try:
+        current = os.lstat(published.path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    if (current.st_dev, current.st_ino) != (published.device, published.inode):
+        return False
+    return True
+
+
+def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedImage:
+    source = os.stat(temp_path)
+    try:
+        # A hard-link publish is atomic, no-clobber, and keeps the already-fsynced
+        # staged bytes invisible at the final name until the single link operation.
+        os.link(temp_path, output_path, follow_symlinks=False)
+        return PublishedImage(output_path, source.st_dev, source.st_ino)
+    except FileExistsError as exc:
+        raise _output_exists(output_path) from exc
+    except OSError as exc:
+        unsupported = {
+            errno.EACCES,
+            errno.ENOSYS,
+            errno.ENOTSUP,
+            errno.EOPNOTSUPP,
+            errno.EPERM,
+        }
+        if exc.errno not in unsupported:
+            raise
+
+    # Filesystems without hard links (notably removable exFAT volumes) still get
+    # an atomic O_EXCL path claim. Bytes are copied through the claimed descriptor,
+    # so deleting/replacing the pathname cannot make PixelUp overwrite the winner.
+    try:
+        descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    except FileExistsError as exc:
+        raise _output_exists(output_path) from exc
+    published_stat = os.fstat(descriptor)
+    published = PublishedImage(output_path, published_stat.st_dev, published_stat.st_ino)
+    try:
+        with temp_path.open("rb") as source_file, os.fdopen(descriptor, "wb") as output_file:
+            shutil.copyfileobj(source_file, output_file)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+    except Exception:
+        remove_published_image(published)
+        raise
+    return published
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as file:
+        os.fsync(file.fileno())
+
+
+def _output_exists(output_path: Path) -> PixelupError:
+    return PixelupError(
+        ErrorCode.OUTPUT_EXISTS,
+        "Output file already exists.",
+        hint="Retry the job to choose a new unused filename.",
+        details={"output": str(output_path)},
+    )
 
 
 def _prepare_image_for_save(
@@ -252,11 +353,10 @@ def _save_kwargs(
 
 
 def _temp_output_path(output_path: Path) -> Path:
-    # Staged beside output_path, not in a central temp directory: os.replace
-    # is only atomic within one filesystem volume, and output_path may be on
-    # a different volume than ~/.pixelup/temp/ (a USB stick, a second disk),
-    # where a central-temp rename would raise EXDEV outright. The name still
-    # follows the house <stem>-<discriminator>.tmp shape, derived from the
+    # Staged beside output_path, not in a central temp directory: the atomic
+    # hard-link publication requires one filesystem volume, and output_path may
+    # be on a USB stick or second disk rather than ~/.pixelup/temp/. The name
+    # still follows the house <stem>-<discriminator>.tmp shape, derived from the
     # target's own stem.
     return output_path.parent / f"{output_path.stem}-{nanoid()}.tmp"
 
@@ -265,9 +365,8 @@ def _temp_output_path(output_path: Path) -> Path:
 def temp_file_guard(path: Path) -> Iterator[None]:
     try:
         yield
-    except Exception:
+    finally:
         path.unlink(missing_ok=True)
-        raise
 
 
 def _source_profile_bytes(source_metadata: SourceMetadata | None) -> bytes:

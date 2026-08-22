@@ -1,3 +1,5 @@
+import errno
+import os
 import re
 from io import BytesIO
 from pathlib import Path
@@ -39,7 +41,7 @@ def test_save_output_image_temp_file_uses_stem_nanoid_shape_beside_output(
 ) -> None:
     # The staged temp name is <stem>-<nanoid>.tmp, derived from the target
     # output's stem, and it is staged in the output's own directory so the
-    # final os.replace is always a same-volume rename.
+    # final no-clobber publication always stays on one volume.
     output_dir = tmp_path / "output-volume"
     output_dir.mkdir()
     output = output_dir / "photo-x4plus-4x.png"
@@ -223,3 +225,146 @@ def test_save_output_image_does_not_replace_a_late_competing_output(
     assert excinfo.value.code == "output_exists"
     assert output.read_bytes() == b"competitor"
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_output_image_preserves_an_exact_boundary_winner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "out.png"
+    real_link = os.link
+
+    def compete_then_link(source: Path, target: Path, **kwargs: object) -> None:
+        output.write_bytes(b"exact-boundary-winner")
+        real_link(source, target, **kwargs)
+
+    monkeypatch.setattr("pixelup.imaging.os.link", compete_then_link)
+
+    with pytest.raises(PixelupError) as excinfo:
+        save_output_image(
+            Image.new("RGB", (1, 1), "white"),
+            output_path=output,
+            output_format=OutputFormat.PNG,
+            quality=95,
+            background="white",
+            source_metadata=SourceMetadata(),
+            strip_metadata=True,
+            target_profile=None,
+        )
+
+    assert excinfo.value.code == "output_exists"
+    assert output.read_bytes() == b"exact-boundary-winner"
+
+
+@pytest.mark.parametrize("late_name", ["out.jpg", "out.json"])
+def test_save_output_image_removes_only_its_claim_when_a_companion_wins_at_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    late_name: str,
+) -> None:
+    output = tmp_path / "out.png"
+    late = tmp_path / late_name
+    real_link = os.link
+
+    def companion_then_link(source: Path, target: Path, **kwargs: object) -> None:
+        late.write_bytes(b"publication-winner")
+        real_link(source, target, **kwargs)
+
+    monkeypatch.setattr("pixelup.imaging.os.link", companion_then_link)
+
+    with pytest.raises(PixelupError) as excinfo:
+        save_output_image(
+            Image.new("RGB", (1, 1), "white"),
+            output_path=output,
+            output_format=OutputFormat.PNG,
+            quality=95,
+            background="white",
+            source_metadata=SourceMetadata(),
+            strip_metadata=True,
+            target_profile=None,
+        )
+
+    assert excinfo.value.code == "output_exists"
+    assert not output.exists()
+    assert late.read_bytes() == b"publication-winner"
+
+
+@pytest.mark.parametrize("late_name", ["out.jpg", "out.json"])
+def test_save_output_image_revalidates_the_whole_bundle_after_encoding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    late_name: str,
+) -> None:
+    output = tmp_path / "out.png"
+    late = tmp_path / late_name
+    original_save = Image.Image.save
+
+    def save_then_compete(self: Image.Image, fp: object, **kwargs: object) -> None:
+        original_save(self, fp, **kwargs)
+        late.write_bytes(b"late-winner")
+
+    monkeypatch.setattr(Image.Image, "save", save_then_compete)
+
+    with pytest.raises(PixelupError) as excinfo:
+        save_output_image(
+            Image.new("RGB", (1, 1), "white"),
+            output_path=output,
+            output_format=OutputFormat.PNG,
+            quality=95,
+            background="white",
+            source_metadata=SourceMetadata(),
+            strip_metadata=True,
+            target_profile=None,
+        )
+
+    assert excinfo.value.code == "output_exists"
+    assert late.read_bytes() == b"late-winner"
+    assert not output.exists()
+
+
+def test_save_output_image_treats_a_broken_symlink_as_occupied(tmp_path: Path) -> None:
+    output = tmp_path / "out.png"
+    output.symlink_to(tmp_path / "missing.png")
+
+    with pytest.raises(PixelupError) as excinfo:
+        save_output_image(
+            Image.new("RGB", (1, 1), "white"),
+            output_path=output,
+            output_format=OutputFormat.PNG,
+            quality=95,
+            background="white",
+            source_metadata=SourceMetadata(),
+            strip_metadata=True,
+            target_profile=None,
+        )
+
+    assert excinfo.value.code == "output_exists"
+    assert output.is_symlink()
+    assert os.readlink(output) == str(tmp_path / "missing.png")
+
+
+def test_save_output_image_falls_back_to_an_exclusive_claim_without_hard_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "out.png"
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "hard links unsupported")
+
+    monkeypatch.setattr("pixelup.imaging.os.link", unsupported_link)
+
+    size = save_output_image(
+        Image.new("RGB", (1, 1), "white"),
+        output_path=output,
+        output_format=OutputFormat.PNG,
+        quality=95,
+        background="white",
+        source_metadata=SourceMetadata(),
+        strip_metadata=True,
+        target_profile=None,
+    )
+
+    assert size == (1, 1)
+    with Image.open(output) as saved:
+        assert saved.size == (1, 1)
