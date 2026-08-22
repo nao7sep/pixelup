@@ -141,8 +141,9 @@ _REVEAL_TIMEOUT_SECONDS = 5
 
 
 def local_file_paths(urls: Iterable[QUrl]) -> list[Path]:
-    """Literal local paths offered by an external drag, excluding remote URLs."""
-    return [Path(url.toLocalFile()) for url in urls if url.isLocalFile()]
+    """Literal regular-file paths offered by an external drag."""
+    paths = [absolute_user_path(Path(url.toLocalFile())) for url in urls if url.isLocalFile()]
+    return [path for path in paths if path.is_file()]
 
 
 def _fit_columns(widget: QWidget, *samples: str) -> int:

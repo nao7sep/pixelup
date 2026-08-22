@@ -170,13 +170,14 @@ def test_external_drop_accepts_local_files_and_rejects_remote_urls(
     window = make_window()
     local = _png(tmp_path, "local.png")
     remote_url = QUrl("https://example.com/remote.png")
+    directory_url = QUrl.fromLocalFile(str(tmp_path))
 
-    remote_drag = _DropEvent([remote_url])
+    remote_drag = _DropEvent([remote_url, directory_url])
     window.dragEnterEvent(remote_drag)  # type: ignore[arg-type]
     assert remote_drag.ignored is True
     assert remote_drag.accepted is False
 
-    remote_drop = _DropEvent([remote_url])
+    remote_drop = _DropEvent([remote_url, directory_url])
     window.dropEvent(remote_drop)  # type: ignore[arg-type]
     assert remote_drop.ignored is True
     assert window.image_table.rowCount() == 0

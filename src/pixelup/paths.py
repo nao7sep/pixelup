@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -16,8 +17,7 @@ class OutputFormat(StrEnum):
 
 def absolute_user_path(path: Path) -> Path:
     """Make a user-supplied path absolute without resolving symlinks or aliases."""
-    expanded = path.expanduser()
-    return expanded if expanded.is_absolute() else expanded.absolute()
+    return Path(os.path.abspath(path.expanduser()))
 
 
 @dataclass(frozen=True, slots=True)
