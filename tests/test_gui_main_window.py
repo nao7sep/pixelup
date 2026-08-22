@@ -7,11 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QCloseEvent, QKeySequence
 from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 
 from pixelup import gui
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
+from pixelup.errors import ErrorCode
 from pixelup.gui import MainWindow
 from pixelup.jobs import JobSettings
 from pixelup.parameters import DEFAULT_SCALE, TILE_VALUES
@@ -297,6 +298,12 @@ def test_reveal_log_file_survives_failure(
     monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _raise)
     window._reveal_log_file()
 
+    def _timeout(path: Path) -> bool:
+        raise gui.subprocess.TimeoutExpired(["open", "-R", str(path)], 5)
+
+    monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _timeout)
+    window._reveal_log_file()
+
 
 def test_reveal_in_file_browser_darwin_reports_returncode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -304,8 +311,15 @@ def test_reveal_in_file_browser_darwin_reports_returncode(
     target = _png(tmp_path, "a.png")
     monkeypatch.setattr(sys, "platform", "darwin")
 
-    monkeypatch.setattr(gui.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    calls: list[dict[str, object]] = []
+
+    def _run(*args: object, **kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(gui.subprocess, "run", _run)
     assert gui._reveal_in_file_browser(target) is True
+    assert calls == [{"check": False, "timeout": gui._REVEAL_TIMEOUT_SECONDS}]
 
     monkeypatch.setattr(gui.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
     assert gui._reveal_in_file_browser(target) is False
@@ -420,6 +434,76 @@ def test_parameter_edits_persist_to_config_json(make_window) -> None:
     assert persisted.device == "cpu"
     assert persisted.scale == 2
     assert persisted != JobSettings()
+
+
+def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft(
+    make_window,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = make_window()
+    original = window.config
+    window.quality.setValue(10)
+    attempts: list[AppConfig] = []
+    warnings: list[object] = []
+
+    def _save(candidate: AppConfig) -> None:
+        attempts.append(candidate)
+        if len(attempts) == 1:
+            raise OSError("disk full")
+
+    monkeypatch.setattr("pixelup.gui.save_app_config", _save)
+    monkeypatch.setattr("pixelup.gui.warn_config_save_failed", warnings.append)
+
+    assert window._flush_parameters_save() is False
+    assert window.config is original
+    assert window.current_job_settings().quality == 10
+    assert warnings == [window]
+
+    assert window._flush_parameters_save() is True
+    assert window.config.parameters.quality == 10
+    assert len(attempts) == 2
+
+
+def test_close_waits_for_worker_ownership_to_end(
+    make_window,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = make_window()
+    cleanup_results = iter((False, True))
+    warnings: list[object] = []
+    monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: next(cleanup_results, True))
+    monkeypatch.setattr("pixelup.gui.warn_jobs_stopping", warnings.append)
+
+    first = QCloseEvent()
+    window.closeEvent(first)
+
+    assert first.isAccepted() is False
+    assert window._quit_when_workers_idle is True
+    assert warnings == [window]
+
+    second = QCloseEvent()
+    window.closeEvent(second)
+    assert second.isAccepted() is True
+
+
+def test_main_surfaces_startup_storage_failure(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shown: list[tuple[str, str | None]] = []
+    error = gui.PixelupError(
+        ErrorCode.OUTPUT_UNWRITABLE,
+        "Could not open PixelUp home.",
+        hint="Choose a writable PIXELUP_HOME.",
+    )
+    monkeypatch.setattr("pixelup.gui.build_app", lambda argv: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(
+        "pixelup.gui.show_startup_failure",
+        lambda detail, hint: shown.append((detail, hint)),
+    )
+
+    assert gui.main() == 1
+    assert shown == [("Could not open PixelUp home.", "Choose a writable PIXELUP_HOME.")]
 
 
 def test_scale_edit_persists_to_config_json(make_window) -> None:

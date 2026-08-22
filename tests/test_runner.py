@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -210,16 +211,23 @@ class _FakeWorker:
 
 
 class _FakeThread:
-    def __init__(self, name: str, calls: list[tuple[str, str]]) -> None:
+    def __init__(
+        self,
+        name: str,
+        calls: list[tuple[str, str]],
+        *,
+        stops: bool = True,
+    ) -> None:
         self._name = name
         self._calls = calls
+        self._stops = stops
 
     def quit(self) -> None:
         self._calls.append((self._name, "quit"))
 
     def wait(self, msecs: int) -> bool:
         self._calls.append((self._name, f"wait:{msecs}"))
-        return True
+        return self._stops
 
 
 @pytest.fixture
@@ -239,7 +247,7 @@ def test_cleanup_for_quit_teardown_sequence(_session_log: None) -> None:
         2: (threads[1], workers[1]),
     }
 
-    runner.cleanup_for_quit()
+    assert runner.cleanup_for_quit() is True
 
     for worker in workers:
         assert worker.cancel_requested is True
@@ -249,16 +257,47 @@ def test_cleanup_for_quit_teardown_sequence(_session_log: None) -> None:
         # Progress is disconnected once (from runner.progress.emit).
         assert len(worker.signals.progress.disconnected) == 1
 
-    # Each thread is quit before it is waited on, with the bounded 2s timeout.
+    # Each thread is quit before it is waited on, within one shared 2s budget.
     for name in ("a", "b"):
         thread_calls = [call for call in calls if call[0] == name]
-        assert thread_calls == [(name, "quit"), (name, "wait:2000")]
+        assert [call[1].split(":")[0] for call in thread_calls] == ["quit", "wait"]
+        assert 0 <= int(thread_calls[1][1].split(":")[1]) <= 2000
+    assert runner._threads == {}
+
+
+def test_cleanup_for_quit_retains_ownership_when_a_thread_is_still_running(
+    _session_log: None,
+) -> None:
+    runner = JobRunner([])
+    calls: list[tuple[str, str]] = []
+    worker = _FakeWorker(1)
+    thread = _FakeThread("slow", calls, stops=False)
+    runner._threads = {1: (thread, worker)}  # type: ignore[assignment]
+
+    assert runner.cleanup_for_quit() is False
+
+    assert runner._threads == {1: (thread, worker)}
+    assert worker.cancel_requested is True
+    assert worker.signals.progress.disconnected == []
+    assert worker.signals.finished.disconnected == []
 
 
 def test_cleanup_for_quit_is_a_noop_without_threads(_session_log: None) -> None:
     runner = JobRunner([])
-    runner.cleanup_for_quit()
+    assert runner.cleanup_for_quit() is True
     assert runner._threads == {}
+
+
+def test_thread_finished_releases_registry_and_emits_idle(tmp_path: Path) -> None:
+    runner = JobRunner([])
+    runner._threads = {1: (SimpleNamespace(), _FakeWorker(1))}  # type: ignore[dict-item]
+    idle: list[bool] = []
+    runner.idle.connect(lambda: idle.append(True))
+
+    runner._thread_finished(1)
+
+    assert runner._threads == {}
+    assert idle == [True]
 
 
 # --- JobWorker.run branches (no threads) ----------------------------------
@@ -306,6 +345,74 @@ def test_worker_run_success_emits_done_with_sidecar(
     assert result["ok"] is True
     assert str(result["sidecar"]).endswith(".json")
     assert warnings == ["note"]
+
+
+def test_worker_holds_output_reservation_through_inference_and_sidecar(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(7, tmp_path)
+    held = False
+
+    @contextmanager
+    def _reserve(*args: object, **kwargs: object):
+        nonlocal held
+        held = True
+        try:
+            yield
+        finally:
+            held = False
+
+    def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
+        assert held is True
+        return {"ok": True}
+
+    def _sidecar(**kwargs: object) -> Path:
+        assert held is True
+        return job.output_path.with_suffix(".json")
+
+    monkeypatch.setattr("pixelup.runner.reserve_output_bundle", _reserve)
+    monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
+    monkeypatch.setattr("pixelup.runner.write_sidecar", _sidecar)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert held is False
+    assert finished[0][1:3] == (True, "Done")
+
+
+def test_worker_rejects_occupied_output_before_inference(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(8, tmp_path)
+    job.output_path.write_bytes(b"existing")
+    called = False
+
+    def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(
+        "pixelup.runner.resolve_runtime_dirs",
+        lambda: SimpleNamespace(temp_dir=tmp_path / "temp"),
+    )
+    monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert called is False
+    assert finished[0][1] is False
+    assert "already exists" in finished[0][2]
 
 
 def test_worker_run_cancelled_emits_cancelled_result(

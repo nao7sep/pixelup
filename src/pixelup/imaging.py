@@ -133,6 +133,13 @@ def save_output_image(
             # written for the user at a user-chosen location — not managed text the
             # app owns and reloads as state. Binaries are out of scope for the text
             # backup, and output is never recorded (data-backup-conventions).
+            if output_path.exists():
+                raise PixelupError(
+                    ErrorCode.OUTPUT_EXISTS,
+                    "Output file already exists.",
+                    hint="Retry the job to choose a new unused filename.",
+                    details={"output": str(output_path)},
+                )
             os.replace(temp_path, output_path)
     except PixelupError:
         temp_path.unlink(missing_ok=True)

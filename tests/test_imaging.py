@@ -193,3 +193,33 @@ def test_save_output_image_cleans_temp_file_on_save_failure(
     assert excinfo.value.code == "output_unwritable"
     assert not output.exists()
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_output_image_does_not_replace_a_late_competing_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "out.png"
+    original_save = Image.Image.save
+
+    def save_then_compete(self: Image.Image, fp: object, **kwargs: object) -> None:
+        original_save(self, fp, **kwargs)
+        output.write_bytes(b"competitor")
+
+    monkeypatch.setattr(Image.Image, "save", save_then_compete)
+
+    with pytest.raises(PixelupError) as excinfo:
+        save_output_image(
+            Image.new("RGB", (1, 1), "white"),
+            output_path=output,
+            output_format=OutputFormat.PNG,
+            quality=95,
+            background="white",
+            source_metadata=SourceMetadata(),
+            strip_metadata=True,
+            target_profile=None,
+        )
+
+    assert excinfo.value.code == "output_exists"
+    assert output.read_bytes() == b"competitor"
+    assert list(tmp_path.glob("*.tmp")) == []

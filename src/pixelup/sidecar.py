@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from pixelup import __version__
+from pixelup.errors import ErrorCode, PixelupError
 from pixelup.timestamps import utc_now_iso_ms
 from pixelup.upscale import UpscaleOptions
 
@@ -66,7 +68,31 @@ def write_sidecar(
     # never recorded, and a sidecar beside a not-recorded output rides along into
     # exclusion (data-backup-conventions). It is regenerable from the run and would
     # bloat the text history with no recovery value.
-    sidecar_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    created = False
+    try:
+        # Exclusive creation is the last no-clobber gate after a potentially long
+        # inference. The output reservation serializes PixelUp peers; mode="x"
+        # also protects a sidecar an external process placed in the meantime.
+        with sidecar_path.open("x", encoding="utf-8") as file:
+            created = True
+            file.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+    except FileExistsError as exc:
+        raise PixelupError(
+            ErrorCode.OUTPUT_EXISTS,
+            "Output settings sidecar already exists.",
+            hint="Retry the job to choose a new unused filename.",
+            details={"sidecar": str(sidecar_path)},
+        ) from exc
+    except OSError as exc:
+        if created:
+            sidecar_path.unlink(missing_ok=True)
+        raise PixelupError(
+            ErrorCode.OUTPUT_UNWRITABLE,
+            "Could not write the output settings sidecar.",
+            details={"sidecar": str(sidecar_path), "reason": str(exc)},
+        ) from exc
     return sidecar_path
 
 

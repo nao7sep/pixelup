@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
 from pathlib import Path
 
 from pixelup.config import resolve_state_dir
@@ -58,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_backups_path_id ON backups (path, id);
 # (and re-logging) a broken open on every save.
 _connection: sqlite3.Connection | None = None
 _initialized = False
+_record_gate = threading.Lock()
 
 
 def _store_file() -> Path:
@@ -130,31 +132,38 @@ def record(absolute_path: Path, data: bytes) -> None:
     ``warn`` (file + reason), and swallowed. It never raises, never crashes the
     app, and never breaks the save.
     """
-    store = _ensure_open()
-    if store is None:
-        return  # open failed earlier; disabled for the session (already warned once)
     path_text = str(absolute_path)
-    try:
-        digest = _sha256(data)
-        row = store.execute(
-            "SELECT content_sha256 FROM backups WHERE path = ? ORDER BY id DESC LIMIT 1",
-            (path_text,),
-        ).fetchone()
-        if row is not None and row[0] == digest:
-            return  # unchanged since the last recorded version — dedup skip
-
-        store.execute(
-            "INSERT INTO backups (path, content, content_sha256, byte_size, written_at_utc)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (path_text, sqlite3.Binary(data), digest, len(data), utc_now_iso_ms()),
-        )
-        store.commit()
-    except Exception as exc:  # noqa: BLE001 - best-effort: log once and swallow, never crash.
-        log.warning(
-            "backup_store.record_failed",
-            file=path_text,
-            reason=str(exc),
-        )
+    with _record_gate:
+        store = _ensure_open()
+        if store is None:
+            return  # open failed earlier; disabled for the session (already warned once)
+        try:
+            digest = _sha256(data)
+            # Acquire SQLite's cross-process writer lock before reading the predecessor.
+            # Without one transaction around SELECT + INSERT, two instances can both
+            # observe the same latest hash and append the same successor.
+            store.execute("BEGIN IMMEDIATE")
+            row = store.execute(
+                "SELECT content_sha256 FROM backups WHERE path = ? ORDER BY id DESC LIMIT 1",
+                (path_text,),
+            ).fetchone()
+            if row is None or row[0] != digest:
+                store.execute(
+                    "INSERT INTO backups (path, content, content_sha256, byte_size, written_at_utc)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (path_text, sqlite3.Binary(data), digest, len(data), utc_now_iso_ms()),
+                )
+            store.commit()
+        except Exception as exc:  # noqa: BLE001 - best-effort: log once and swallow, never crash.
+            try:
+                store.rollback()
+            except Exception:  # noqa: BLE001 - rollback is best-effort after a record failure.
+                pass
+            log.warning(
+                "backup_store.record_failed",
+                file=path_text,
+                reason=str(exc),
+            )
 
 
 def close_backup_store() -> None:
@@ -164,10 +173,11 @@ def close_backup_store() -> None:
     ``PIXELUP_HOME``.
     """
     global _connection, _initialized
-    try:
-        if _connection is not None:
-            _connection.close()
-    except Exception:  # noqa: BLE001 - best-effort: a close failure on teardown is harmless.
-        pass
-    _connection = None
-    _initialized = False
+    with _record_gate:
+        try:
+            if _connection is not None:
+                _connection.close()
+        except Exception:  # noqa: BLE001 - best-effort: a close failure on teardown is harmless.
+            pass
+        _connection = None
+        _initialized = False

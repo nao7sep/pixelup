@@ -2,8 +2,10 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
+from pixelup.errors import PixelupError
 from pixelup.paths import OutputFormat
 from pixelup.sidecar import write_sidecar
 from pixelup.upscale import UpscaleOptions
@@ -71,3 +73,14 @@ def test_sidecar_created_at_is_canonical_utc(tmp_path: Path) -> None:
         r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z",
         payload["created_at_utc"],
     )
+
+
+def test_sidecar_does_not_replace_an_existing_file(tmp_path: Path) -> None:
+    sidecar, _payload = _write_sample_sidecar(tmp_path)
+    original = sidecar.read_bytes()
+
+    with pytest.raises(PixelupError) as excinfo:
+        _write_sample_sidecar(tmp_path)
+
+    assert excinfo.value.code == "output_exists"
+    assert sidecar.read_bytes() == original

@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 from pixelup import __version__
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import (
+    AppConfig,
     config_log_payload,
     config_path,
     ensure_app_config,
@@ -68,8 +69,11 @@ from pixelup.jobs import (
     retry_failed_jobs,
 )
 from pixelup.message_dialogs import (
+    show_startup_failure,
     warn_config_reset,
+    warn_config_save_failed,
     warn_image_in_use,
+    warn_jobs_stopping,
     warn_no_images,
     warn_no_models,
 )
@@ -131,6 +135,7 @@ _NAME_MIN_WIDTH = 180
 # backup record, so the writes are coalesced. Long enough to absorb typing "100" or
 # "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
+_REVEAL_TIMEOUT_SECONDS = 5
 
 
 def _fit_columns(widget: QWidget, *samples: str) -> int:
@@ -211,6 +216,8 @@ class MainWindow(QMainWindow):
         self.runner = JobRunner(self.jobs, self)
         self.runner.progress.connect(self._job_progress)
         self.runner.finished.connect(self._job_finished)
+        self.runner.idle.connect(self._close_when_workers_stop)
+        self._quit_when_workers_idle = False
         self._session_shutdown = False
         # Coalesces the Parameters panel's edits into one save (see
         # _PARAMETERS_SAVE_DELAY_MS). Built before the UI, because building the panel
@@ -269,29 +276,50 @@ class MainWindow(QMainWindow):
         self._session_shutdown = True
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # Land any edit still inside the debounce window before the app can go away.
-        # Safe on every branch below, including a cancelled quit: the user made the
-        # edit, and deciding not to quit is no reason to drop it.
-        self._flush_parameters_save()
         app = QGuiApplication.instance()
         is_saving_session = app.isSavingSession() if app is not None else False
-        if self._session_shutdown or is_saving_session:
+        session_shutdown = self._session_shutdown or is_saving_session
+        if self._quit_when_workers_idle:
+            if self.runner.cleanup_for_quit():
+                event.accept()
+            else:
+                event.ignore()
+            return
+
+        # Land any edit still inside the debounce window before the app can go away.
+        # A direct close stays open on failure so the user can retry; OS session
+        # shutdown remains non-modal and records the failure in the session log.
+        if not self._flush_parameters_save(surface_failure=not session_shutdown):
+            if not session_shutdown:
+                event.ignore()
+                return
+        if session_shutdown:
             log.info("quit.session_shutdown")
-            self.runner.cleanup_for_quit()
-            event.accept()
+            self._finish_or_defer_close(event, surface_wait=False)
             return
         if not self._images_by_path:
-            self.runner.cleanup_for_quit()
-            event.accept()
+            self._finish_or_defer_close(event, surface_wait=True)
             return
         active = sum(1 for job in self.jobs if job.status in {"pending", "running", "cancelling"})
         if QuitConfirmDialog(active, self).exec() == QDialog.DialogCode.Accepted:
             log.info("quit.confirmed", active_jobs=active)
-            self.runner.cleanup_for_quit()
-            event.accept()
+            self._finish_or_defer_close(event, surface_wait=True)
         else:
             log.info("quit.cancelled")
             event.ignore()
+
+    def _finish_or_defer_close(self, event: QCloseEvent, *, surface_wait: bool) -> None:
+        if self.runner.cleanup_for_quit():
+            event.accept()
+            return
+        self._quit_when_workers_idle = True
+        event.ignore()
+        if surface_wait:
+            warn_jobs_stopping(self)
+
+    def _close_when_workers_stop(self) -> None:
+        if self._quit_when_workers_idle:
+            QTimer.singleShot(0, self.close)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -629,13 +657,15 @@ class MainWindow(QMainWindow):
         # Land any pending panel edit first, so the config the dialog opens on — and
         # carries the unshown settings through from — is the current one. Otherwise a
         # debounce firing behind the modal would be undone on OK.
-        self._flush_parameters_save()
+        if not self._flush_parameters_save():
+            return
         log.info("settings.dialog_opened")
         dialog = SettingsDialog(self.config, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        while dialog.exec() == QDialog.DialogCode.Accepted:
             previous_config = self.config
-            self.config = dialog.config()
-            save_app_config(self.config)
+            candidate = dialog.config()
+            if not self._save_config_candidate(candidate):
+                continue  # the same draft reopens; no accepted edit is lost
             # Re-apply the UI font so a changed family takes effect immediately,
             # no restart needed.
             apply_ui_font(QApplication.instance(), self.config.font_family)
@@ -664,7 +694,7 @@ class MainWindow(QMainWindow):
     def _reveal_log_file(self) -> None:
         try:
             revealed = _reveal_in_file_browser(self.log_file)
-        except OSError as exc:
+        except (OSError, subprocess.TimeoutExpired) as exc:
             log.warning("log.reveal_failed", log_file=str(self.log_file), reason=str(exc))
             return
         if revealed:
@@ -785,12 +815,12 @@ class MainWindow(QMainWindow):
     def _parameters_edited(self) -> None:
         self._parameters_save_timer.start()
 
-    def _flush_parameters_save(self) -> None:
+    def _flush_parameters_save(self, *, surface_failure: bool = True) -> bool:
         """Save any pending panel edit now, cancelling the debounce."""
         self._parameters_save_timer.stop()
-        self._save_parameters()
+        return self._save_parameters(surface_failure=surface_failure)
 
-    def _save_parameters(self) -> None:
+    def _save_parameters(self, *, surface_failure: bool = True) -> bool:
         """Persist the Parameters panel as the user has it.
 
         The panel is durable user intent, so it lives in config.json like every other
@@ -802,14 +832,36 @@ class MainWindow(QMainWindow):
         """
         parameters = self.current_job_settings()
         if parameters == self.config.parameters:
-            return
-        self.config = replace(self.config, parameters=parameters)
-        save_app_config(self.config)
+            return True
+        candidate = replace(self.config, parameters=parameters)
+        if not self._save_config_candidate(candidate, surface_failure=surface_failure):
+            return False
         log.info(
             "parameters.saved",
             path=str(config_path()),
             values=job_settings_log_payload(parameters),
         )
+        return True
+
+    def _save_config_candidate(
+        self,
+        candidate: AppConfig,
+        *,
+        surface_failure: bool = True,
+    ) -> bool:
+        try:
+            save_app_config(candidate)
+        except Exception as exc:  # noqa: BLE001 - persistence failure must remain in the UI.
+            log.warning(
+                "config.save_failed",
+                path=str(config_path()),
+                reason=str(exc),
+            )
+            if surface_failure:
+                warn_config_save_failed(self)
+            return False
+        self.config = candidate
+        return True
 
     def _reset_parameters_to_defaults(self) -> None:
         """Restore the panel to PixelUp's built-in parameters.
@@ -1060,9 +1112,20 @@ def _reveal_in_file_browser(path: Path) -> bool:
     """
     target = path if path.exists() else path.parent
     if sys.platform == "darwin":
-        return subprocess.run(["open", "-R", str(target)], check=False).returncode == 0
+        return (
+            subprocess.run(
+                ["open", "-R", str(target)],
+                check=False,
+                timeout=_REVEAL_TIMEOUT_SECONDS,
+            ).returncode
+            == 0
+        )
     if sys.platform == "win32":
-        subprocess.run(["explorer", f"/select,{target}"], check=False)
+        subprocess.run(
+            ["explorer", f"/select,{target}"],
+            check=False,
+            timeout=_REVEAL_TIMEOUT_SECONDS,
+        )
         return True
     if target.is_file():
         target = target.parent
@@ -1163,7 +1226,20 @@ def _selftest() -> int:
 def main() -> int:
     if os.environ.get("PIXELUP_SELFTEST") == "1":
         return _selftest()
-    app, _window = build_app(sys.argv)
+    try:
+        app, _window = build_app(sys.argv)
+    except Exception as exc:  # noqa: BLE001 - windowed startup needs an owned visible failure.
+        log.exception("app.startup_failed")
+        app = QApplication.instance() or QApplication(sys.argv)
+        app.setApplicationName("PixelUp")
+        app.setApplicationDisplayName("PixelUp")
+        detail = exc.message if isinstance(exc, PixelupError) else str(exc)
+        hint = exc.hint if isinstance(exc, PixelupError) else None
+        show_startup_failure(
+            detail,
+            hint,
+        )
+        return 1
     return app.exec()
 
 

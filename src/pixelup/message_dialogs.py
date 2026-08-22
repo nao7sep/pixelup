@@ -31,3 +31,28 @@ def warn_config_reset(parent: QWidget, quarantined_name: str) -> None:
         "Your settings file was unreadable and has been reset to defaults.\n\n"
         f"The unreadable file was kept as {quarantined_name} in the PixelUp folder.",
     )
+
+
+def warn_config_save_failed(parent: QWidget) -> None:
+    _info(
+        parent,
+        "PixelUp could not save your settings. Your changes are still shown so you can try again.",
+    )
+
+
+def warn_jobs_stopping(parent: QWidget) -> None:
+    _info(
+        parent,
+        "PixelUp is still stopping running jobs. "
+        "It will close as soon as they have stopped safely.",
+    )
+
+
+def show_startup_failure(detail: str, hint: str | None) -> None:
+    remedy = f"\n\n{hint}" if hint else ""
+    QMessageBox.critical(
+        None,
+        "PixelUp could not start",
+        "PixelUp could not open its storage or application state.\n\n"
+        f"{detail}{remedy}",
+    )

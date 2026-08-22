@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,22 @@ class _FailInsertConnection:
     def execute(self, sql: str, *rest: Any) -> Any:
         if sql.lstrip().upper().startswith("INSERT"):
             raise sqlite3.OperationalError("disk I/O error (injected)")
+        return self._real.execute(sql, *rest)
+
+    def executescript(self, sql: str) -> Any:
+        return self._real.executescript(sql)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class _RecordingConnection:
+    def __init__(self, real: sqlite3.Connection, statements: list[str]) -> None:
+        self._real = real
+        self._statements = statements
+
+    def execute(self, sql: str, *rest: Any) -> Any:
+        self._statements.append(sql.strip())
         return self._real.execute(sql, *rest)
 
     def executescript(self, sql: str) -> Any:
@@ -149,6 +166,48 @@ def test_a_changed_save_inserts_a_new_row(
     assert len(rows) == 2
     assert bytes(rows[0][1]) == b'{"quality": 95}\n'
     assert bytes(rows[1][1]) == b'{"quality": 80}\n'
+
+
+def test_latest_check_and_insert_are_one_immediate_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        lambda *args, **kwargs: _RecordingConnection(
+            real_connect(*args, **kwargs), statements
+        ),
+    )
+
+    record(home / "config.json", b"{}\n")
+
+    transaction = next(i for i, sql in enumerate(statements) if sql == "BEGIN IMMEDIATE")
+    latest = next(i for i, sql in enumerate(statements) if sql.startswith("SELECT content_sha256"))
+    insert = next(i for i, sql in enumerate(statements) if sql.startswith("INSERT INTO backups"))
+    assert transaction < latest < insert
+
+
+def test_concurrent_in_process_records_share_one_connection_safely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    barrier = threading.Barrier(8)
+
+    def save() -> None:
+        barrier.wait()
+        record(target, b"same\n")
+
+    threads = [threading.Thread(target=save) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(_rows(home, target)) == 1
 
 
 def test_a_revert_inserts_a_new_row(
