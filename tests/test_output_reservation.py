@@ -111,6 +111,32 @@ def test_case_variant_broken_symlink_occupies_the_normalized_bundle(tmp_path: Pa
 
 
 @pytest.mark.parametrize("name", ["result.png", "result.json"])
+def test_claimed_cleanup_refuses_without_hard_links_before_public_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    path = tmp_path / name
+    path.write_bytes(b"pixelup")
+    identity = os.lstat(path)
+    claim = PublishedFile(path, identity.st_dev, identity.st_ino)
+    moves: list[tuple[object, ...]] = []
+
+    def hard_links_unavailable(*_args: object, **_kwargs: object) -> None:
+        raise OSError("hard links unavailable")
+
+    monkeypatch.setattr("pixelup.output_reservation.os.link", hard_links_unavailable)
+    monkeypatch.setattr(
+        "pixelup.output_reservation.os.rename", lambda *args: moves.append(args)
+    )
+
+    assert remove_published_file(claim) is False
+    assert path.read_bytes() == b"pixelup"
+    assert moves == []
+    assert list(tmp_path.glob("*.pixelup-*")) == []
+
+
+@pytest.mark.parametrize("name", ["result.png", "result.json"])
 def test_claimed_cleanup_restores_an_exact_boundary_replacement(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -137,6 +163,41 @@ def test_claimed_cleanup_restores_an_exact_boundary_replacement(
     assert remove_published_file(claim) is False
     assert path.read_bytes() == b"external winner"
     assert list(tmp_path.glob("*.pixelup-hold")) == []
+
+
+@pytest.mark.parametrize("name", ["result.png", "result.json"])
+def test_claimed_cleanup_preserves_displaced_and_later_winners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    path = tmp_path / name
+    path.write_bytes(b"pixelup")
+    identity = os.lstat(path)
+    claim = PublishedFile(path, identity.st_dev, identity.st_ino)
+    displaced_winner = tmp_path / "displaced.tmp"
+    displaced_winner.write_bytes(b"first external winner")
+    real_rename = os.rename
+    replaced = False
+
+    def replace_at_move(source: Path, hold: Path) -> None:
+        nonlocal replaced
+        if not replaced and Path(source) == path:
+            replaced = True
+            os.replace(displaced_winner, path)
+            real_rename(source, hold)
+            path.write_bytes(b"later external winner")
+            return
+        real_rename(source, hold)
+
+    monkeypatch.setattr("pixelup.output_reservation.os.rename", replace_at_move)
+
+    assert remove_published_file(claim) is False
+    assert path.read_bytes() == b"later external winner"
+    holds = list(tmp_path.glob("*.pixelup-hold"))
+    assert len(holds) == 1
+    assert holds[0].read_bytes() == b"first external winner"
+    assert list(tmp_path.glob("*.pixelup-claim")) == []
 
 
 def test_reservation_serializes_a_separate_process_through_a_symlink_alias(

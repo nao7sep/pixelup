@@ -112,36 +112,55 @@ def published_file_is_current(published: PublishedFile) -> bool:
 
 
 def remove_published_file(published: PublishedFile) -> bool:
-    hold = published.path.with_name(f".{uuid.uuid4().hex}.pixelup-hold")
+    claim = published.path.with_name(f".{uuid.uuid4().hex}.pixelup-claim")
     try:
-        # Rename first: this preserves whichever inode occupies the public pathname
-        # at the destructive boundary. Ownership is checked only after the entry is
-        # safely under our private sibling, so a replacement can never be unlinked.
-        os.rename(published.path, hold)
+        # Capture and verify PixelUp's inode without mutating the public path. Besides
+        # proving ownership, this proves that exact-inode restoration is available on
+        # this filesystem before a later rename can displace an external winner.
+        os.link(published.path, claim, follow_symlinks=False)
     except OSError:
         return False
 
+    removed = False
     try:
-        displaced = os.lstat(hold)
-    except OSError:
-        return False
-    if (displaced.st_dev, displaced.st_ino) != (published.device, published.inode):
-        _restore_displaced_file(hold, published.path)
-        return False
+        linked = os.lstat(claim)
+        if (linked.st_dev, linked.st_ino) != (published.device, published.inode):
+            return False
 
-    try:
-        hold.unlink()
-    except OSError:
-        return False
-    return True
+        hold = published.path.with_name(f".{uuid.uuid4().hex}.pixelup-hold")
+        try:
+            os.rename(published.path, hold)
+        except OSError:
+            return False
+
+        try:
+            displaced = os.lstat(hold)
+        except OSError:
+            _restore_displaced_file(hold, published.path)
+            return False
+        if (displaced.st_dev, displaced.st_ino) != (published.device, published.inode):
+            _restore_displaced_file(hold, published.path)
+            return False
+
+        try:
+            hold.unlink()
+        except OSError:
+            return False
+        removed = True
+    finally:
+        try:
+            claim.unlink()
+        except OSError:
+            removed = False
+    return removed
 
 
 def _restore_displaced_file(hold: Path, destination: Path) -> None:
     """Restore a non-owned entry without replacing a later destination winner.
 
-    A hard link preserves the exact inode and is an atomic no-clobber operation.
-    On a filesystem without hard links, leaving the entry at the private hold is
-    safer than copying or replacing bytes PixelUp does not own.
+    The caller proved hard-link support before moving the public entry. Linking is
+    an atomic no-clobber restore of the exact inode; if a later winner already owns
+    the destination, the displaced entry remains preserved at the private hold.
     """
     try:
         os.link(hold, destination, follow_symlinks=False)
