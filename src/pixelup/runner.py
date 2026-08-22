@@ -6,9 +6,13 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
 from pixelup.config import resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError
-from pixelup.imaging import PublishedImage, remove_published_image
 from pixelup.jobs import Job, job_log_payload, options_for_job
-from pixelup.output_reservation import reserve_output_bundle
+from pixelup.output_reservation import (
+    PublishedFile,
+    assert_output_bundle_claims_current,
+    remove_published_file,
+    reserve_output_bundle,
+)
 from pixelup.session_log import log
 from pixelup.sidecar import write_sidecar
 from pixelup.upscale import run_upscale
@@ -45,9 +49,9 @@ class JobWorker(QObject):
     @Slot()
     def run(self) -> None:
         warnings: list[str] = []
-        published_image: PublishedImage | None = None
+        published_image: PublishedFile | None = None
 
-        def capture_published_image(published: PublishedImage) -> None:
+        def capture_published_image(published: PublishedFile) -> None:
             nonlocal published_image
             published_image = published
 
@@ -84,7 +88,7 @@ class JobWorker(QObject):
                     on_output_published=capture_published_image,
                 )
                 try:
-                    sidecar = write_sidecar(
+                    sidecar_claim = write_sidecar(
                         input_path=self.job.input_path,
                         output_path=self.job.output_path,
                         options=options,
@@ -93,8 +97,27 @@ class JobWorker(QObject):
                     )
                 except Exception:
                     if published_image is not None:
-                        remove_published_image(published_image)
+                        remove_published_file(published_image)
                     raise
+                if published_image is None:
+                    remove_published_file(sidecar_claim)
+                    raise PixelupError(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Output image publication did not return an ownership claim.",
+                    )
+                try:
+                    # Image + sidecar together are the commit point. Revalidate both
+                    # physical claims and every normalized shared-stem companion only
+                    # after the sidecar descriptor has flushed and closed.
+                    assert_output_bundle_claims_current(
+                        self.job.output_path,
+                        (published_image, sidecar_claim),
+                    )
+                except Exception:
+                    remove_published_file(sidecar_claim)
+                    remove_published_file(published_image)
+                    raise
+            sidecar = sidecar_claim.path
             result["sidecar"] = str(sidecar)
             log.info(
                 "job.finished",

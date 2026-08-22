@@ -16,8 +16,11 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
 from pixelup.nanoid import nanoid
 from pixelup.output_reservation import (
+    PublishedFile,
     assert_output_bundle_available,
-    assert_output_companions_available,
+    assert_output_bundle_claims_current,
+    published_file,
+    remove_published_file,
 )
 from pixelup.paths import OutputFormat
 from pixelup.session_log import log
@@ -30,14 +33,7 @@ class SourceMetadata:
     xmp: bytes | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class PublishedImage:
-    path: Path
-    device: int
-    inode: int
-
-
-PublishedCallback = Callable[[PublishedImage], None]
+PublishedCallback = Callable[[PublishedFile], None]
 
 
 def register_image_plugins() -> None:
@@ -157,11 +153,9 @@ def save_output_image(
             assert_output_bundle_available(output_path)
             published = _publish_image_no_clobber(temp_path, output_path)
             try:
-                if not _published_image_is_current(published):
-                    raise _output_exists(output_path)
-                assert_output_companions_available(output_path)
+                assert_output_bundle_claims_current(output_path, (published,))
             except PixelupError:
-                remove_published_image(published)
+                remove_published_file(published)
                 raise
             if on_published:
                 on_published(published)
@@ -178,36 +172,13 @@ def save_output_image(
     return encoded.size
 
 
-def remove_published_image(published: PublishedImage) -> bool:
-    """Remove PixelUp's image only while its exact filesystem identity still owns the path."""
-    if not _published_image_is_current(published):
-        return False
-    try:
-        published.path.unlink()
-    except OSError:
-        return False
-    return True
-
-
-def _published_image_is_current(published: PublishedImage) -> bool:
-    try:
-        current = os.lstat(published.path)
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
-    if (current.st_dev, current.st_ino) != (published.device, published.inode):
-        return False
-    return True
-
-
-def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedImage:
+def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedFile:
     source = os.stat(temp_path)
     try:
         # A hard-link publish is atomic, no-clobber, and keeps the already-fsynced
         # staged bytes invisible at the final name until the single link operation.
         os.link(temp_path, output_path, follow_symlinks=False)
-        return PublishedImage(output_path, source.st_dev, source.st_ino)
+        return PublishedFile(output_path, source.st_dev, source.st_ino)
     except FileExistsError as exc:
         raise _output_exists(output_path) from exc
     except OSError as exc:
@@ -228,15 +199,14 @@ def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedIm
         descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     except FileExistsError as exc:
         raise _output_exists(output_path) from exc
-    published_stat = os.fstat(descriptor)
-    published = PublishedImage(output_path, published_stat.st_dev, published_stat.st_ino)
+    published = published_file(output_path, descriptor)
     try:
         with temp_path.open("rb") as source_file, os.fdopen(descriptor, "wb") as output_file:
             shutil.copyfileobj(source_file, output_file)
             output_file.flush()
             os.fsync(output_file.fileno())
     except Exception:
-        remove_published_image(published)
+        remove_published_file(published)
         raise
     return published
 

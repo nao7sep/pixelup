@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from filelock import FileLock, Timeout
@@ -15,6 +17,14 @@ CancelCheck = Callable[[], bool]
 WaitingCallback = Callable[[], None]
 _POLL_SECONDS = 0.25
 _OUTPUT_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+_BUNDLE_SUFFIXES = frozenset((*_OUTPUT_SUFFIXES, ".json"))
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedFile:
+    path: Path
+    device: int
+    inode: int
 
 
 @contextmanager
@@ -71,35 +81,75 @@ def reserve_output_bundle(
 
 
 def assert_output_bundle_available(output_path: Path) -> None:
-    occupied = next((path for path in _bundle_paths(output_path) if os.path.lexists(path)), None)
+    occupied = next(iter(_bundle_entries(output_path)), None)
     if occupied is not None:
         raise _bundle_exists(output_path, occupied)
 
 
-def assert_output_companions_available(output_path: Path) -> None:
-    occupied = next(
-        (
-            path
-            for path in _bundle_paths(output_path)
-            if path != output_path and os.path.lexists(path)
-        ),
-        None,
-    )
-    if occupied is not None:
-        raise _bundle_exists(output_path, occupied)
+def assert_output_bundle_claims_current(
+    output_path: Path,
+    claims: tuple[PublishedFile, ...],
+) -> None:
+    """Make the supplied physical files the only members of this normalized bundle."""
+    for claim in claims:
+        if not published_file_is_current(claim):
+            raise _bundle_exists(output_path, claim.path)
+
+    claims_by_name = {claim.path.name: claim for claim in claims}
+    for occupied in _bundle_entries(output_path):
+        claim = claims_by_name.get(occupied.name)
+        if claim is None or not published_file_is_current(claim):
+            raise _bundle_exists(output_path, occupied)
 
 
-def _bundle_paths(output_path: Path) -> list[Path]:
-    sidecar_path = output_path.with_suffix(".json")
-    return [
-        *(output_path.with_suffix(suffix) for suffix in _OUTPUT_SUFFIXES),
-        sidecar_path,
-    ]
+def published_file_is_current(published: PublishedFile) -> bool:
+    try:
+        current = os.lstat(published.path)
+    except OSError:
+        return False
+    return (current.st_dev, current.st_ino) == (published.device, published.inode)
+
+
+def remove_published_file(published: PublishedFile) -> bool:
+    if not published_file_is_current(published):
+        return False
+    try:
+        published.path.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def published_file(path: Path, descriptor: int) -> PublishedFile:
+    current = os.fstat(descriptor)
+    return PublishedFile(path, current.st_dev, current.st_ino)
+
+
+def _bundle_entries(output_path: Path) -> list[Path]:
+    stem_identity = _text_identity(output_path.stem)
+    try:
+        with os.scandir(output_path.parent) as entries:
+            return [
+                output_path.parent / entry.name
+                for entry in entries
+                if _text_identity(Path(entry.name).stem) == stem_identity
+                and _text_identity(Path(entry.name).suffix) in _BUNDLE_SUFFIXES
+            ]
+    except OSError as exc:
+        raise PixelupError(
+            ErrorCode.OUTPUT_UNWRITABLE,
+            "Could not inspect the output directory.",
+            details={"output": str(output_path), "reason": str(exc)},
+        ) from exc
+
+
+def _text_identity(value: str) -> str:
+    return unicodedata.normalize("NFC", value).casefold()
 
 
 def _bundle_exists(output_path: Path, occupied: Path) -> PixelupError:
-    # lexists, unlike Path.exists, treats a broken symlink as an occupied path.
-    # Publication must never replace any pre-existing directory entry.
+    # Directory enumeration includes broken symlinks. Publication must never replace
+    # any pre-existing entry in the normalized bundle identity.
     return PixelupError(
         ErrorCode.OUTPUT_EXISTS,
         "The output file or its settings sidecar already exists.",
@@ -115,5 +165,5 @@ def _output_lock_key(output_path: Path) -> str:
     # lock. The sidecar path is the bundle identity: format variants share a stem and
     # one .json companion, so result.png and result.jpg must serialize too.
     bundle_path = output_path.with_suffix(".json")
-    canonical = os.path.normcase(str(bundle_path.expanduser().resolve())).casefold()
+    canonical = _text_identity(os.path.normcase(str(bundle_path.expanduser().resolve())))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

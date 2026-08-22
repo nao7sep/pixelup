@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from pathlib import Path
 
@@ -17,7 +18,7 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
     Image.new("RGB", (1, 1), "white").save(input_path)
     output_path.write_bytes(b"image")
 
-    path = write_sidecar(
+    published = write_sidecar(
         input_path=input_path,
         output_path=output_path,
         options=UpscaleOptions(
@@ -54,7 +55,7 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
         },
         warnings=[],
     )
-    return path, json.loads(path.read_text())
+    return published.path, json.loads(published.path.read_text())
 
 
 def test_sidecar_omits_private_paths(tmp_path: Path) -> None:
@@ -84,3 +85,46 @@ def test_sidecar_does_not_replace_an_existing_file(tmp_path: Path) -> None:
 
     assert excinfo.value.code == "output_exists"
     assert sidecar.read_bytes() == original
+
+
+def test_sidecar_failure_cleanup_preserves_an_exact_boundary_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sidecar = tmp_path / "source-realesr-general-x4v3-4x.json"
+
+    def replace_then_fail(_descriptor: int) -> None:
+        winner = tmp_path / "winner.tmp"
+        winner.write_bytes(b"external winner")
+        os.replace(winner, sidecar)
+        raise OSError("flush failed")
+
+    monkeypatch.setattr("pixelup.sidecar.os.fsync", replace_then_fail)
+
+    with pytest.raises(PixelupError) as excinfo:
+        _write_sample_sidecar(tmp_path)
+
+    assert excinfo.value.code == "output_unwritable"
+    assert sidecar.read_bytes() == b"external winner"
+
+
+def test_sidecar_success_verification_rejects_an_exact_boundary_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sidecar = tmp_path / "source-realesr-general-x4v3-4x.json"
+    real_fsync = os.fsync
+
+    def replace_after_flush(descriptor: int) -> None:
+        real_fsync(descriptor)
+        winner = tmp_path / "winner.tmp"
+        winner.write_bytes(b"external winner")
+        os.replace(winner, sidecar)
+
+    monkeypatch.setattr("pixelup.sidecar.os.fsync", replace_after_flush)
+
+    with pytest.raises(PixelupError) as excinfo:
+        _write_sample_sidecar(tmp_path)
+
+    assert excinfo.value.code == "output_exists"
+    assert sidecar.read_bytes() == b"external winner"

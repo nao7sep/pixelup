@@ -9,8 +9,8 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from pixelup.errors import ErrorCode, PixelupError
-from pixelup.imaging import PublishedImage
 from pixelup.jobs import Job, JobSettings
+from pixelup.output_reservation import PublishedFile
 from pixelup.runner import (
     JobRunner,
     JobWorker,
@@ -319,6 +319,12 @@ def _capture_worker(worker: JobWorker) -> tuple[list, list]:
     return finished, progress
 
 
+def _publish_fixture(path: Path, data: bytes) -> PublishedFile:
+    path.write_bytes(data)
+    written = os.lstat(path)
+    return PublishedFile(path, written.st_dev, written.st_ino)
+
+
 def test_worker_run_success_emits_done_with_sidecar(
     qapp: QApplication,
     tmp_path: Path,
@@ -329,12 +335,13 @@ def test_worker_run_success_emits_done_with_sidecar(
 
     def fake_upscale(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
         kwargs["on_warning"]("note")  # type: ignore[operator]
+        kwargs["on_output_published"](_publish_fixture(job.output_path, b"image"))  # type: ignore[operator]
         return {"ok": True, "output": getattr(options, "output_arg", "")}
 
     monkeypatch.setattr("pixelup.runner.run_upscale", fake_upscale)
     monkeypatch.setattr(
         "pixelup.runner.write_sidecar",
-        lambda **kwargs: kwargs["output_path"].with_suffix(".json"),
+        lambda **kwargs: _publish_fixture(kwargs["output_path"].with_suffix(".json"), b"{}"),
     )
     worker = JobWorker(job)
     finished, _progress = _capture_worker(worker)
@@ -369,11 +376,12 @@ def test_worker_holds_output_reservation_through_inference_and_sidecar(
 
     def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
         assert held is True
+        kwargs["on_output_published"](_publish_fixture(job.output_path, b"image"))  # type: ignore[operator]
         return {"ok": True}
 
-    def _sidecar(**kwargs: object) -> Path:
+    def _sidecar(**kwargs: object) -> PublishedFile:
         assert held is True
-        return job.output_path.with_suffix(".json")
+        return _publish_fixture(job.output_path.with_suffix(".json"), b"{}")
 
     monkeypatch.setattr("pixelup.runner.reserve_output_bundle", _reserve)
     monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
@@ -429,7 +437,7 @@ def test_worker_removes_its_image_when_sidecar_publication_loses(
         job.output_path.write_bytes(b"pixelup")
         written = os.lstat(job.output_path)
         kwargs["on_output_published"](
-            PublishedImage(job.output_path, written.st_dev, written.st_ino)
+            PublishedFile(job.output_path, written.st_dev, written.st_ino)
         )
         return {"ok": True}
 
@@ -461,7 +469,7 @@ def test_sidecar_loss_cleanup_preserves_a_replacement_image_winner(
         job.output_path.write_bytes(b"pixelup")
         written = os.lstat(job.output_path)
         kwargs["on_output_published"](
-            PublishedImage(job.output_path, written.st_dev, written.st_ino)
+            PublishedFile(job.output_path, written.st_dev, written.st_ino)
         )
         return {"ok": True}
 
@@ -478,6 +486,68 @@ def test_sidecar_loss_cleanup_preserves_a_replacement_image_winner(
     worker.run()
 
     assert job.output_path.read_bytes() == b"external-winner"
+    assert finished[0][1] is False
+
+
+def test_final_bundle_commit_preserves_a_late_case_variant_companion(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(11, tmp_path)
+    companion = job.output_path.with_suffix(".JPG")
+
+    def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
+        kwargs["on_output_published"](_publish_fixture(job.output_path, b"pixelup"))  # type: ignore[operator]
+        return {"ok": True}
+
+    def _sidecar(**kwargs: object) -> PublishedFile:
+        claim = _publish_fixture(job.output_path.with_suffix(".json"), b"{}")
+        companion.write_bytes(b"external companion")
+        return claim
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
+    monkeypatch.setattr("pixelup.runner.write_sidecar", _sidecar)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert not job.output_path.exists()
+    assert not job.output_path.with_suffix(".json").exists()
+    assert companion.read_bytes() == b"external companion"
+    assert finished[0][1] is False
+
+
+def test_final_bundle_commit_preserves_a_replacement_image_and_cleans_owned_sidecar(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_log: None,
+) -> None:
+    job = _make_job(12, tmp_path)
+
+    def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
+        kwargs["on_output_published"](_publish_fixture(job.output_path, b"pixelup"))  # type: ignore[operator]
+        return {"ok": True}
+
+    def _sidecar(**kwargs: object) -> PublishedFile:
+        claim = _publish_fixture(job.output_path.with_suffix(".json"), b"{}")
+        winner = tmp_path / "winner.tmp"
+        winner.write_bytes(b"external winner")
+        os.replace(winner, job.output_path)
+        return claim
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
+    monkeypatch.setattr("pixelup.runner.write_sidecar", _sidecar)
+    worker = JobWorker(job)
+    finished, _progress = _capture_worker(worker)
+
+    worker.run()
+
+    assert job.output_path.read_bytes() == b"external winner"
+    assert not job.output_path.with_suffix(".json").exists()
     assert finished[0][1] is False
 
 
@@ -553,12 +623,13 @@ def test_worker_run_forwards_progress_phases_as_text(
         kwargs["on_progress"]("upscale")  # type: ignore[operator]
         kwargs["on_tile"](1, 4)  # type: ignore[operator]
         kwargs["on_download"]("RealESRGAN_x4plus", 1, 4)  # type: ignore[operator]
+        kwargs["on_output_published"](_publish_fixture(job.output_path, b"image"))  # type: ignore[operator]
         return {"ok": True, "output": getattr(options, "output_arg", "")}
 
     monkeypatch.setattr("pixelup.runner.run_upscale", fake_upscale)
     monkeypatch.setattr(
         "pixelup.runner.write_sidecar",
-        lambda **kwargs: kwargs["output_path"].with_suffix(".json"),
+        lambda **kwargs: _publish_fixture(kwargs["output_path"].with_suffix(".json"), b"{}"),
     )
     worker = JobWorker(job)
     _finished, progress = _capture_worker(worker)

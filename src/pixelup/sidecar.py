@@ -7,6 +7,12 @@ from pathlib import Path
 
 from pixelup import __version__
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.output_reservation import (
+    PublishedFile,
+    published_file,
+    published_file_is_current,
+    remove_published_file,
+)
 from pixelup.timestamps import utc_now_iso_ms
 from pixelup.upscale import UpscaleOptions
 
@@ -20,7 +26,7 @@ def write_sidecar(
     options: UpscaleOptions,
     result: dict[str, object],
     warnings: list[str],
-) -> Path:
+) -> PublishedFile:
     sidecar_path = output_path.with_suffix(".json")
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -68,16 +74,11 @@ def write_sidecar(
     # never recorded, and a sidecar beside a not-recorded output rides along into
     # exclusion (data-backup-conventions). It is regenerable from the run and would
     # bloat the text history with no recovery value.
-    created = False
     try:
         # Exclusive creation is the last no-clobber gate after a potentially long
-        # inference. The output reservation serializes PixelUp peers; mode="x"
-        # also protects a sidecar an external process placed in the meantime.
-        with sidecar_path.open("x", encoding="utf-8") as file:
-            created = True
-            file.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-            file.flush()
-            os.fsync(file.fileno())
+        # inference. The output reservation serializes PixelUp peers; O_EXCL also
+        # protects a sidecar an external process placed in the meantime.
+        descriptor = os.open(sidecar_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     except FileExistsError as exc:
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
@@ -86,14 +87,53 @@ def write_sidecar(
             details={"sidecar": str(sidecar_path)},
         ) from exc
     except OSError as exc:
-        if created:
-            sidecar_path.unlink(missing_ok=True)
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
             "Could not write the output settings sidecar.",
             details={"sidecar": str(sidecar_path), "reason": str(exc)},
         ) from exc
-    return sidecar_path
+
+    claim: PublishedFile | None = None
+    descriptor_open = True
+    try:
+        claim = published_file(sidecar_path, descriptor)
+        file = os.fdopen(descriptor, "w", encoding="utf-8")
+        descriptor_open = False  # fdopen owns and closes it from here.
+        with file:
+            file.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+    except OSError as exc:
+        if descriptor_open:
+            os.close(descriptor)
+            descriptor_open = False
+        if claim is not None:
+            remove_published_file(claim)
+        raise PixelupError(
+            ErrorCode.OUTPUT_UNWRITABLE,
+            "Could not write the output settings sidecar.",
+            details={"sidecar": str(sidecar_path), "reason": str(exc)},
+        ) from exc
+    except Exception:
+        if descriptor_open:
+            os.close(descriptor)
+            descriptor_open = False
+        if claim is not None:
+            remove_published_file(claim)
+        raise
+    finally:
+        if descriptor_open:
+            os.close(descriptor)
+    assert claim is not None
+    if not published_file_is_current(claim):
+        remove_published_file(claim)
+        raise PixelupError(
+            ErrorCode.OUTPUT_EXISTS,
+            "Output settings sidecar changed during publication.",
+            hint="Retry the job to choose a new unused filename.",
+            details={"sidecar": str(sidecar_path)},
+        )
+    return claim
 
 
 def _sha256(path: Path) -> str:

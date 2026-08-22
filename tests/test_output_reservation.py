@@ -69,6 +69,41 @@ def test_existing_sidecar_blocks_reservation_before_work_starts(tmp_path: Path) 
     assert excinfo.value.code == "output_exists"
 
 
+@pytest.mark.parametrize(
+    "output_name, occupied_name",
+    [
+        ("result.png", "result.JPG"),
+        ("result.png", "RESULT.JSON"),
+        ("r\u00e9sult.png", "re\u0301sult.webp"),
+    ],
+)
+def test_actual_directory_entries_use_one_casefolded_nfc_bundle_identity(
+    tmp_path: Path,
+    output_name: str,
+    occupied_name: str,
+) -> None:
+    occupied = tmp_path / occupied_name
+    occupied.write_bytes(b"existing")
+
+    with pytest.raises(PixelupError) as excinfo:
+        with reserve_output_bundle(tmp_path / output_name, tmp_path / "temp", timeout=1):
+            raise AssertionError("a normalized same-stem companion was missed")
+
+    assert excinfo.value.code == "output_exists"
+    assert occupied.read_bytes() == b"existing"
+
+
+def test_case_variant_broken_symlink_occupies_the_normalized_bundle(tmp_path: Path) -> None:
+    occupied = tmp_path / "RESULT.JPG"
+    occupied.symlink_to(tmp_path / "missing.jpg")
+
+    with pytest.raises(PixelupError):
+        with reserve_output_bundle(tmp_path / "result.png", tmp_path / "temp", timeout=1):
+            raise AssertionError("a broken symlink entry was missed")
+
+    assert occupied.is_symlink()
+
+
 def test_reservation_serializes_a_separate_process_through_a_symlink_alias(
     tmp_path: Path,
 ) -> None:
