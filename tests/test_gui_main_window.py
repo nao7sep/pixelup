@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QCloseEvent, QKeySequence
 from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 
@@ -16,6 +17,7 @@ from pixelup.errors import ErrorCode
 from pixelup.gui import MainWindow
 from pixelup.jobs import JobSettings
 from pixelup.parameters import DEFAULT_SCALE, TILE_VALUES
+from pixelup.paths import absolute_user_path
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
 
@@ -69,8 +71,24 @@ def make_window(
 
 
 def _summary(window: MainWindow, path: Path) -> str:
-    row = window._image_rows[path.resolve()]
+    row = window._image_rows[absolute_user_path(path)]
     return window.image_table.item(row, 2).text()
+
+
+class _DropEvent:
+    def __init__(self, urls: list[QUrl]) -> None:
+        self._mime_data = SimpleNamespace(urls=lambda: urls)
+        self.accepted = False
+        self.ignored = False
+
+    def mimeData(self):
+        return self._mime_data
+
+    def acceptProposedAction(self) -> None:
+        self.accepted = True
+
+    def ignore(self) -> None:
+        self.ignored = True
 
 
 def test_build_app_wires_application_and_opens_argv_paths(
@@ -119,6 +137,55 @@ def test_open_paths_adds_unique_rows_and_focuses_existing(
     window.open_paths([first])
     assert window.image_table.rowCount() == 2
     assert window._selected_path() == first.resolve()
+
+
+def test_open_paths_preserves_literal_symlink_for_display_and_default_output(
+    make_window, tmp_path: Path
+) -> None:
+    window = make_window()
+    source_dir = tmp_path / "source"
+    chosen_dir = tmp_path / "chosen"
+    source_dir.mkdir()
+    chosen_dir.mkdir()
+    target = _png(source_dir, "target.png")
+    chosen = chosen_dir / "dropped-link.png"
+    chosen.symlink_to(target)
+
+    window.open_paths([chosen])
+
+    assert window._selected_path() == chosen
+    assert window.image_table.item(0, 0).text() == "dropped-link.png"
+    assert window.image_table.item(0, 0).toolTip() == str(chosen)
+
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    window._queue_selected_image()
+
+    assert window.jobs[0].input_path == chosen
+    assert window.jobs[0].output_path.parent == chosen_dir
+
+
+def test_external_drop_accepts_local_files_and_rejects_remote_urls(
+    make_window, tmp_path: Path
+) -> None:
+    window = make_window()
+    local = _png(tmp_path, "local.png")
+    remote_url = QUrl("https://example.com/remote.png")
+
+    remote_drag = _DropEvent([remote_url])
+    window.dragEnterEvent(remote_drag)  # type: ignore[arg-type]
+    assert remote_drag.ignored is True
+    assert remote_drag.accepted is False
+
+    remote_drop = _DropEvent([remote_url])
+    window.dropEvent(remote_drop)  # type: ignore[arg-type]
+    assert remote_drop.ignored is True
+    assert window.image_table.rowCount() == 0
+
+    local_drop = _DropEvent([remote_url, QUrl.fromLocalFile(str(local))])
+    window.dragEnterEvent(local_drop)  # type: ignore[arg-type]
+    window.dropEvent(local_drop)  # type: ignore[arg-type]
+    assert local_drop.accepted is True
+    assert window._selected_path() == local
 
 
 def test_shortcuts_help_chords_open_the_catalogue(

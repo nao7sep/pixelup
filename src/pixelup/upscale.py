@@ -38,6 +38,7 @@ from pixelup.parameters import (
 from pixelup.paths import (
     OutputContext,
     OutputFormat,
+    absolute_user_path,
     infer_output_format,
     resolve_output_path,
 )
@@ -97,6 +98,7 @@ def effective_denoise_strength(model: str, denoise_strength: float) -> float:
 @dataclass(frozen=True, slots=True)
 class UpscalePlan:
     input_path: Path
+    read_path: Path
     output_path: Path
     model: str
     scale: int
@@ -113,21 +115,22 @@ def build_plan(
     check_model: bool = True,
 ) -> UpscalePlan:
     validate_options(options)
-    input_path = options.input_path.expanduser().resolve()
-    if not input_path.exists():
+    input_path = absolute_user_path(options.input_path)
+    read_path = input_path.resolve()
+    if not read_path.exists():
         raise PixelupError(
             ErrorCode.INPUT_NOT_FOUND,
             "Input image does not exist.",
             details={"input": str(input_path)},
         )
-    if not input_path.is_file():
+    if not read_path.is_file():
         raise PixelupError(
             ErrorCode.INPUT_UNREADABLE,
             "Input path is not a file.",
             details={"input": str(input_path)},
         )
 
-    input_size = read_image_size(input_path)
+    input_size = read_image_size(read_path)
     output_format = infer_output_format(options.output_arg, options.output_format)
     context = OutputContext(
         input_path=input_path,
@@ -145,6 +148,7 @@ def build_plan(
     device = resolve_device(options.device, options.gpu_id)
     return UpscalePlan(
         input_path=input_path,
+        read_path=read_path,
         output_path=output_path,
         model=options.model,
         scale=options.scale,
@@ -212,7 +216,7 @@ def run_upscale(
     inference_started = time.perf_counter()
     output_array = run_inference(
         InferenceConfig(
-            input_path=plan.input_path,
+            input_path=plan.read_path,
             models_dir=runtime_dirs.models_dir,
             model=options.model,
             scale=options.scale,
@@ -247,7 +251,7 @@ def run_upscale(
         output_format=plan.output_format,
         quality=options.quality,
         background=options.background,
-        source_metadata=load_source_metadata(plan.input_path),
+        source_metadata=load_source_metadata(plan.read_path),
         strip_metadata=options.strip_metadata,
         target_profile=options.target_profile,
         on_published=on_output_published,

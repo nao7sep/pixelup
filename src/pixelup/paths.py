@@ -14,6 +14,12 @@ class OutputFormat(StrEnum):
     WEBP = "webp"
 
 
+def absolute_user_path(path: Path) -> Path:
+    """Make a user-supplied path absolute without resolving symlinks or aliases."""
+    expanded = path.expanduser()
+    return expanded if expanded.is_absolute() else expanded.absolute()
+
+
 @dataclass(frozen=True, slots=True)
 class OutputContext:
     input_path: Path
@@ -45,7 +51,7 @@ def resolve_output_path(context: OutputContext) -> Path:
             "Output filename templates are not supported by the GUI app.",
             details={"output": context.output_arg},
         )
-    return output.resolve()
+    return absolute_user_path(output)
 
 
 def infer_output_format(output_arg: str, forced: OutputFormat | None) -> OutputFormat:
@@ -77,7 +83,7 @@ def default_output_path(
     output_dir: Path | None = None,
     reserved: set[Path] | None = None,
 ) -> Path:
-    directory = (output_dir or input_path.parent).expanduser().resolve()
+    directory = absolute_user_path(output_dir or input_path.parent)
     stem = f"{input_path.stem}-{model_filename_token(model)}-{scale}x"
     suffix = "." + ("jpg" if output_format == OutputFormat.JPG else output_format.value)
     return collision_safe_path(
@@ -96,7 +102,7 @@ def collision_safe_path(
     # Keys are casefolded so a candidate collides with any file or reservation
     # that differs only in case — on macOS/Windows the two would be one file.
     used = {_collision_key(item) for item in (reserved or set())}
-    candidate = path.expanduser().resolve()
+    candidate = absolute_user_path(path)
     if _bundle_is_free(candidate, companion_suffixes, used):
         return candidate
     for index in range(2, 10000):

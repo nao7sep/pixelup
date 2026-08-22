@@ -103,6 +103,34 @@ def test_build_plan_directory_output_defaults_to_png(tmp_path: Path) -> None:
     assert plan.output_path == output_dir / "input-custom-model-4x.png"
 
 
+def test_build_plan_keeps_literal_input_and_uses_resolved_path_only_for_reads(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    chosen_dir = tmp_path / "chosen"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    source_dir.mkdir()
+    chosen_dir.mkdir()
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    target = source_dir / "target.png"
+    Image.new("RGB", (3, 2), "white").save(target)
+    chosen = chosen_dir / "dropped-link.png"
+    chosen.symlink_to(target)
+    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    output = chosen_dir / "dropped-link-custom-model-4x.png"
+
+    plan = build_plan(
+        options(chosen, str(output), model="custom-model"),
+        RuntimeDirs(models_dir, temp_dir),
+    )
+
+    assert plan.input_path == chosen
+    assert plan.read_path == target
+    assert plan.output_path == output
+
+
 def test_build_plan_rejects_missing_unknown_model(tmp_path: Path) -> None:
     input_path = tmp_path / "input.png"
     Image.new("RGB", (1, 1), "white").save(input_path)

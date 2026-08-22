@@ -54,6 +54,24 @@ def test_default_output_path_adds_collision_suffix(tmp_path: Path) -> None:
     assert resolved == tmp_path / "girl-realesr-general-x4v3-4x-2.png"
 
 
+def test_default_output_path_preserves_literal_symlinked_source_directory(
+    tmp_path: Path,
+) -> None:
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    alias = tmp_path / "chosen-alias"
+    alias.symlink_to(physical, target_is_directory=True)
+
+    resolved = default_output_path(
+        alias / "girl.png",
+        model="realesr-general-x4v3",
+        scale=4,
+        output_format=OutputFormat.PNG,
+    )
+
+    assert resolved == alias / "girl-realesr-general-x4v3-4x.png"
+
+
 def test_reserved_paths_are_treated_as_collisions(tmp_path: Path) -> None:
     input_path = tmp_path / "girl.png"
     reserved = {tmp_path / "girl-realesr-general-x4v3-4x.png"}

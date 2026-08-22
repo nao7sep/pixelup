@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import replace
 from itertools import count
 from pathlib import Path
@@ -91,6 +92,7 @@ from pixelup.parameters import (
     TILE_CHOICES,
 )
 from pixelup.parameters_help_dialog import ParametersHelpDialog
+from pixelup.paths import absolute_user_path
 from pixelup.quit_dialog import QuitConfirmDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, log
@@ -136,6 +138,11 @@ _NAME_MIN_WIDTH = 180
 # "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
 _REVEAL_TIMEOUT_SECONDS = 5
+
+
+def local_file_paths(urls: Iterable[QUrl]) -> list[Path]:
+    """Literal local paths offered by an external drag, excluding remote URLs."""
+    return [Path(url.toLocalFile()) for url in urls if url.isLocalFile()]
 
 
 def _fit_columns(widget: QWidget, *samples: str) -> int:
@@ -323,30 +330,37 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
+        if local_file_paths(event.mimeData().urls()):
             event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        paths = [Path(url.toLocalFile()) for url in event.mimeData().urls() if url.isLocalFile()]
+        paths = local_file_paths(event.mimeData().urls())
+        if not paths:
+            event.ignore()
+            return
         self.open_paths(paths)
+        event.acceptProposedAction()
 
     def open_paths(self, paths: list[Path]) -> None:
         log.info("open.requested", paths=[str(path) for path in paths])
         selected: Path | None = None
         for path in paths:
-            resolved = path.expanduser().resolve()
+            input_path = absolute_user_path(path)
+            resolved = input_path.resolve()
             if not resolved.is_file():
                 log.warning("open.ignored_non_file", path=str(path), resolved=str(resolved))
                 continue
-            if resolved not in self._images_by_path:
-                entry = ImageEntry(resolved, _safe_image_size(resolved))
-                self._images_by_path[resolved] = entry
-                self._image_order.append(resolved)
+            if input_path not in self._images_by_path:
+                entry = ImageEntry(input_path, _safe_image_size(resolved))
+                self._images_by_path[input_path] = entry
+                self._image_order.append(input_path)
                 self._add_image_row(entry)
-                log.info("image.added", input=str(resolved), size=entry.input_size)
+                log.info("image.added", input=str(input_path), size=entry.input_size)
             else:
-                log.info("image.focused_existing", input=str(resolved))
-            selected = resolved
+                log.info("image.focused_existing", input=str(input_path))
+            selected = input_path
         if selected is not None:
             self._select_image(selected)
         self._update_action_buttons()
