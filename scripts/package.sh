@@ -43,7 +43,7 @@ rm -f "$DMG"
 hdiutil create -volname "$APP" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 rm -rf "$STAGE"
 
-# Portable: the .app zipped as-is (ditto preserves the bundle and its symlinks).
+# Portable: the .app zipped without AppleDouble resource-fork sidecars.
 ditto -c -k --norsrc --keepParent "$DIST/$APP.app" "$DIST/pixelup-$VERSION-mac.zip"
 
 ls -lh "$DIST"
