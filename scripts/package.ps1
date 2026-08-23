@@ -25,9 +25,19 @@ if ($proc.ExitCode -ne 0) { throw "Frozen self-test failed (exit $($proc.ExitCod
 # Portable: zip the onedir as-is.
 Compress-Archive -Path dist\PixelUp\* -DestinationPath "dist\pixelup-$Version-win.zip" -Force
 
-# Installer: Inno Setup. iscc is on PATH on windows-latest; fall back to its standard path.
+# Installer: Inno Setup. CI exposes iscc on PATH; local non-admin installs use
+# the per-user location, while elevated installs may use either Program Files.
 $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
-if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+if (-not $iscc) {
+    $iscc = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+        (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe")
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
+if (-not $iscc) {
+    throw "Inno Setup 6 is required to build the Windows installer (ISCC.exe was not found)."
+}
 & $iscc "/DMyAppVersion=$Version" scripts\pixelup.iss
 
 Get-ChildItem dist
