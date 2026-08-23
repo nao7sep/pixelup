@@ -26,11 +26,13 @@ def _hold_reservation(
         release.wait(5)
 
 
-def test_symlinked_parent_and_direct_path_share_one_reservation(tmp_path: Path) -> None:
+def test_symlinked_parent_and_direct_path_share_one_reservation(
+    tmp_path: Path, make_directory_alias
+) -> None:
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
     alias_dir = tmp_path / "alias"
-    alias_dir.symlink_to(output_dir, target_is_directory=True)
+    make_directory_alias(alias_dir, output_dir)
     direct = output_dir / "result.png"
     alias = alias_dir / "result.png"
 
@@ -99,7 +101,9 @@ def test_actual_directory_entries_use_one_casefolded_nfc_bundle_identity(
     assert occupied.read_bytes() == b"existing"
 
 
-def test_case_variant_broken_symlink_occupies_the_normalized_bundle(tmp_path: Path) -> None:
+def test_case_variant_broken_symlink_occupies_the_normalized_bundle(
+    tmp_path: Path, file_symlink_capability: None
+) -> None:
     occupied = tmp_path / "RESULT.JPG"
     occupied.symlink_to(tmp_path / "missing.jpg")
 
@@ -202,11 +206,12 @@ def test_claimed_cleanup_preserves_displaced_and_later_winners(
 
 def test_reservation_serializes_a_separate_process_through_a_symlink_alias(
     tmp_path: Path,
+    make_directory_alias,
 ) -> None:
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
     alias_dir = tmp_path / "alias"
-    alias_dir.symlink_to(output_dir, target_is_directory=True)
+    make_directory_alias(alias_dir, output_dir)
     direct = output_dir / "result.png"
     alias = alias_dir / "result.png"
     temp_dir = tmp_path / "temp"

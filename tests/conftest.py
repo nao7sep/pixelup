@@ -2,13 +2,55 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import sys
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication
 
 from pixelup.backup_store import close_backup_store
 from pixelup.session_log import LOGGER_NAME
+
+
+@pytest.fixture
+def file_symlink_capability(tmp_path: Path) -> None:
+    """Skip only file-symlink contracts when this Windows token cannot create one."""
+    target = tmp_path / "symlink-capability-target"
+    link = tmp_path / "symlink-capability-link"
+    target.write_bytes(b"probe")
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+            pytest.skip("file symlink creation requires Developer Mode or elevation on Windows")
+        raise
+    else:
+        link.unlink()
+
+
+@pytest.fixture
+def make_directory_alias() -> Callable[[Path, Path], None]:
+    """Create a real directory alias, using a privilege-free junction on Windows."""
+
+    def create(alias: Path, target: Path) -> None:
+        if os.name != "nt":
+            alias.symlink_to(target, target_is_directory=True)
+            return
+        completed = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            pytest.fail(
+                "could not create Windows directory junction: "
+                f"{completed.stdout}{completed.stderr}"
+            )
+
+    return create
 
 
 @pytest.fixture(autouse=True)

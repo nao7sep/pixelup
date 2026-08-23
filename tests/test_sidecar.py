@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from pixelup import sidecar as sidecar_module
 from pixelup.errors import PixelupError
 from pixelup.paths import OutputFormat
 from pixelup.sidecar import write_sidecar
@@ -92,14 +93,19 @@ def test_sidecar_failure_cleanup_preserves_an_exact_boundary_replacement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sidecar = tmp_path / "source-realesr-general-x4v3-4x.json"
+    real_remove = sidecar_module.remove_published_file
 
-    def replace_then_fail(_descriptor: int) -> None:
+    def fail_flush(_descriptor: int) -> None:
+        raise OSError("flush failed")
+
+    def replace_then_cleanup(claim) -> bool:
         winner = tmp_path / "winner.tmp"
         winner.write_bytes(b"external winner")
         os.replace(winner, sidecar)
-        raise OSError("flush failed")
+        return real_remove(claim)
 
-    monkeypatch.setattr("pixelup.sidecar.os.fsync", replace_then_fail)
+    monkeypatch.setattr("pixelup.sidecar.os.fsync", fail_flush)
+    monkeypatch.setattr("pixelup.sidecar.remove_published_file", replace_then_cleanup)
 
     with pytest.raises(PixelupError) as excinfo:
         _write_sample_sidecar(tmp_path)
@@ -113,15 +119,17 @@ def test_sidecar_success_verification_rejects_an_exact_boundary_replacement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sidecar = tmp_path / "source-realesr-general-x4v3-4x.json"
-    real_fsync = os.fsync
+    real_is_current = sidecar_module.published_file_is_current
 
-    def replace_after_flush(descriptor: int) -> None:
-        real_fsync(descriptor)
+    def replace_before_verification(claim) -> bool:
         winner = tmp_path / "winner.tmp"
         winner.write_bytes(b"external winner")
         os.replace(winner, sidecar)
+        return real_is_current(claim)
 
-    monkeypatch.setattr("pixelup.sidecar.os.fsync", replace_after_flush)
+    monkeypatch.setattr(
+        "pixelup.sidecar.published_file_is_current", replace_before_verification
+    )
 
     with pytest.raises(PixelupError) as excinfo:
         _write_sample_sidecar(tmp_path)

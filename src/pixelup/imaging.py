@@ -212,7 +212,10 @@ def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedFi
 
 
 def _fsync_file(path: Path) -> None:
-    with path.open("rb") as file:
+    # Windows maps fsync to _commit, which rejects a read-only descriptor even
+    # though Unix accepts one. The staged file is ours and already complete, so
+    # reopen it read/write solely for the cross-platform durability boundary.
+    with path.open("r+b") as file:
         os.fsync(file.fileno())
 
 

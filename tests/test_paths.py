@@ -56,11 +56,12 @@ def test_default_output_path_adds_collision_suffix(tmp_path: Path) -> None:
 
 def test_default_output_path_preserves_literal_symlinked_source_directory(
     tmp_path: Path,
+    make_directory_alias,
 ) -> None:
     physical = tmp_path / "physical"
     physical.mkdir()
     alias = tmp_path / "chosen-alias"
-    alias.symlink_to(physical, target_is_directory=True)
+    make_directory_alias(alias, physical)
 
     resolved = default_output_path(
         alias / "girl.png",

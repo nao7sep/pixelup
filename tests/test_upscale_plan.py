@@ -105,6 +105,7 @@ def test_build_plan_directory_output_defaults_to_png(tmp_path: Path) -> None:
 
 def test_build_plan_keeps_literal_input_and_uses_resolved_path_only_for_reads(
     tmp_path: Path,
+    file_symlink_capability: None,
 ) -> None:
     source_dir = tmp_path / "source"
     chosen_dir = tmp_path / "chosen"

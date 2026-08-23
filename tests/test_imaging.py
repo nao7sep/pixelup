@@ -322,7 +322,9 @@ def test_save_output_image_revalidates_the_whole_bundle_after_encoding(
     assert not output.exists()
 
 
-def test_save_output_image_treats_a_broken_symlink_as_occupied(tmp_path: Path) -> None:
+def test_save_output_image_treats_a_broken_symlink_as_occupied(
+    tmp_path: Path, file_symlink_capability: None
+) -> None:
     output = tmp_path / "out.png"
     output.symlink_to(tmp_path / "missing.png")
 

@@ -140,7 +140,7 @@ def test_open_paths_adds_unique_rows_and_focuses_existing(
 
 
 def test_open_paths_preserves_literal_symlink_for_display_and_default_output(
-    make_window, tmp_path: Path
+    make_window, tmp_path: Path, file_symlink_capability: None
 ) -> None:
     window = make_window()
     source_dir = tmp_path / "source"
