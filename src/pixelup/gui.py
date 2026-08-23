@@ -439,7 +439,7 @@ class MainWindow(QMainWindow):
         # the current UI font (see _fit_columns): Size holds "99999 x 99999"; Jobs
         # holds a common two-state roll-up and elides + tooltips the rarer longer
         # summaries. "Image" stretches (filename, elides to the floor with a tooltip).
-        size_width = _fit_columns(self.image_table, "Size", "99999 x 99999", "unavailable")
+        size_width = _fit_columns(self.image_table, "Size", "99999 x 99999", "Unavailable")
         jobs_width = _fit_columns(self.image_table, "Jobs", "12 done, 5 failed")
         image_header.resizeSection(1, size_width)
         image_header.resizeSection(2, jobs_width)
@@ -1106,7 +1106,7 @@ def _safe_image_size(path: Path) -> tuple[int, int] | None:
 
 def _image_size_text(size: tuple[int, int] | None) -> str:
     if size is None:
-        return "unavailable"
+        return "Unavailable"
     width, height = size
     return f"{width} x {height}"
 

@@ -24,7 +24,7 @@ def test_status_text_humanizes_unknown_status() -> None:
 
 def test_image_size_text() -> None:
     assert _image_size_text((640, 480)) == "640 x 480"
-    assert _image_size_text(None) == "unavailable"
+    assert _image_size_text(None) == "Unavailable"
 
 
 def test_plural() -> None:
