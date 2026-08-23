@@ -342,7 +342,10 @@ def test_save_output_image_treats_a_broken_symlink_as_occupied(
 
     assert excinfo.value.code == "output_exists"
     assert output.is_symlink()
-    assert os.readlink(output) == str(tmp_path / "missing.png")
+    target = os.readlink(output)
+    if os.name == "nt":
+        target = target.removeprefix("\\\\?\\")
+    assert Path(target) == tmp_path / "missing.png"
 
 
 def test_save_output_image_falls_back_to_an_exclusive_claim_without_hard_links(
