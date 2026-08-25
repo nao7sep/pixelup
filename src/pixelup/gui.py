@@ -1182,7 +1182,8 @@ def build_app(
     apply_scrollbar_style(app)
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
-    icon_path = Path(__file__).parent / "resources" / "icon.png"
+    icon_name = "icon-win.png" if sys.platform == "win32" else "icon.png"
+    icon_path = Path(__file__).parent / "resources" / icon_name
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     log.info(

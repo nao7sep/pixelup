@@ -36,10 +36,12 @@ _VERSION = tomllib.loads(
     (Path(SPECPATH) / "pyproject.toml").read_text(encoding="utf-8")
 )["project"]["version"]
 
-# The app finds its window icon at runtime via
-# ``Path(pixelup.gui.__file__).parent / "resources" / "icon.png"`` — inside a
-# frozen bundle that resolves to ``pixelup/resources/icon.png``, so place it there.
-datas = [("src/pixelup/resources/icon.png", "pixelup/resources")]
+# The app selects the Windows or Mac window-icon geometry at runtime. Keep both
+# beside the frozen module so the same spec remains cross-platform.
+datas = [
+    ("src/pixelup/resources/icon.png", "pixelup/resources"),
+    ("src/pixelup/resources/icon-win.png", "pixelup/resources"),
+]
 binaries = []
 # The two arch modules that are imported by string path at runtime; named
 # explicitly so they survive even if a future collect_all misses them.
