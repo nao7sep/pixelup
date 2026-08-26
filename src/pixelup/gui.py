@@ -38,7 +38,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QStyleFactory,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -104,6 +103,7 @@ from pixelup.ui_common import (
     use_regular_spacing,
 )
 from pixelup.widgets import (
+    EmptyStateTableWidget,
     NoWheelComboBox,
     NoWheelDoubleSpinBox,
     NoWheelSpinBox,
@@ -425,7 +425,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
 
-        self.image_table = QTableWidget(0, 3)
+        self.image_table = EmptyStateTableWidget(
+            0,
+            3,
+            empty_text="No images yet. Open images or drop them here.",
+        )
         self.image_table.setHorizontalHeaderLabels(["Image", "Size", "Jobs"])
         self.image_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.image_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -636,7 +640,7 @@ class MainWindow(QMainWindow):
         group = QGroupBox("Queue")
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
-        self.queue_table = QTableWidget(0, 5)
+        self.queue_table = EmptyStateTableWidget(0, 5, empty_text="No jobs queued yet.")
         self.queue_table.setHorizontalHeaderLabels(["Image", "Model", "Scale", "Output", "Status"])
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)

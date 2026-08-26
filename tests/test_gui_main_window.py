@@ -126,11 +126,14 @@ def test_open_paths_adds_unique_rows_and_focuses_existing(
     make_window, tmp_path: Path
 ) -> None:
     window = make_window()
+    assert window.image_table.empty_state_visible is True
+    assert window.image_table.empty_text == "No images yet. Open images or drop them here."
     first = _png(tmp_path, "a.png")
     second = _png(tmp_path, "b.png")
 
     window.open_paths([first, second])
     assert window.image_table.rowCount() == 2
+    assert window.image_table.empty_state_visible is False
     assert window._selected_path() == second.resolve()
 
     # Re-opening an existing path does not duplicate it; it focuses the row.
@@ -221,6 +224,8 @@ def test_queue_selected_image_creates_rows_and_summary(
     make_window, tmp_path: Path
 ) -> None:
     window = make_window()
+    assert window.queue_table.empty_state_visible is True
+    assert window.queue_table.empty_text == "No jobs queued yet."
     image = _png(tmp_path, "a.png")
     window.open_paths([image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
@@ -230,6 +235,7 @@ def test_queue_selected_image_creates_rows_and_summary(
 
     assert len(window.jobs) == 2
     assert window.queue_table.rowCount() == 2
+    assert window.queue_table.empty_state_visible is False
     assert _summary(window, image) == "2 queued"
     assert window.cancel_button.isEnabled() is True
 
@@ -276,6 +282,7 @@ def test_remove_is_blocked_while_jobs_active_then_allowed(
 
     window._remove_selected_image()
     assert window.image_table.rowCount() == 0
+    assert window.image_table.empty_state_visible is True
     assert window._selected_path() is None
 
 
