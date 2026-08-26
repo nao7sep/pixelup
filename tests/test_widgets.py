@@ -1,10 +1,34 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QTableWidgetItem
 
 from pixelup.devices import DEVICE_CHOICES
 from pixelup.paths import OutputFormat
-from pixelup.widgets import device_combo, output_format_combo
+from pixelup.widgets import EmptyStateTableWidget, device_combo, output_format_combo
+
+
+def test_empty_state_table_tracks_zero_to_one_and_one_to_zero(qapp: QApplication) -> None:
+    table = EmptyStateTableWidget(0, 1, empty_text="Nothing here yet.")
+    try:
+        table.show()
+        table.setFocus()
+        qapp.processEvents()
+        assert table.empty_state_visible is True
+        assert table.accessibleDescription() == "Nothing here yet."
+        assert table.hasFocus() is True
+
+        table.insertRow(0)
+        table.setItem(0, 0, QTableWidgetItem("First row"))
+        assert table.empty_state_visible is False
+        assert table.accessibleDescription() == ""
+        assert table.hasFocus() is True
+
+        table.removeRow(0)
+        assert table.empty_state_visible is True
+        assert table.accessibleDescription() == "Nothing here yet."
+        assert table.hasFocus() is True
+    finally:
+        table.deleteLater()
 
 
 def test_device_combo_carries_value_as_item_data(qapp: QApplication) -> None:
