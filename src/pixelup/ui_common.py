@@ -4,6 +4,8 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QLayout
 
+from .fonts import DEFAULT_UI_FONT_SIZE
+
 REGULAR_SPACING = 10
 
 # A thin, rounded, themed scroll bar applied app-wide. Fusion ships a thick,
@@ -52,7 +54,7 @@ def title_label(text: str) -> QLabel:
     """A large, bold label for a dialog's primary heading (e.g. the app name)."""
     label = QLabel(text)
     font = label.font()
-    font.setPointSizeF(font.pointSizeF() * 1.6)
+    font.setPixelSize(round(DEFAULT_UI_FONT_SIZE * 1.6))
     font.setBold(True)
     label.setFont(font)
     return label

@@ -16,9 +16,9 @@ DEFAULT_UI_FONT_FAMILY = "Helvetica Neue, Segoe UI, Roboto, Arial"
 
 # The UI font size is deliberate and fixed, not user-configurable. Per the
 # app-chrome-conventions the UI font is family-only — a base-size knob breaks
-# Qt's pixel-based layouts — yet every element still gets an explicit size rather
-# than the bare toolkit default. 13pt is PixelUp's base; PixelUp set no explicit
-# font at all before this, inheriting whatever Qt/OS picked.
+# Qt's pixel-based layouts. The application owns one inherited 13-logical-pixel
+# base; point sizing would convert through platform DPI and make the Windows UI
+# substantially larger.
 DEFAULT_UI_FONT_SIZE = 13
 
 
@@ -52,8 +52,7 @@ def resolve_ui_font_family(value: str) -> str | None:
 
     Native Qt renders one family, so — per the app-chrome-conventions' native
     input rule — PixelUp resolves the free-text (possibly comma-separated) string
-    itself: the first listed family present in the font database wins. None means
-    nothing matched, so the caller leaves Qt's own default family in place.
+    itself: the first listed family present in the font database wins.
     """
     from PySide6.QtGui import QFontDatabase
 
@@ -67,17 +66,19 @@ def resolve_ui_font_family(value: str) -> str | None:
 def build_ui_font(value: str) -> QFont:
     """Build the UI font from a family string at the fixed UI size.
 
-    Resolves the family against installed fonts; when none match, the QFont keeps
-    Qt's default family — a graceful implicit fallback so a typo never yields
-    broken text. The size is always the explicit DEFAULT_UI_FONT_SIZE.
+    Resolves the family against installed fonts. When a configured value has no
+    match, the canonical platform stack gets a second chance before Qt's final
+    toolkit fallback. The size is always the explicit DEFAULT_UI_FONT_SIZE.
     """
     from PySide6.QtGui import QFont
 
     font = QFont()
     family = resolve_ui_font_family(value)
+    if family is None:
+        family = resolve_ui_font_family(DEFAULT_UI_FONT_FAMILY)
     if family is not None:
         font.setFamily(family)
-    font.setPointSize(DEFAULT_UI_FONT_SIZE)
+    font.setPixelSize(DEFAULT_UI_FONT_SIZE)
     return font
 
 

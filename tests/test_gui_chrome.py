@@ -6,10 +6,11 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from pixelup.app_config import AppConfig, ConfigLoadResult
+from pixelup.fonts import DEFAULT_UI_FONT_SIZE
 from pixelup.gui import ImagePreview, MainWindow
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
-from pixelup.ui_common import apply_scrollbar_style
+from pixelup.ui_common import apply_scrollbar_style, title_label
 
 # Window-chrome conformance per the window-chrome-conventions: a thin rounded
 # palette-themed scroll bar (Fusion's default is thick and square), and a window
@@ -115,3 +116,12 @@ def test_apply_scrollbar_style_merges_with_existing_stylesheet(
         assert "QScrollBar" in qss
     finally:
         qapp.setStyleSheet(saved)
+
+
+def test_title_label_derives_a_logical_pixel_size(qapp: QApplication) -> None:
+    label = title_label("PixelUp")
+    try:
+        assert label.font().pixelSize() == round(DEFAULT_UI_FONT_SIZE * 1.6)
+        assert label.font().bold()
+    finally:
+        label.deleteLater()

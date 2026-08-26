@@ -59,15 +59,25 @@ def test_build_ui_font_uses_fixed_size_and_resolved_family(
     qapp: QApplication, installed_font: str
 ) -> None:
     font = build_ui_font(f"No Such Font 99999, {installed_font}")
-    assert font.pointSize() == DEFAULT_UI_FONT_SIZE
+    assert font.pixelSize() == DEFAULT_UI_FONT_SIZE
     assert font.family() == installed_font
 
 
-def test_build_ui_font_keeps_size_when_family_unresolved(qapp: QApplication) -> None:
-    # An entirely-absent family never crashes; Qt's default family is kept and the
-    # explicit UI size still applies.
+def test_build_ui_font_uses_canonical_stack_when_configured_family_is_unresolved(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(QFontDatabase, "families", staticmethod(lambda: ["Segoe UI"]))
     font = build_ui_font("No Such Font 99999")
-    assert font.pointSize() == DEFAULT_UI_FONT_SIZE
+    assert font.pixelSize() == DEFAULT_UI_FONT_SIZE
+    assert font.family() == "Segoe UI"
+
+
+def test_build_ui_font_keeps_size_when_no_canonical_family_is_installed(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(QFontDatabase, "families", staticmethod(list))
+    font = build_ui_font("No Such Font 99999")
+    assert font.pixelSize() == DEFAULT_UI_FONT_SIZE
 
 
 def test_apply_ui_font_sets_application_font(
@@ -77,6 +87,6 @@ def test_apply_ui_font_sets_application_font(
     try:
         apply_ui_font(qapp, installed_font)
         assert qapp.font().family() == installed_font
-        assert qapp.font().pointSize() == DEFAULT_UI_FONT_SIZE
+        assert qapp.font().pixelSize() == DEFAULT_UI_FONT_SIZE
     finally:
         qapp.setFont(saved)
