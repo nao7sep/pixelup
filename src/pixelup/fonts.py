@@ -6,13 +6,15 @@ if TYPE_CHECKING:
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication
 
-# Canonical default UI font family for PixelUp. PixelUp bundles no font, so the
-# default is a small cross-platform stack of system UI faces — macOS (Helvetica
-# Neue), Windows (Segoe UI), and common Linux fallbacks (Roboto, then Arial).
-# The family is free text the user can override; resolution picks the first of
-# these actually installed (see resolve_ui_font_family), so one default reads
-# well on every platform without bundling anything.
-DEFAULT_UI_FONT_FAMILY = "Helvetica Neue, Segoe UI, Roboto, Arial"
+# The persisted, user-facing default is blank: it means "use PixelUp's built-in
+# platform choice" without exposing that implementation detail in Settings.
+DEFAULT_UI_FONT_FAMILY = ""
+
+# PixelUp bundles no font, so its internal Qt fallback is a small cross-platform
+# stack of system UI faces — macOS (Helvetica Neue), Windows (Segoe UI), and
+# common Linux fallbacks (Roboto, then Arial). Resolution picks the first face
+# actually installed before allowing Qt's uncontrolled platform default.
+CANONICAL_UI_FONT_FAMILY_STACK = "Helvetica Neue, Segoe UI, Roboto, Arial"
 
 # The UI font size is deliberate and fixed, not user-configurable. Per the
 # app-chrome-conventions the UI font is family-only — a base-size knob breaks
@@ -22,19 +24,23 @@ DEFAULT_UI_FONT_FAMILY = "Helvetica Neue, Segoe UI, Roboto, Arial"
 DEFAULT_UI_FONT_SIZE = 13
 
 
-def normalize_font_family(value: Any, default: str) -> str:
-    """Normalize a persisted or entered family string, falling back when blank.
+def normalize_font_family(value: Any, default: str = DEFAULT_UI_FONT_FAMILY) -> str:
+    """Normalize a persisted or entered family string.
 
     The stored value is free text (possibly a comma-separated stack). This only
-    trims it and substitutes the default when it is missing or empty; it does not
-    touch the font database, so it stays usable at config-load time with no
-    running QApplication. Matching an entered family to an installed one happens
-    later, at apply time, in resolve_ui_font_family.
+    trims it and substitutes the user-facing default when it is missing or empty;
+    it does not touch the font database, so it stays usable at config-load time
+    with no running QApplication. The former built-in stack is collapsed to blank
+    because it has the same effective behavior and should not remain exposed in
+    settings written before this distinction existed. Matching an entered family
+    to an installed one happens later, at apply time, in resolve_ui_font_family.
     """
     if not isinstance(value, str):
         return default
     text = value.strip()
-    return text if text else default
+    if not text or text == CANONICAL_UI_FONT_FAMILY_STACK:
+        return default
+    return text
 
 
 def parse_font_families(value: str) -> list[str]:
@@ -75,7 +81,7 @@ def build_ui_font(value: str) -> QFont:
     font = QFont()
     family = resolve_ui_font_family(value)
     if family is None:
-        family = resolve_ui_font_family(DEFAULT_UI_FONT_FAMILY)
+        family = resolve_ui_font_family(CANONICAL_UI_FONT_FAMILY_STACK)
     if family is not None:
         font.setFamily(family)
     font.setPixelSize(DEFAULT_UI_FONT_SIZE)

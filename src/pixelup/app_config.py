@@ -296,8 +296,8 @@ def _optional_font_family(data: dict[str, Any], default: str) -> str:
     if "font_family" not in data:
         return default
     value = data["font_family"]
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("font_family is not a non-empty string")
+    if not isinstance(value, str):
+        raise ValueError("font_family is not a string")
     return normalize_font_family(value, default)
 
 

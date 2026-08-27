@@ -126,12 +126,26 @@ def test_load_app_config_normalizes_font_family(tmp_path: Path) -> None:
     assert load_app_config(path).font_family == "Arial"
 
 
-@pytest.mark.parametrize("font_family", ["   ", 42])
-def test_load_app_config_quarantines_unusable_font_family(
-    tmp_path: Path, font_family: object
-) -> None:
+def test_load_app_config_accepts_blank_font_family_as_builtin_default(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"font_family": font_family}), encoding="utf-8")
+    path.write_text(json.dumps({"font_family": "   "}), encoding="utf-8")
+
+    assert load_app_config(path).font_family == ""
+
+
+def test_load_app_config_collapses_the_legacy_default_font_stack(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"font_family": "Helvetica Neue, Segoe UI, Roboto, Arial"}),
+        encoding="utf-8",
+    )
+
+    assert load_app_config(path).font_family == ""
+
+
+def test_load_app_config_quarantines_unusable_font_family(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"font_family": 42}), encoding="utf-8")
 
     result = load_app_config_result(path)
 

@@ -5,6 +5,7 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from pixelup.fonts import (
+    CANONICAL_UI_FONT_FAMILY_STACK,
     DEFAULT_UI_FONT_FAMILY,
     DEFAULT_UI_FONT_SIZE,
     apply_ui_font,
@@ -19,11 +20,12 @@ def test_normalize_font_family_trims_and_keeps_value() -> None:
     assert normalize_font_family("  Arial  ", DEFAULT_UI_FONT_FAMILY) == "Arial"
 
 
-def test_normalize_font_family_falls_back_on_blank_or_non_string() -> None:
+def test_normalize_font_family_uses_blank_for_the_builtin_default() -> None:
     assert normalize_font_family("", DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
     assert normalize_font_family("   ", DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
     assert normalize_font_family(None, DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
     assert normalize_font_family(42, DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
+    assert normalize_font_family(CANONICAL_UI_FONT_FAMILY_STACK) == DEFAULT_UI_FONT_FAMILY
 
 
 def test_parse_font_families_splits_strips_quotes_and_drops_empties() -> None:

@@ -77,11 +77,12 @@ def test_font_family_change_marks_dirty_and_normalizes(qapp: QApplication) -> No
         dialog.deleteLater()
 
 
-def test_blank_font_family_falls_back_to_default(qapp: QApplication) -> None:
+def test_blank_font_family_is_the_builtin_default(qapp: QApplication) -> None:
     dialog = SettingsDialog(AppConfig())
     try:
         dialog.font_family.setText("")
         assert dialog.config().font_family == AppConfig().font_family
+        assert dialog.font_family.placeholderText() == "Platform default"
     finally:
         dialog.deleteLater()
 

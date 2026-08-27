@@ -83,6 +83,7 @@ class SettingsDialog(QDialog):
 
         self.font_family = QLineEdit()
         self.font_family.setText(config.font_family)
+        self.font_family.setPlaceholderText("Platform default")
         self.font_family.setMinimumWidth(260)
 
         # Each caption groups under its own control (see _captioned) rather than
@@ -95,7 +96,7 @@ class SettingsDialog(QDialog):
         form.addWidget(
             _captioned(
                 self.font_family,
-                "Comma-separated; the first font installed on this system is used.",
+                "Blank uses the platform UI face. Otherwise, the first installed font is used.",
             ),
             row,
             1,
