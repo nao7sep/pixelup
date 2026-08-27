@@ -8,12 +8,15 @@ from collections.abc import Iterable
 from dataclasses import replace
 from itertools import count
 from pathlib import Path
+from typing import Literal
 
-from PySide6.QtCore import Qt, QTimer, QUrl, Slot
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (
     QCloseEvent,
     QDesktopServices,
     QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
     QDropEvent,
     QGuiApplication,
     QIcon,
@@ -140,10 +143,76 @@ _PARAMETERS_SAVE_DELAY_MS = 500
 _REVEAL_TIMEOUT_SECONDS = 5
 
 
-def local_file_paths(urls: Iterable[QUrl]) -> list[Path]:
-    """Literal regular-file paths offered by an external drag."""
-    paths = [absolute_user_path(Path(url.toLocalFile())) for url in urls if url.isLocalFile()]
-    return [path for path in paths if path.is_file()]
+def local_drop_paths(urls: Iterable[QUrl]) -> list[Path]:
+    """Every literal local path delivered by an external drag."""
+    return [absolute_user_path(Path(url.toLocalFile())) for url in urls if url.isLocalFile()]
+
+
+def has_local_drop_offer(urls: Iterable[QUrl]) -> bool:
+    """Whether hover metadata contains a local path, without touching the filesystem."""
+    return any(url.isLocalFile() for url in urls)
+
+
+class ImageDropTable(EmptyStateTableWidget):
+    """The image collection's native external-drop boundary and visible destination cue."""
+
+    paths_dropped = Signal(list)
+
+    def __init__(self, rows: int, columns: int, *, empty_text: str) -> None:
+        super().__init__(rows, columns, empty_text=empty_text)
+        self.setObjectName("imageDropReceiver")
+        self.setAcceptDrops(True)
+        self.setProperty("dropActive", False)
+        self.setStyleSheet(
+            'QTableWidget#imageDropReceiver[dropActive="true"] {'
+            " border: 3px solid palette(highlight);"
+            "}"
+        )
+        self._drop_lease = QTimer(self)
+        self._drop_lease.setSingleShot(True)
+        self._drop_lease.setInterval(1200)
+        self._drop_lease.timeout.connect(lambda: self._set_drop_active(False))
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        self._update_drag(event)
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        self._update_drag(event)
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._set_drop_active(False)
+        event.accept()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._set_drop_active(False)
+        paths = local_drop_paths(event.mimeData().urls())
+        if not paths:
+            event.ignore()
+            return
+        self.paths_dropped.emit(paths)
+        event.acceptProposedAction()
+
+    def hideEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        self._set_drop_active(False)
+        super().hideEvent(event)
+
+    def _update_drag(self, event: QDragEnterEvent | QDragMoveEvent) -> None:
+        active = has_local_drop_offer(event.mimeData().urls())
+        self._set_drop_active(active)
+        if active:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _set_drop_active(self, active: bool) -> None:
+        self._drop_lease.stop()
+        if self.property("dropActive") != active:
+            self.setProperty("dropActive", active)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.viewport().update()
+        if active:
+            self._drop_lease.start()
 
 
 def _fit_columns(widget: QWidget, *samples: str) -> int:
@@ -236,7 +305,6 @@ class MainWindow(QMainWindow):
         self._parameters_save_timer.timeout.connect(self._save_parameters)
 
         self.setWindowTitle("PixelUp")
-        self.setAcceptDrops(True)
         self._build_ui()
         self._bind_shortcuts()
         # Window minimum = the layout's content-based size hint: the central widget
@@ -330,41 +398,108 @@ class MainWindow(QMainWindow):
         if self._quit_when_workers_idle:
             QTimer.singleShot(0, self.close)
 
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if local_file_paths(event.mimeData().urls()):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        paths = local_file_paths(event.mimeData().urls())
-        if not paths:
-            event.ignore()
-            return
-        self.open_paths(paths)
-        event.acceptProposedAction()
-
     def open_paths(self, paths: list[Path]) -> None:
         log.info("open.requested", paths=[str(path) for path in paths])
         selected: Path | None = None
+        added: list[Path] = []
+        duplicates: list[Path] = []
+        rejected: list[tuple[Path, str, bool]] = []
         for path in paths:
-            input_path = absolute_user_path(path)
-            resolved = input_path.resolve()
-            if not resolved.is_file():
-                log.warning("open.ignored_non_file", path=str(path), resolved=str(resolved))
-                continue
-            if input_path not in self._images_by_path:
-                entry = ImageEntry(input_path, _safe_image_size(resolved))
-                self._images_by_path[input_path] = entry
-                self._image_order.append(input_path)
-                self._add_image_row(entry)
-                log.info("image.added", input=str(input_path), size=entry.input_size)
-            else:
-                log.info("image.focused_existing", input=str(input_path))
-            selected = input_path
+            try:
+                input_path = absolute_user_path(path)
+                resolved = input_path.resolve()
+                if resolved.is_dir():
+                    log.warning("open.ignored_directory", path=str(path), resolved=str(resolved))
+                    rejected.append((input_path, "folders are not supported", False))
+                    continue
+                if not resolved.is_file():
+                    log.warning("open.ignored_non_file", path=str(path), resolved=str(resolved))
+                    rejected.append((input_path, "the file is unavailable", False))
+                    continue
+                image_size = _safe_image_size(resolved)
+                if image_size is None:
+                    log.warning("open.ignored_non_image", path=str(path), resolved=str(resolved))
+                    rejected.append((input_path, "not a readable supported image", False))
+                    continue
+                if input_path not in self._images_by_path:
+                    entry = ImageEntry(input_path, image_size)
+                    self._images_by_path[input_path] = entry
+                    self._image_order.append(input_path)
+                    self._add_image_row(entry)
+                    log.info("image.added", input=str(input_path), size=entry.input_size)
+                    added.append(input_path)
+                else:
+                    log.info("image.focused_existing", input=str(input_path))
+                    duplicates.append(input_path)
+                selected = input_path
+            except Exception:  # noqa: BLE001 - one bad offer must not escape the UI event loop.
+                log.exception("open.failed", path=str(path))
+                rejected.append((path, "could not be read", True))
         if selected is not None:
             self._select_image(selected)
         self._update_action_buttons()
+        self._show_open_outcome(added, duplicates, rejected)
+
+    def _show_open_outcome(
+        self,
+        added: list[Path],
+        duplicates: list[Path],
+        rejected: list[tuple[Path, str, bool]],
+    ) -> None:
+        if rejected:
+            parts = []
+            if added:
+                parts.append(f"Added {len(added)} image{'s' if len(added) != 1 else ''}")
+            if duplicates:
+                parts.append(f"Already open: {', '.join(path.name for path in duplicates)}")
+            parts.extend(f"{path.name or path}: {reason}" for path, reason, _error in rejected)
+            self._set_open_result(
+                "Needs attention — " + "; ".join(parts) + ".",
+                severity="error" if any(error for _path, _reason, error in rejected) else "warning",
+                issue_paths=[*duplicates, *(path for path, _reason, _error in rejected)],
+            )
+        elif duplicates:
+            self._set_open_result(
+                "Already open: " + ", ".join(path.name for path in duplicates) + ".",
+                severity="information",
+                issue_paths=duplicates,
+            )
+        elif self._open_result_issue_paths and self._open_result_issue_paths.issubset(set(added)):
+            self._dismiss_open_result()
+
+    def _set_open_result(
+        self,
+        message: str,
+        *,
+        severity: Literal["information", "warning", "error"],
+        issue_paths: list[Path],
+    ) -> None:
+        self._open_result_issue_paths = frozenset(issue_paths)
+        self.open_result_label.setText(message)
+        self.open_result.setAccessibleName(message)
+        # Qt has no semantic danger palette role, so error red is explicit just
+        # like the app's destructive confirmation button.
+        border = (
+            "#c0392b"
+            if severity == "error"
+            else "palette(highlight)"
+            if severity == "warning"
+            else "palette(mid)"
+        )
+        self.open_result.setStyleSheet(
+            "QWidget#openResult {"
+            f" border: 1px solid {border};"
+            " border-radius: 5px;"
+            " background: palette(base);"
+            "}"
+        )
+        self.open_result.show()
+
+    def _dismiss_open_result(self) -> None:
+        self._open_result_issue_paths = frozenset()
+        self.open_result.hide()
+        self.open_result_label.clear()
+        self.open_result.setAccessibleName("")
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -425,11 +560,12 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
 
-        self.image_table = EmptyStateTableWidget(
+        self.image_table = ImageDropTable(
             0,
             3,
             empty_text="No images yet. Open images or drop them here.",
         )
+        self.image_table.paths_dropped.connect(self.open_paths)
         self.image_table.setHorizontalHeaderLabels(["Image", "Size", "Jobs"])
         self.image_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.image_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -450,6 +586,21 @@ class MainWindow(QMainWindow):
         self.image_table.setMinimumWidth(_NAME_MIN_WIDTH + size_width + jobs_width)
         self.image_table.setMinimumHeight(180)
         layout.addWidget(self.image_table, 1)
+
+        self.open_result = QWidget()
+        self._open_result_issue_paths: frozenset[Path] = frozenset()
+        self.open_result.setObjectName("openResult")
+        result_layout = QHBoxLayout(self.open_result)
+        result_layout.setContentsMargins(10, 7, 7, 7)
+        result_layout.setSpacing(10)
+        self.open_result_label = QLabel()
+        self.open_result_label.setWordWrap(True)
+        self.dismiss_open_result_button = QPushButton("Dismiss")
+        self.dismiss_open_result_button.clicked.connect(self._dismiss_open_result)
+        result_layout.addWidget(self.open_result_label, 1)
+        result_layout.addWidget(self.dismiss_open_result_button)
+        self.open_result.hide()
+        layout.addWidget(self.open_result)
 
         button_row = QWidget()
         button_layout = QHBoxLayout(button_row)

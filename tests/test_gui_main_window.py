@@ -168,28 +168,112 @@ def test_open_paths_preserves_literal_symlink_for_display_and_default_output(
 
 
 def test_external_drop_accepts_local_files_and_rejects_remote_urls(
-    make_window, tmp_path: Path
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window = make_window()
+    assert window.image_table.acceptDrops() is True
     local = _png(tmp_path, "local.png")
     remote_url = QUrl("https://example.com/remote.png")
     directory_url = QUrl.fromLocalFile(str(tmp_path))
+    missing = tmp_path / "missing.png"
+    non_image = tmp_path / "not-an-image.txt"
+    non_image.write_text("not image data", encoding="utf-8")
 
-    remote_drag = _DropEvent([remote_url, directory_url])
-    window.dragEnterEvent(remote_drag)  # type: ignore[arg-type]
+    assert "dragEnterEvent" not in MainWindow.__dict__
+    assert "dropEvent" not in MainWindow.__dict__
+
+    remote_drag = _DropEvent([remote_url])
+    window.image_table.dragEnterEvent(remote_drag)  # type: ignore[arg-type]
     assert remote_drag.ignored is True
     assert remote_drag.accepted is False
 
-    remote_drop = _DropEvent([remote_url, directory_url])
-    window.dropEvent(remote_drop)  # type: ignore[arg-type]
+    remote_drop = _DropEvent([remote_url])
+    window.image_table.dropEvent(remote_drop)  # type: ignore[arg-type]
     assert remote_drop.ignored is True
     assert window.image_table.rowCount() == 0
 
-    local_drop = _DropEvent([remote_url, QUrl.fromLocalFile(str(local))])
-    window.dragEnterEvent(local_drop)  # type: ignore[arg-type]
-    window.dropEvent(local_drop)  # type: ignore[arg-type]
+    local_drop = _DropEvent(
+        [
+            remote_url,
+            directory_url,
+            QUrl.fromLocalFile(str(missing)),
+            QUrl.fromLocalFile(str(non_image)),
+            QUrl.fromLocalFile(str(local)),
+        ]
+    )
+    original_is_file = Path.is_file
+
+    def fail_is_file(_path: Path) -> bool:
+        raise AssertionError("hover touched the filesystem")
+
+    monkeypatch.setattr(Path, "is_file", fail_is_file)
+    window.image_table.dragEnterEvent(local_drop)  # type: ignore[arg-type]
+    monkeypatch.setattr(Path, "is_file", original_is_file)
+    assert window.image_table.property("dropActive") is True
+    window.image_table.dropEvent(local_drop)  # type: ignore[arg-type]
     assert local_drop.accepted is True
     assert window._selected_path() == local
+    assert window.image_table.rowCount() == 1
+    assert window.image_table.property("dropActive") is False
+    assert window.open_result.isVisibleTo(window)
+    assert f"{tmp_path.name}: folders are not supported" in window.open_result_label.text()
+    assert "missing.png: the file is unavailable" in window.open_result_label.text()
+    assert "not-an-image.txt: not a readable supported image" in window.open_result_label.text()
+
+
+def test_open_duplicate_is_information_and_unrelated_success_does_not_clear_it(
+    make_window, tmp_path: Path
+) -> None:
+    window = make_window()
+    first = _png(tmp_path, "first.png")
+    second = _png(tmp_path, "second.png")
+
+    window.open_paths([first])
+    assert window.open_result.isHidden()
+
+    window.open_paths([first])
+    assert window.open_result_label.text() == "Already open: first.png."
+    assert window.open_result.isVisibleTo(window)
+
+    window.open_paths([second])
+    assert window.open_result_label.text() == "Already open: first.png."
+
+    window.dismiss_open_result_button.click()
+    assert window.open_result.isHidden()
+
+
+def test_exact_corrected_open_clears_the_previous_rejection(
+    make_window, tmp_path: Path
+) -> None:
+    window = make_window()
+    broken = tmp_path / "repair.png"
+    broken.write_text("not an image", encoding="utf-8")
+
+    window.open_paths([broken])
+    assert "not a readable supported image" in window.open_result_label.text()
+
+    _png(tmp_path, "repair.png")
+    another = _png(tmp_path, "another.png")
+    window.open_paths([broken, another])
+
+    assert window.image_table.rowCount() == 2
+    assert window.open_result.isHidden()
+
+
+def test_unexpected_open_failure_uses_error_presentation(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "failure.png")
+
+    def fail_path(_path: Path) -> Path:
+        raise OSError("denied")
+
+    monkeypatch.setattr("pixelup.gui.absolute_user_path", fail_path)
+    window.open_paths([image])
+
+    assert "could not be read" in window.open_result_label.text()
+    assert "#c0392b" in window.open_result.styleSheet()
 
 
 def test_shortcuts_help_chords_open_the_catalogue(
