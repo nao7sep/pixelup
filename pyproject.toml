@@ -37,7 +37,7 @@ dependencies = [
 dev = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "ruff==0.16.3",
+  "ruff==0.16.4",
 ]
 # Packaging-only: the freezer that builds the double-click .app/.exe. Kept out of the
 # runtime deps (test_packaging.py pins those) and out of dev so a normal test/dev sync
