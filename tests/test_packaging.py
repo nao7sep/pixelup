@@ -67,3 +67,29 @@ def test_spec_derives_bundle_version_from_pyproject_ssot() -> None:
         "version"
     ]
     assert version not in spec
+
+
+def test_macos_bundle_finalization_is_shared_by_package_and_rebuild() -> None:
+    package = Path("scripts/package.sh").read_text(encoding="utf-8")
+    rebuild = Path("scripts/rebuild.command").read_text(encoding="utf-8")
+    finalizer = Path("scripts/finalize-macos-bundle.sh").read_text(encoding="utf-8")
+
+    invocation = '"$SCRIPT_DIR/finalize-macos-bundle.sh"'
+    assert invocation in package
+    assert invocation in rebuild
+    assert 'CAR="$REPO_DIR/build/Assets.car"' in finalizer
+    assert 'cp "$CAR" "$APP_BUNDLE/Contents/Resources/Assets.car"' in finalizer
+    assert 'codesign --force --deep --sign - "$APP_BUNDLE"' in finalizer
+
+
+def test_frozen_runtime_resources_include_only_the_windows_icon() -> None:
+    spec = Path("pixelup.spec").read_text(encoding="utf-8")
+
+    assert '("src/pixelup/resources/icon-win.png", "pixelup/resources")' in spec
+    assert '("src/pixelup/resources/icon.png", "pixelup/resources")' not in spec
+
+
+def test_windows_installer_embeds_the_canonical_app_icon() -> None:
+    installer = Path("scripts/pixelup.iss").read_text(encoding="utf-8")
+
+    assert "SetupIconFile=build\\icon.ico" in installer

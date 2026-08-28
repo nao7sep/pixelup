@@ -7,7 +7,8 @@ name: Release
 # release for inspection before publishing. Nothing is published automatically.
 #
 #   - push a tag `v*` -> test, build both OSes, attach the artifacts to a draft for that tag.
-#   - manual dispatch -> test + build only (no release), a smoke check.
+#   - manual dispatch -> test + build + private one-day artifacts (no release),
+#     so the exact packages can be downloaded and inspected.
 #
 # Python is pinned to 3.12 (the developed/run-on version): setup-uv defaults to the
 # newest Python (3.14), on which the transitive basicsr 1.4.2 (via realesrgan) fails
@@ -69,6 +70,19 @@ jobs:
         if: runner.os == 'Windows'
         run: ./scripts/package.ps1
         shell: pwsh
+
+      - name: Upload private validation artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pixelup-${{ runner.os }}-${{ github.sha }}
+          path: |
+            dist/*.dmg
+            dist/*-setup.exe
+            dist/*-mac.zip
+            dist/*-win.zip
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Attach to draft release
         if: github.ref_type == 'tag'

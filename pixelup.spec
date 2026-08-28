@@ -36,10 +36,9 @@ _VERSION = tomllib.loads(
     (Path(SPECPATH) / "pyproject.toml").read_text(encoding="utf-8")
 )["project"]["version"]
 
-# The app selects the Windows or Mac window-icon geometry at runtime. Keep both
-# beside the frozen module so the same spec remains cross-platform.
+# Windows shell surfaces use a runtime icon. macOS takes its Dock icon from the
+# bundle's .icns/Assets.car pair and must not receive a Qt application icon.
 datas = [
-    ("src/pixelup/resources/icon.png", "pixelup/resources"),
     ("src/pixelup/resources/icon-win.png", "pixelup/resources"),
 ]
 binaries = []
@@ -122,9 +121,9 @@ if is_mac:
             "NSHighResolutionCapable": True,
             # Dual-key icon: CFBundleIconFile (the classic .icns, set by icon= above) is read by
             # macOS < 26; CFBundleIconName points macOS 26 (Tahoe) at the Liquid Glass Assets.car
-            # that package.sh copies into Contents/Resources/ after the freeze (see the
-            # liquid-glass-icon-workflow). The catalog is generated from company/assets by
-            # company/tools/liquid-glass-icon/apps/pixelup.mjs.
+            # that the shared macOS bundle finalizer copies into Contents/Resources/ after
+            # the freeze (see the liquid-glass-icon-workflow). The catalog is generated from
+            # company/assets by company/tools/liquid-glass-icon/apps/pixelup.mjs.
             "CFBundleIconName": "pixel-butterfly-paper",
             # No document types / URL schemes; PixelUp takes image paths as argv.
         },
