@@ -91,6 +91,14 @@ class _DropEvent:
         self.ignored = True
 
 
+class _LeaveEvent:
+    def __init__(self) -> None:
+        self.accepted = False
+
+    def accept(self) -> None:
+        self.accepted = True
+
+
 def test_build_app_wires_application_and_opens_argv_paths(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -256,6 +264,20 @@ def test_external_drop_accepts_local_files_and_rejects_remote_urls(
     assert f"{tmp_path.name}: folders are not supported" in window.open_result_label.text()
     assert "missing.png: the file is unavailable" in window.open_result_label.text()
     assert "not-an-image.txt: not a readable supported image" in window.open_result_label.text()
+
+
+def test_external_drag_leave_clears_receiver_presentation(make_window, tmp_path: Path) -> None:
+    window = make_window()
+    drag = _DropEvent([QUrl.fromLocalFile(str(_png(tmp_path, "leave.png")))])
+
+    window.image_table.dragEnterEvent(drag)  # type: ignore[arg-type]
+    assert window.image_table.property("dropActive") is True
+
+    leave = _LeaveEvent()
+    window.image_table.dragLeaveEvent(leave)  # type: ignore[arg-type]
+
+    assert leave.accepted is True
+    assert window.image_table.property("dropActive") is False
 
 
 def test_open_duplicate_is_information_and_unrelated_success_does_not_clear_it(

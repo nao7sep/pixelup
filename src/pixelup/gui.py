@@ -168,10 +168,6 @@ class ImageDropTable(EmptyStateTableWidget):
             " border: 3px solid palette(highlight);"
             "}"
         )
-        self._drop_lease = QTimer(self)
-        self._drop_lease.setSingleShot(True)
-        self._drop_lease.setInterval(1200)
-        self._drop_lease.timeout.connect(lambda: self._set_drop_active(False))
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         self._update_drag(event)
@@ -205,14 +201,11 @@ class ImageDropTable(EmptyStateTableWidget):
             event.ignore()
 
     def _set_drop_active(self, active: bool) -> None:
-        self._drop_lease.stop()
         if self.property("dropActive") != active:
             self.setProperty("dropActive", active)
             self.style().unpolish(self)
             self.style().polish(self)
             self.viewport().update()
-        if active:
-            self._drop_lease.start()
 
 
 def _fit_columns(widget: QWidget, *samples: str) -> int:
