@@ -122,6 +122,43 @@ def test_build_app_wires_application_and_opens_argv_paths(
         qapp.processEvents()
 
 
+@pytest.mark.parametrize(
+    ("platform", "expected_icon"),
+    [("darwin", None), ("win32", "icon-win.png")],
+)
+def test_build_app_assigns_runtime_icon_only_on_windows(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    expected_icon: str | None,
+) -> None:
+    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
+    monkeypatch.setattr(gui.sys, "platform", platform)
+    assigned_icons: list[str] = []
+    monkeypatch.setattr(gui, "QIcon", lambda path: path)
+    monkeypatch.setattr(qapp, "setWindowIcon", assigned_icons.append)
+    runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models", temp_dir=tmp_path / "temp")
+
+    _, window = gui.build_app(
+        ["pixelup"],
+        log_file=tmp_path / "logs" / "session.log",
+        runtime_dirs=runtime_dirs,
+    )
+    try:
+        if expected_icon is None:
+            assert assigned_icons == []
+        else:
+            assert len(assigned_icons) == 1
+            assert Path(assigned_icons[0]).name == expected_icon
+    finally:
+        window._session_shutdown = True
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
 def test_open_paths_adds_unique_rows_and_focuses_existing(
     make_window, tmp_path: Path
 ) -> None:
