@@ -44,6 +44,9 @@ rm -rf "$REPO_DIR/dist" "$REPO_DIR/build-pyinstaller"
 log_step "Freezing PixelUp.app (uv installs the build deps, then PyInstaller runs)"
 uv run --extra build pyinstaller pixelup.spec --workpath build-pyinstaller --distpath dist --noconfirm
 
+log_step "Finalizing the macOS bundle"
+"$SCRIPT_DIR/finalize-macos-bundle.sh" "$APP_BUNDLE"
+
 # Fail fast if freezing dropped a lazily-imported dependency (see gui._selftest),
 # rather than launching a bundle that crashes only on first upscale.
 log_step "Self-testing the frozen bundle"
