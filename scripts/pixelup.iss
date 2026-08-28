@@ -21,6 +21,7 @@ DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExe}
 OutputDir=dist
 OutputBaseFilename=pixelup-{#MyAppVersion}-setup
+SetupIconFile=build\icon.ico
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible

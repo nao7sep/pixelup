@@ -87,3 +87,9 @@ def test_frozen_runtime_resources_include_only_the_windows_icon() -> None:
 
     assert '("src/pixelup/resources/icon-win.png", "pixelup/resources")' in spec
     assert '("src/pixelup/resources/icon.png", "pixelup/resources")' not in spec
+
+
+def test_windows_installer_embeds_the_canonical_app_icon() -> None:
+    installer = Path("scripts/pixelup.iss").read_text(encoding="utf-8")
+
+    assert "SetupIconFile=build\\icon.ico" in installer
