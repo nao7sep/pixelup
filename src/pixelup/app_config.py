@@ -47,7 +47,7 @@ MAX_CONCURRENT_JOBS = 8
 class AppConfig:
     """Everything PixelUp persists in ``config.json``.
 
-    Two kinds of thing, one home each. The three scalars are the Settings modal's
+    Two kinds of thing, one home each. The two scalars are the Settings modal's
     whole content — what the main window does not show. ``parameters`` is the main
     window's Parameters panel, persisted whole: the panel is the only place those
     values are edited, and ``JobSettings()`` is the only place their built-in
@@ -55,11 +55,6 @@ class AppConfig:
     """
 
     max_concurrent_jobs: int = MIN_CONCURRENT_JOBS
-    # Off by default: nothing downloads without the user turning it on (the
-    # managed-runtime-dependencies-conventions' nothing-automatic rule). A job
-    # whose model is missing fails with a message naming this setting, so the
-    # way in is shown at the moment it is needed.
-    auto_download: bool = False
     font_family: str = DEFAULT_UI_FONT_FAMILY
     parameters: JobSettings = field(default_factory=JobSettings)
 
@@ -173,7 +168,6 @@ def _decode_app_config(value: Any) -> AppConfig:
             MIN_CONCURRENT_JOBS,
             MAX_CONCURRENT_JOBS,
         ),
-        auto_download=_optional_bool(data, "auto_download", defaults.auto_download),
         font_family=_optional_font_family(data, defaults.font_family),
         parameters=(
             _decode_parameters(data["parameters"])
@@ -303,7 +297,6 @@ def _optional_font_family(data: dict[str, Any], default: str) -> str:
 
 def _to_json(config: AppConfig) -> dict[str, Any]:
     return {
-        "auto_download": config.auto_download,
         "font_family": config.font_family,
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "parameters": _parameters_to_json(config.parameters),
@@ -328,7 +321,6 @@ def _parameters_to_json(parameters: JobSettings) -> dict[str, Any]:
 def config_log_payload(config: AppConfig) -> dict[str, object]:
     return {
         "max_concurrent_jobs": config.max_concurrent_jobs,
-        "auto_download": config.auto_download,
         "font_family": config.font_family,
         "parameters": job_settings_log_payload(config.parameters),
     }

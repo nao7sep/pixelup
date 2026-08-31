@@ -190,6 +190,62 @@ def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path
     assert target.read_bytes() == b"whatever is already on disk"
 
 
+def test_forced_download_replaces_present_file_only_after_verification(tmp_path: Path) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    target = models_dir / "local-model.pth"
+    target.write_bytes(b"old verified model")
+    source = tmp_path / "source.pth"
+    source.write_bytes(b"new verified model")
+    info = ModelInfo(
+        "local-model",
+        target.name,
+        source.resolve().as_uri(),
+        expected_size=source.stat().st_size,
+        checksum_sha256=_sha256_hex(source.read_bytes()),
+    )
+
+    result = download_model_info(
+        models_dir,
+        info,
+        download_timeout=10,
+        lock_timeout=1,
+        force=True,
+    )
+
+    assert result["status"] == "downloaded"
+    assert target.read_bytes() == b"new verified model"
+
+
+def test_failed_forced_download_preserves_the_present_file(tmp_path: Path) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    target = models_dir / "local-model.pth"
+    target.write_bytes(b"old verified model")
+    source = tmp_path / "source.pth"
+    source.write_bytes(b"untrusted replacement")
+    info = ModelInfo(
+        "local-model",
+        target.name,
+        source.resolve().as_uri(),
+        expected_size=source.stat().st_size,
+        checksum_sha256=_sha256_hex(b"different trusted bytes"),
+    )
+
+    with pytest.raises(PixelupError) as excinfo:
+        download_model_info(
+            models_dir,
+            info,
+            download_timeout=10,
+            lock_timeout=1,
+            force=True,
+        )
+
+    assert excinfo.value.code == "model_corrupt"
+    assert target.read_bytes() == b"old verified model"
+    assert not list(models_dir.glob("*.tmp"))
+
+
 def test_download_model_info_does_not_require_lock_directory_for_present_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

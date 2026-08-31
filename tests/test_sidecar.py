@@ -42,8 +42,6 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
             strip_metadata=False,
             target_profile=None,
             overwrite=False,
-            auto_download=True,
-            download_timeout=600,
             lock_timeout=600,
         ),
         result={

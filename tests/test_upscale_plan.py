@@ -17,7 +17,6 @@ def options(
     tile: int = 0,
     scale: int = 4,
     output_format: OutputFormat | None = OutputFormat.PNG,
-    auto_download: bool = False,
     face_enhance: bool = False,
 ) -> UpscaleOptions:
     return UpscaleOptions(
@@ -40,8 +39,6 @@ def options(
         strip_metadata=False,
         target_profile=None,
         overwrite=False,
-        auto_download=auto_download,
-        download_timeout=600,
         lock_timeout=600,
     )
 
@@ -185,7 +182,7 @@ def test_run_upscale_calls_inference_and_writes_output(
     assert ("progress", "encode") in events
 
 
-def test_run_upscale_without_auto_download_errors_on_missing_model(tmp_path: Path) -> None:
+def test_run_upscale_errors_on_missing_model(tmp_path: Path) -> None:
     from pixelup.upscale import run_upscale
 
     input_path = tmp_path / "input.png"

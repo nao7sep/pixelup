@@ -17,6 +17,8 @@ from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_ap
 from pixelup.errors import ErrorCode
 from pixelup.gui import MainWindow
 from pixelup.jobs import JobSettings
+from pixelup.model_registry import ALL_MODELS
+from pixelup.models import model_file
 from pixelup.parameters import DEFAULT_SCALE, TILE_VALUES
 from pixelup.paths import absolute_user_path
 from pixelup.runner import JobRunner
@@ -56,7 +58,15 @@ def make_window(
     created: list[MainWindow] = []
 
     def _make() -> MainWindow:
-        window = MainWindow(log_file=log_file)
+        models_dir = tmp_path / "home" / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        for info in ALL_MODELS:
+            (models_dir / info.filename).write_bytes(b"ready")
+        runtime_dirs = SimpleNamespace(
+            models_dir=models_dir,
+            temp_dir=tmp_path / "home" / "temp",
+        )
+        window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
         created.append(window)
         return window
 
@@ -121,6 +131,7 @@ def test_build_app_wires_application_and_opens_argv_paths(
         assert app is qapp  # reuses the running QApplication rather than constructing a second
         assert app.applicationName() == "PixelUp"
         assert window.windowTitle() == "PixelUp"
+        assert window.runtime_dirs is runtime_dirs
         # The image path on the command line was opened into the window.
         assert window.image_table.rowCount() == 1
         assert window._selected_path() == image.resolve()
@@ -577,10 +588,8 @@ def test_action_buttons_reflect_state(make_window, tmp_path: Path) -> None:
 
 
 def test_settings_only_options_have_no_main_window_control(make_window) -> None:
-    # One home per thing, checked from the other side. auto_download and
-    # max_concurrent_jobs are the settings dialog's; a control for either here would
-    # rebuild the exact half-persisted/half-transient split this design removed. The
-    # Models group is model *selection* only — no download toggle rides along in it.
+    # One home per thing, checked from the other side. max_concurrent_jobs is the
+    # settings dialog's; model acquisition belongs to Managed models, not to a toggle.
     window = make_window()
 
     assert set(window.model_checks) == set(gui.UPSCALE_MODELS)
@@ -589,6 +598,110 @@ def test_settings_only_options_have_no_main_window_control(make_window) -> None:
     # The window reads both from config and never offers a widget onto them.
     assert not hasattr(window, "auto_download")
     assert not hasattr(window, "concurrent")
+    assert window.manage_models_button.text() == "Managed models (10/10 ready)"
+
+
+def test_missing_models_cancel_before_queue_materialization(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    for name in ("realesr-general-x4v3", "realesr-general-wdn-x4v3"):
+        model_file(window.runtime_dirs.models_dir, name).unlink()
+    opened: list[tuple[tuple[str, ...], int]] = []
+
+    class RejectInstall:
+        def __init__(
+            self,
+            _models_dir: Path,
+            _parent: object,
+            *,
+            required_artifacts: tuple[str, ...],
+            pending_job_count: int,
+        ) -> None:
+            opened.append((required_artifacts, pending_job_count))
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr("pixelup.gui.ManagedModelsDialog", RejectInstall)
+
+    window._queue_selected_image()
+
+    assert opened == [(("realesr-general-x4v3", "realesr-general-wdn-x4v3"), 1)]
+    assert window.jobs == []
+    assert window.queue_table.rowCount() == 0
+
+
+def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    required = ("realesr-general-x4v3", "realesr-general-wdn-x4v3")
+    for name in required:
+        model_file(window.runtime_dirs.models_dir, name).unlink()
+
+    class AcceptInstall:
+        def __init__(
+            self,
+            models_dir: Path,
+            _parent: object,
+            *,
+            required_artifacts: tuple[str, ...],
+            pending_job_count: int,
+        ) -> None:
+            assert required_artifacts == required
+            assert pending_job_count == 1
+            self.models_dir = models_dir
+
+        def exec(self) -> QDialog.DialogCode:
+            for name in required:
+                target = model_file(self.models_dir, name)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"ready")
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr("pixelup.gui.ManagedModelsDialog", AcceptInstall)
+
+    window._queue_selected_image()
+
+    assert len(window.jobs) == 1
+    assert window.queue_table.rowCount() == 1
+    assert window.manage_models_button.text() == "Managed models (10/10 ready)"
+
+
+def test_retry_stays_failed_when_model_install_is_cancelled(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["RealESRGAN_x4plus"].setChecked(True)
+    window._queue_selected_image()
+    job = window.jobs[0]
+    job.status = "failed"
+    job.message = "Model was removed"
+    window._update_job(job)
+    model_file(window.runtime_dirs.models_dir, job.model).unlink()
+
+    class RejectInstall:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr("pixelup.gui.ManagedModelsDialog", RejectInstall)
+
+    window._retry_failed()
+
+    assert job.status == "failed"
+    assert job.message == "Model was removed"
 
 
 def test_reveal_log_file_survives_failure(

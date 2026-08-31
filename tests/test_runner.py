@@ -14,21 +14,11 @@ from pixelup.output_reservation import PublishedFile
 from pixelup.runner import (
     JobRunner,
     JobWorker,
-    _download_text,
     _progress_text,
     _tile_progress_text,
     failure_message,
 )
 from pixelup.session_log import configure_session_logging
-
-
-def test_download_text_with_total_shows_percentage() -> None:
-    assert _download_text("RealESRGAN_x4plus", 1, 4) == "25% - downloading RealESRGAN_x4plus"
-
-
-def test_download_text_without_total_shows_plain_message() -> None:
-    assert _download_text("modelx", 0, None) == "Downloading modelx"
-    assert _download_text("modelx", 0, 0) == "Downloading modelx"
 
 
 def test_progress_text_maps_known_phases() -> None:
@@ -63,7 +53,6 @@ def _make_job(job_id: int, tmp_path: Path) -> Job:
         model="realesr-general-x4v3",
         output_path=tmp_path / f"out-{job_id}.png",
         settings=JobSettings(),
-        auto_download=False,
     )
 
 
@@ -170,17 +159,16 @@ def test_shutdown_cancels_pending_jobs_and_never_reschedules_them(
 
 
 def test_failure_message_carries_the_hint_when_there_is_one() -> None:
-    # The queue row is the only surface a failed job gets, so the remedy — e.g.
-    # the Settings toggle that fixes a missing model — must ride along with the
-    # diagnosis rather than existing only in the log.
+    # The queue row is the only surface a failed processing job gets, so the remedy
+    # must ride along with the diagnosis rather than existing only in the log.
     with_hint = PixelupError(
         ErrorCode.MODEL_NOT_FOUND,
         "Model 'x4plus' is not present in the models directory.",
-        hint="Turn on \u201cDownload missing models automatically\u201d in Settings.",
+        hint="Open Managed models to install it.",
     )
     assert failure_message(with_hint) == (
         "Model 'x4plus' is not present in the models directory. "
-        "Turn on \u201cDownload missing models automatically\u201d in Settings."
+        "Open Managed models to install it."
     )
 
     bare = PixelupError(ErrorCode.OUT_OF_MEMORY, "Ran out of memory.")
@@ -638,7 +626,7 @@ def test_worker_run_unexpected_error_is_wrapped(
     assert finished == [(job.id, False, "Unexpected error: boom", {}, [])]
 
 
-def test_worker_run_forwards_progress_phases_as_text(
+def test_worker_run_forwards_processing_progress_as_text(
     qapp: QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -649,7 +637,6 @@ def test_worker_run_forwards_progress_phases_as_text(
     def fake_upscale(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
         kwargs["on_progress"]("upscale")  # type: ignore[operator]
         kwargs["on_tile"](1, 4)  # type: ignore[operator]
-        kwargs["on_download"]("RealESRGAN_x4plus", 1, 4)  # type: ignore[operator]
         kwargs["on_output_published"](_publish_fixture(job.output_path, b"image"))  # type: ignore[operator]
         return {"ok": True, "output": getattr(options, "output_arg", "")}
 
@@ -665,7 +652,6 @@ def test_worker_run_forwards_progress_phases_as_text(
 
     assert (job.id, "Upscaling") in progress
     assert (job.id, "1/4 tiles processed") in progress
-    assert (job.id, "25% - downloading RealESRGAN_x4plus") in progress
 
 
 def test_worker_request_cancel_sets_the_should_cancel_flag(

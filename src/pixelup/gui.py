@@ -74,6 +74,7 @@ from pixelup.jobs import (
     job_status_summary,
     retry_failed_jobs,
 )
+from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.message_dialogs import (
     show_startup_failure,
     warn_config_reset,
@@ -83,7 +84,12 @@ from pixelup.message_dialogs import (
     warn_no_images,
     warn_no_models,
 )
-from pixelup.model_registry import KNOWN_MODELS
+from pixelup.model_management import (
+    UPSCALE_MODELS,
+    missing_artifact_names,
+    ready_artifact_count,
+    required_artifact_names,
+)
 from pixelup.parameters import (
     ALPHA_MODE_CHOICES,
     DEFAULT_SCALE,
@@ -116,18 +122,6 @@ from pixelup.widgets import (
     device_combo,
     output_format_combo,
 )
-
-MODEL_ORDER = (
-    "realesr-general-x4v3",
-    "RealESRGAN_x4plus",
-    "RealESRNet_x4plus",
-    "RealESRGAN_x2plus",
-    "RealESRGAN_x4plus_anime_6B",
-    "realesr-animevideov3",
-)
-KNOWN_MODEL_NAMES = {model.name for model in KNOWN_MODELS}
-UPSCALE_MODELS = tuple(name for name in MODEL_ORDER if name in KNOWN_MODEL_NAMES)
-
 
 # Horizontal slack added to a measured string so cell text never touches the
 # column edges (covers Qt's default cell margins plus a little breathing room).
@@ -283,7 +277,7 @@ class ImagePreview(QLabel):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, *, log_file: Path) -> None:
+    def __init__(self, *, log_file: Path, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
         # Create config.json from the built-in defaults on first run so the settings file exists
         # on disk immediately, not only after the first save (storage-path conventions).
@@ -303,6 +297,7 @@ class MainWindow(QMainWindow):
         # wide, so this is the single place the UI font is established.
         apply_ui_font(QApplication.instance(), self.config.font_family)
         self.log_file = log_file
+        self.runtime_dirs = runtime_dirs or resolve_runtime_dirs()
         self._job_ids = count(1)
         self._images_by_path: dict[Path, ImageEntry] = {}
         self._image_order: list[Path] = []
@@ -310,7 +305,7 @@ class MainWindow(QMainWindow):
         self._queue_rows: dict[int, int] = {}
         self._queue_failure_count = 0
         self.jobs: list[Job] = []
-        self.runner = JobRunner(self.jobs, self)
+        self.runner = JobRunner(self.jobs, self, runtime_dirs=self.runtime_dirs)
         self.runner.progress.connect(self._job_progress)
         self.runner.finished.connect(self._job_finished)
         self.runner.idle.connect(self._close_when_workers_stop)
@@ -677,6 +672,14 @@ class MainWindow(QMainWindow):
             checkbox.toggled.connect(self._update_action_buttons)
             self.model_checks[model] = checkbox
             layout.addWidget(checkbox)
+        self.manage_models_button = QPushButton()
+        self.manage_models_button.setText("Managed models (10/10 ready)")
+        self.manage_models_button.setMinimumWidth(
+            self.manage_models_button.sizeHint().width()
+        )
+        self.manage_models_button.clicked.connect(self._managed_models_dialog)
+        layout.addWidget(self.manage_models_button)
+        self._refresh_model_rollup()
         layout.addStretch()
         return group
 
@@ -862,7 +865,7 @@ class MainWindow(QMainWindow):
 
     def _fit_queue_table_columns(self) -> None:
         header = self.queue_table.horizontalHeader()
-        model_width = _fit_columns(self.queue_table, "Model", max(MODEL_ORDER, key=len))
+        model_width = _fit_columns(self.queue_table, "Model", max(UPSCALE_MODELS, key=len))
         scale_width = _fit_columns(self.queue_table, "Scale", "4x")
         status_width = _fit_columns(self.queue_table, "Status", "Cancelling...")
         header.resizeSection(0, _NAME_MIN_WIDTH)
@@ -919,6 +922,19 @@ class MainWindow(QMainWindow):
             self.runner.schedule(self.config.max_concurrent_jobs)
             return
         log.info("settings.dialog_cancelled")
+
+    def _managed_models_dialog(self) -> None:
+        log.info("models.dialog_opened")
+        ManagedModelsDialog(self.runtime_dirs.models_dir, self).exec()
+        self._refresh_model_rollup()
+        log.info("models.dialog_closed")
+
+    def _refresh_model_rollup(self) -> None:
+        ready, total = ready_artifact_count(self.runtime_dirs.models_dir)
+        self.manage_models_button.setText(f"Managed models ({ready}/{total} ready)")
+        self.manage_models_button.setAccessibleName(
+            f"Managed models, {ready} of {total} model files ready"
+        )
 
     def _parameters_help_dialog(self) -> None:
         log.info("parameters_help.dialog_opened")
@@ -1139,12 +1155,19 @@ class MainWindow(QMainWindow):
         # The enqueue snapshot: the panel captured whole, scale included, at the moment
         # the user pressed the button. Later panel edits do not reach these jobs.
         settings = self.current_job_settings()
+        required = required_artifact_names(
+            models,
+            face_enhance=settings.face_enhance,
+            denoise_strength=settings.denoise_strength,
+        )
+        pending_job_count = len(input_paths) * len(models)
+        if not self._ensure_models_ready(required, pending_job_count=pending_job_count):
+            return
         new_jobs = create_jobs(
             input_paths=input_paths,
             models=models,
             settings=settings,
             existing_jobs=self.jobs,
-            auto_download=self.config.auto_download,
             job_ids=self._job_ids,
         )
         log.info(
@@ -1152,7 +1175,6 @@ class MainWindow(QMainWindow):
             inputs=[str(path) for path in input_paths],
             models=models,
             settings=job_settings_log_payload(settings),
-            auto_download=self.config.auto_download,
         )
         for job in new_jobs:
             log.debug("job.queued", job_id=job.id, details=job_log_payload(job))
@@ -1161,6 +1183,27 @@ class MainWindow(QMainWindow):
         self._refresh_image_job_summaries()
         self._update_action_buttons()
         self.runner.schedule(self.config.max_concurrent_jobs)
+
+    def _ensure_models_ready(
+        self,
+        artifact_names: tuple[str, ...],
+        *,
+        pending_job_count: int,
+    ) -> bool:
+        missing = missing_artifact_names(self.runtime_dirs.models_dir, artifact_names)
+        if not missing:
+            return True
+        dialog = ManagedModelsDialog(
+            self.runtime_dirs.models_dir,
+            self,
+            required_artifacts=missing,
+            pending_job_count=pending_job_count,
+        )
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self._refresh_model_rollup()
+        return accepted and not missing_artifact_names(
+            self.runtime_dirs.models_dir, artifact_names
+        )
 
     def _add_queue_rows(self, jobs: list[Job]) -> None:
         for job in jobs:
@@ -1204,6 +1247,22 @@ class MainWindow(QMainWindow):
         self._update_action_buttons()
 
     def _retry_failed(self) -> None:
+        failed_jobs = [job for job in self.jobs if job.status == "failed"]
+        required = tuple(
+            dict.fromkeys(
+                artifact
+                for job in failed_jobs
+                for artifact in required_artifact_names(
+                    (job.model,),
+                    face_enhance=job.settings.face_enhance,
+                    denoise_strength=job.settings.denoise_strength,
+                )
+            )
+        )
+        if required and not self._ensure_models_ready(
+            required, pending_job_count=len(failed_jobs)
+        ):
+            return
         retried_jobs = retry_failed_jobs(self.jobs)
         retried = set(retried_jobs)
         for job in self.jobs:
@@ -1445,7 +1504,7 @@ def build_app(
         argv=argv[1:],
     )
 
-    window = MainWindow(log_file=resolved_log_file)
+    window = MainWindow(log_file=resolved_log_file, runtime_dirs=resolved_runtime_dirs)
     window.show()
     paths = [Path(arg) for arg in argv[1:] if not arg.startswith("-")]
     if paths:

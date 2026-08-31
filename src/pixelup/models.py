@@ -69,8 +69,8 @@ def require_model_present(
             ErrorCode.MODEL_NOT_FOUND,
             f"Model '{name}' is not present in the models directory.",
             hint=(
-                "Turn on “Download missing models automatically” in Settings, "
-                "or place the .pth file in the models directory."
+                "Open Managed models to install it, or place the .pth file in the "
+                "models directory."
             ),
             details={"model": name, "models_dir": str(models_dir), "path": str(path)},
         )
@@ -82,6 +82,14 @@ def require_model_present(
     return path
 
 
+def model_is_ready(models_dir: Path, name: str) -> bool:
+    """Whether the artifact-local cache has a usable non-empty model file."""
+    try:
+        return _model_file_present(model_file(models_dir, name))
+    except OSError:
+        return False
+
+
 def download_model(
     models_dir: Path,
     name: str,
@@ -91,6 +99,7 @@ def download_model(
     on_download: DownloadCallback | None = None,
     on_waiting: WaitingCallback | None = None,
     should_cancel: CancelCheck | None = None,
+    force: bool = False,
 ) -> dict[str, object]:
     info = known_model(name)
     if info is None or info.url is None:
@@ -107,6 +116,7 @@ def download_model(
         on_download=on_download,
         on_waiting=on_waiting,
         should_cancel=should_cancel,
+        force=force,
     )
 
 
@@ -119,6 +129,7 @@ def download_model_info(
     on_download: DownloadCallback | None = None,
     on_waiting: WaitingCallback | None = None,
     should_cancel: CancelCheck | None = None,
+    force: bool = False,
 ) -> dict[str, object]:
     if download_timeout <= 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Download timeout must be positive.")
@@ -140,7 +151,7 @@ def download_model_info(
             details={"models_dir": str(models_dir), "reason": str(exc)},
         ) from exc
     target = models_dir / info.filename
-    if _model_file_present(target):
+    if not force and _model_file_present(target):
         return _download_result(info, target, "present")
 
     locks_dir = models_dir / ".locks"
@@ -156,7 +167,7 @@ def download_model_info(
     lock = FileLock(str(locks_dir / f"{_lock_name(info.name)}.lock"))
     _acquire_download_lock(lock, info.name, lock_timeout, on_waiting, should_cancel)
     try:
-        if _model_file_present(target):
+        if not force and _model_file_present(target):
             return _download_result(info, target, "present")
         acquisition_timeout = _acquisition_timeout_seconds(info, download_timeout)
         deadline = time.monotonic() + acquisition_timeout

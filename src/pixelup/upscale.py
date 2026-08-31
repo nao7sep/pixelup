@@ -18,13 +18,8 @@ from pixelup.imaging import (
     save_output_image,
 )
 from pixelup.inference import InferenceConfig, model_architecture_spec, run_inference
-from pixelup.models import (
-    DownloadCallback,
-    WaitingCallback,
-    download_model,
-    known_model,
-    require_model_present,
-)
+from pixelup.model_management import required_artifact_names
+from pixelup.models import require_model_present
 from pixelup.parameters import (
     ALPHA_MODE_VALUES,
     MAX_DENOISE_STRENGTH,
@@ -72,27 +67,7 @@ class UpscaleOptions:
     strip_metadata: bool
     target_profile: str | None
     overwrite: bool
-    auto_download: bool
-    download_timeout: int
     lock_timeout: int
-
-
-GENERAL_DENOISE_MODEL = "realesr-general-x4v3"
-DENOISE_NEUTRAL = 1.0
-
-
-def model_supports_denoise(model: str) -> bool:
-    """Denoise strength blends in the separately-trained wdn weights, which exist only for the
-    general x4v3 model; every other architecture ignores it."""
-    return model == GENERAL_DENOISE_MODEL
-
-
-def effective_denoise_strength(model: str, denoise_strength: float) -> float:
-    """The denoise strength a model will actually act on: the caller's value for the general model,
-    the neutral ``DENOISE_NEUTRAL`` (no wdn blend) for every other model. Normalizing a non-neutral
-    value on a model that ignores denoise — rather than rejecting it — keeps a leftover slider value
-    harmless for a direct caller, the same coercion the GUI already applies per model."""
-    return denoise_strength if model_supports_denoise(model) else DENOISE_NEUTRAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,8 +138,6 @@ def run_upscale(
     options: UpscaleOptions,
     runtime_dirs: RuntimeDirs,
     *,
-    on_download: DownloadCallback | None = None,
-    on_waiting: WaitingCallback | None = None,
     on_start: StartCallback | None = None,
     on_progress: ProgressCallback | None = None,
     on_warning: WarningCallback | None = None,
@@ -176,7 +149,7 @@ def run_upscale(
     plan = build_plan(
         options,
         runtime_dirs,
-        check_model=not options.auto_download,
+        check_model=True,
     )
     log.info(
         "upscale.planned",
@@ -188,7 +161,6 @@ def run_upscale(
         output_size=list(plan.output_size),
         output_format=plan.output_format.value,
         device=plan.device,
-        auto_download=options.auto_download,
     )
     for warning in plan_warnings(options, plan):
         log.warning("upscale.warning", input=str(plan.input_path), text=warning)
@@ -198,21 +170,6 @@ def run_upscale(
         on_start(plan, count_tiles(plan.input_size, options.tile))
     if should_cancel and should_cancel():
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
-    if options.auto_download:
-        for name in required_model_names(options):
-            if known_model(name) is None:
-                require_model_present(runtime_dirs.models_dir, name)
-                continue
-            download_model(
-                runtime_dirs.models_dir,
-                name,
-                download_timeout=options.download_timeout,
-                lock_timeout=options.lock_timeout,
-                on_download=on_download,
-                on_waiting=on_waiting,
-                should_cancel=should_cancel,
-            )
-
     inference_started = time.perf_counter()
     output_array = run_inference(
         InferenceConfig(
@@ -309,25 +266,18 @@ def validate_options(options: UpscaleOptions) -> None:
             ErrorCode.INVALID_ARGUMENT,
             "Device must be one of Auto, MPS, CUDA, or CPU.",
         )
-    if options.download_timeout <= 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Download timeout must be positive.")
     if options.lock_timeout < 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Lock timeout must be 0 or greater.")
 
 
 def required_model_names(options: UpscaleOptions) -> list[str]:
-    names = [options.model]
-    if model_supports_denoise(options.model) and options.denoise_strength != 1.0:
-        names.append("realesr-general-wdn-x4v3")
-    if options.face_enhance:
-        names.extend(
-            [
-                "GFPGANv1.4",
-                "facexlib-detection-retinaface-resnet50",
-                "facexlib-parsing-parsenet",
-            ]
+    return list(
+        required_artifact_names(
+            (options.model,),
+            face_enhance=options.face_enhance,
+            denoise_strength=options.denoise_strength,
         )
-    return names
+    )
 
 
 def plan_warnings(options: UpscaleOptions, plan: UpscalePlan) -> list[str]:

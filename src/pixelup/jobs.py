@@ -6,9 +6,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from pixelup.devices import DEFAULT_DEVICE
+from pixelup.model_management import effective_denoise_strength
 from pixelup.parameters import DEFAULT_SCALE, DEFAULT_TILE
 from pixelup.paths import OutputFormat, default_output_path
-from pixelup.upscale import UpscaleOptions, effective_denoise_strength
+from pixelup.upscale import UpscaleOptions
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +55,6 @@ class Job:
     model: str
     output_path: Path
     settings: JobSettings
-    auto_download: bool
     status: str = "pending"
     message: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -74,7 +74,6 @@ def create_jobs(
     models: list[str],
     settings: JobSettings,
     existing_jobs: list[Job],
-    auto_download: bool,
     job_ids: Iterator[int],
 ) -> list[Job]:
     """Plan a batch of jobs from the panel snapshot in ``settings``.
@@ -109,7 +108,6 @@ def create_jobs(
                     model=model,
                     output_path=output_path,
                     settings=model_settings,
-                    auto_download=auto_download,
                 )
             )
     return jobs
@@ -170,8 +168,6 @@ def options_for_job(job: Job) -> UpscaleOptions:
         strip_metadata=job.settings.strip_metadata,
         target_profile=job.settings.target_profile,
         overwrite=False,
-        auto_download=job.auto_download,
-        download_timeout=600,
         lock_timeout=600,
     )
 
@@ -228,5 +224,4 @@ def job_log_payload(job: Job) -> dict[str, object]:
         "model": job.model,
         "output_path": str(job.output_path),
         "settings": job_settings_log_payload(job.settings),
-        "auto_download": job.auto_download,
     }

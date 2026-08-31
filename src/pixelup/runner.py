@@ -4,7 +4,7 @@ import time
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
-from pixelup.config import resolve_runtime_dirs
+from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.jobs import Job, job_log_payload, options_for_job
 from pixelup.output_reservation import (
@@ -26,19 +26,19 @@ class JobSignals(QObject):
 def failure_message(exc: PixelupError) -> str:
     """The queue-row text for a failed job: the diagnosis plus its remedy.
 
-    The row is the only place a failure surfaces, so a hint — e.g. the Settings
-    toggle that fixes a missing model — must ride along rather than existing only
-    in the log.
+    The row is the only place a processing failure surfaces, so its corrective hint
+    must ride along rather than existing only in the log.
     """
     return f"{exc.message} {exc.hint}" if exc.hint else exc.message
 
 
 class JobWorker(QObject):
-    def __init__(self, job: Job) -> None:
+    def __init__(self, job: Job, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
         self.job = job
         self.signals = JobSignals()
         self._cancel_requested = False
+        self._runtime_dirs = runtime_dirs
 
     def request_cancel(self) -> None:
         self._cancel_requested = True
@@ -58,7 +58,7 @@ class JobWorker(QObject):
         log.info("job.started", job_id=self.job.id, details=job_log_payload(self.job))
         try:
             options = options_for_job(self.job)
-            runtime_dirs = resolve_runtime_dirs()
+            runtime_dirs = self._runtime_dirs or resolve_runtime_dirs()
             with reserve_output_bundle(
                 self.job.output_path,
                 runtime_dirs.temp_dir,
@@ -78,10 +78,6 @@ class JobWorker(QObject):
                     on_tile=lambda done, total: self.signals.progress.emit(
                         self.job.id,
                         _tile_progress_text(done, total),
-                    ),
-                    on_download=lambda model, done, total: self.signals.progress.emit(
-                        self.job.id,
-                        _download_text(model, done, total),
                     ),
                     on_warning=warnings.append,
                     should_cancel=self._is_cancelled,
@@ -161,13 +157,20 @@ class JobRunner(QObject):
     finished = Signal(int, bool, str, object, object)
     idle = Signal()
 
-    def __init__(self, jobs: list[Job], parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        jobs: list[Job],
+        parent: QObject | None = None,
+        *,
+        runtime_dirs: RuntimeDirs | None = None,
+    ) -> None:
         super().__init__(parent)
         self._jobs = jobs
         self._threads: dict[int, tuple[QThread, JobWorker]] = {}
         self._active_jobs = 0
         self._max_concurrent_jobs = 1
         self._shutting_down = False
+        self._runtime_dirs = runtime_dirs
 
     def schedule(self, max_concurrent_jobs: int) -> None:
         if self._shutting_down:
@@ -253,7 +256,7 @@ class JobRunner(QObject):
         self.progress.emit(job.id, job.message)
 
         thread = QThread(self)
-        worker = JobWorker(job)
+        worker = JobWorker(job, self._runtime_dirs)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.signals.progress.connect(self.progress.emit)
@@ -283,12 +286,6 @@ class JobRunner(QObject):
         self.finished.emit(job_id, ok, message, result, warnings)
         if not self._shutting_down:
             QTimer.singleShot(0, lambda: self.schedule(self._max_concurrent_jobs))
-
-
-def _download_text(model: str, done: int, total: int | None) -> str:
-    if total:
-        return f"{done * 100 // total}% - downloading {model}"
-    return f"Downloading {model}"
 
 
 def _progress_text(phase: str) -> str:

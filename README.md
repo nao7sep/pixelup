@@ -1,6 +1,6 @@
 # PixelUp
 
-PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and can fetch the models it needs on first use once you allow it in Settings. 0.x.
+PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and installs its pinned model files through Managed models when you choose them. 0.x.
 
 ## Download
 
@@ -9,7 +9,7 @@ Prebuilt builds for **macOS (Apple Silicon)** and **Windows (x64)** are on the [
 - **macOS** — right-click the app and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/PixelUp.app`).
 - **Windows** — on the SmartScreen prompt, click **More info → Run anyway**.
 
-Model weights are fetched on demand on first use (verified against a pinned SHA-256) once "Download missing models automatically" is turned on in Settings; it starts off, and a job whose model is missing tells you where the switch is. Allow roughly 3–67 MB of network and disk use for the selected upscaler model. Face enhancement can fetch about 543 MB more for its supporting models. You can also place the .pth files in the models directory yourself.
+Managed models shows which pinned model files are ready and installs or repairs only what you choose; every download is verified against its pinned SHA-256 before it replaces the cache. A queue action that needs missing files discloses the exact download first and creates no jobs until installation succeeds. Allow roughly 3–67 MB of network and disk use for an upscaler model, with a small additional denoise companion for the general model. Face enhancement requires about 543 MB more. You can also place the `.pth` files in the models directory yourself.
 
 ## Features
 
@@ -22,7 +22,7 @@ Model weights are fetched on demand on first use (verified against a pinned SHA-
 
 - **macOS (Apple Silicon)** or **Windows (x64)** to run a prebuilt download — self-contained, nothing to install.
 - **Python 3.12 with [uv](https://docs.astral.sh/uv/)** only if you run or build from source. Python 3.13 and newer are not supported because a required Real-ESRGAN dependency does not build on them.
-- Model weights (Real-ESRGAN, plus GFPGAN and its facexlib detection/parsing weights for face enhancement) — fetched on demand from their official GitHub releases and verified against a pinned SHA-256.
+- Model weights (Real-ESRGAN, plus GFPGAN and its facexlib detection/parsing weights for face enhancement) — installed explicitly from their official GitHub releases and verified against a pinned SHA-256.
 - Optional: a GPU/MPS/CUDA backend for faster inference (CPU is the fallback).
 
 ## Run from source

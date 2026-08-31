@@ -70,7 +70,6 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
             strip_metadata=True,
             target_profile="srgb",
         ),
-        auto_download=False,
     )
 
     options = options_for_job(job)
@@ -85,13 +84,11 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
     assert options.face_enhance is True
     assert options.alpha_mode == "bicubic"
     assert options.target_profile == "srgb"
-    assert options.auto_download is False
     # Fixed, non-configurable defaults the GUI never exposes.
     assert options.tile_pad == 10
     assert options.pre_pad == 0
     assert options.background == "white"
     assert options.overwrite is False
-    assert options.download_timeout == 600
     assert options.lock_timeout == 600
 
 
@@ -170,7 +167,6 @@ def test_job_log_payload_includes_settings_and_paths(tmp_path: Path) -> None:
         model="realesr-general-x4v3",
         output_path=tmp_path / "o.png",
         settings=JobSettings(scale=2),
-        auto_download=True,
     )
 
     payload = job_log_payload(job)
@@ -178,7 +174,6 @@ def test_job_log_payload_includes_settings_and_paths(tmp_path: Path) -> None:
     assert payload["input_path"] == str(tmp_path / "a.png")
     assert payload["output_path"] == str(tmp_path / "o.png")
     assert payload["model"] == "realesr-general-x4v3"
-    assert payload["auto_download"] is True
     assert payload["settings"]["output_format"] == "png"  # type: ignore[index]
     # Scale is logged as part of the settings snapshot, and only there — a second
     # top-level copy would be a place for the two to disagree.
@@ -225,7 +220,6 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
         models=["realesr-general-x4v3", "RealESRGAN_x4plus"],
         settings=JobSettings(output_format=OutputFormat.PNG),
         existing_jobs=[],
-        auto_download=True,
         job_ids=count(1),
     )
 
@@ -235,7 +229,6 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
         (3, second, "realesr-general-x4v3"),
         (4, second, "RealESRGAN_x4plus"),
     ]
-    assert all(job.auto_download for job in jobs)
     assert {job.output_path.name for job in jobs} == {
         "a-realesr-general-x4v3-4x.png",
         "a-realesrgan-x4plus-4x.png",
@@ -256,7 +249,6 @@ def test_create_jobs_takes_scale_from_the_settings_snapshot(tmp_path: Path) -> N
         models=["realesr-general-x4v3"],
         settings=JobSettings(scale=2),
         existing_jobs=[],
-        auto_download=True,
         job_ids=count(1),
     )
 
@@ -279,7 +271,6 @@ def test_create_jobs_snapshot_is_frozen_against_later_panel_edits(tmp_path: Path
         models=["realesr-general-x4v3"],
         settings=panel,
         existing_jobs=[],
-        auto_download=True,
         job_ids=count(1),
     )
     queued = jobs[0]
@@ -307,7 +298,6 @@ def test_create_jobs_disambiguates_case_only_sibling_inputs(tmp_path: Path) -> N
         models=["realesr-general-x4v3"],
         settings=JobSettings(output_format=OutputFormat.PNG),
         existing_jobs=[],
-        auto_download=True,
         job_ids=count(1),
     )
 
@@ -334,7 +324,6 @@ def test_create_jobs_separates_sidecars_across_output_formats(tmp_path: Path) ->
         model="realesr-general-x4v3",
         output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
         settings=JobSettings(output_format=OutputFormat.PNG),
-        auto_download=True,
     )
 
     jobs = create_jobs(
@@ -342,7 +331,6 @@ def test_create_jobs_separates_sidecars_across_output_formats(tmp_path: Path) ->
         models=["realesr-general-x4v3"],
         settings=JobSettings(output_format=OutputFormat.JPG),
         existing_jobs=[png_job],
-        auto_download=True,
         job_ids=count(2),
     )
 
@@ -360,7 +348,6 @@ def test_create_jobs_reserves_existing_output_paths(tmp_path: Path) -> None:
         model="realesr-general-x4v3",
         output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
         settings=JobSettings(),
-        auto_download=True,
     )
 
     jobs = create_jobs(
@@ -368,7 +355,6 @@ def test_create_jobs_reserves_existing_output_paths(tmp_path: Path) -> None:
         models=["realesr-general-x4v3"],
         settings=JobSettings(output_format=OutputFormat.PNG),
         existing_jobs=[existing],
-        auto_download=True,
         job_ids=count(2),
     )
 
@@ -384,7 +370,6 @@ def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
         model="realesr-general-x4v3",
         output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
         settings=JobSettings(),
-        auto_download=True,
         status="succeeded",
     )
     failed = Job(
@@ -393,7 +378,6 @@ def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
         model="realesr-general-x4v3",
         output_path=tmp_path / "old.png",
         settings=JobSettings(),
-        auto_download=True,
         status="failed",
         message="bad",
         warnings=["warning"],

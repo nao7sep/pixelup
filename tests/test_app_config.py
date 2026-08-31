@@ -19,7 +19,6 @@ def test_app_config_round_trips_json(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     config = AppConfig(
         max_concurrent_jobs=3,
-        auto_download=False,
     )
 
     save_app_config(config, path)
@@ -79,10 +78,14 @@ def test_missing_app_config_uses_defaults(tmp_path: Path) -> None:
     assert load_app_config(tmp_path / "missing.json") == AppConfig()
 
 
-def test_model_downloads_are_off_until_the_user_turns_them_on() -> None:
-    # The managed-runtime-dependencies conventions: nothing downloads on its own.
-    # A fresh install downloads only after the user flips the Settings toggle.
-    assert AppConfig().auto_download is False
+def test_obsolete_auto_download_key_is_ignored(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"auto_download": True}), encoding="utf-8")
+
+    result = load_app_config_result(path)
+
+    assert result.config == AppConfig()
+    assert result.quarantined_to is None
 
 
 def test_ensure_app_config_writes_defaults_on_first_run(tmp_path: Path) -> None:
@@ -296,8 +299,6 @@ def test_config_read_oserror_propagates_without_touching_the_store(
 @pytest.mark.parametrize(
     "data",
     [
-        {"auto_download": "false"},
-        {"auto_download": 0},
         {"max_concurrent_jobs": 0},
         {"max_concurrent_jobs": 99},
         {"max_concurrent_jobs": "4"},
@@ -349,7 +350,6 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
 
     assert result.quarantined_to is None
     assert result.config.max_concurrent_jobs == 4
-    assert result.config.auto_download is False
     assert result.config.parameters.scale == 2
     assert result.config.parameters.quality == JobSettings().quality
 
@@ -359,7 +359,6 @@ def test_exact_boolean_values_are_preserved(tmp_path: Path) -> None:
     path.write_text(
         json.dumps(
             {
-                "auto_download": False,
                 "parameters": {"face_enhance": True, "strip_metadata": False},
             }
         ),
@@ -368,7 +367,6 @@ def test_exact_boolean_values_are_preserved(tmp_path: Path) -> None:
 
     config = load_app_config(path)
 
-    assert config.auto_download is False
     assert config.parameters.face_enhance is True
     assert config.parameters.strip_metadata is False
 
@@ -423,13 +421,11 @@ def test_old_flat_keys_are_inert(tmp_path: Path) -> None:
 def test_config_log_payload_shape() -> None:
     config = AppConfig(
         max_concurrent_jobs=2,
-        auto_download=False,
         parameters=JobSettings(quality=70, tile=128, device="cpu"),
     )
 
     assert config_log_payload(config) == {
         "max_concurrent_jobs": 2,
-        "auto_download": False,
         "font_family": AppConfig().font_family,
         "parameters": job_settings_log_payload(config.parameters),
     }

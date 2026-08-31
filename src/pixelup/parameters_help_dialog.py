@@ -18,14 +18,14 @@ from pixelup.ui_common import secondary_label, use_regular_spacing
 _ENTRIES: tuple[tuple[str, str], ...] = (
     (
         "Scale",
-        "How much the image is enlarged: 2x or 4x. The bundled models are trained "
+        "How much the image is enlarged: 2x or 4x. The available models are trained "
         "for 4x (the x2 model is the one 2x-native exception); a scale/model "
         "mismatch is surfaced as a queue warning, not an error.",
     ),
     (
         "Face enhancement",
         "Restores faces with GFPGAN on top of the upscale. Its model weights are "
-        "downloaded on first use, like the upscale models.",
+        "installed through Managed models, like the upscaler weights.",
     ),
     (
         "Denoise",

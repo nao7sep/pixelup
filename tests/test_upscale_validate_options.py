@@ -5,14 +5,16 @@ from pathlib import Path
 import pytest
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.model_management import (
+    DENOISE_NEUTRAL,
+    effective_denoise_strength,
+    model_supports_denoise,
+)
 from pixelup.paths import OutputFormat
 from pixelup.upscale import (
-    DENOISE_NEUTRAL,
     UpscaleOptions,
     _format_extension_mismatch,
     count_tiles,
-    effective_denoise_strength,
-    model_supports_denoise,
     validate_options,
     validate_output_path,
 )
@@ -39,8 +41,6 @@ def make_options(**overrides: object) -> UpscaleOptions:
         strip_metadata=False,
         target_profile=None,
         overwrite=False,
-        auto_download=False,
-        download_timeout=600,
         lock_timeout=600,
     )
     base.update(overrides)
@@ -65,7 +65,6 @@ def test_validate_options_accepts_valid_options() -> None:
         ({"quality": -1}, ErrorCode.INVALID_ARGUMENT),
         ({"target_profile": "rec2020"}, ErrorCode.INVALID_ARGUMENT),
         ({"device": "vulkan"}, ErrorCode.INVALID_ARGUMENT),
-        ({"download_timeout": 0}, ErrorCode.INVALID_ARGUMENT),
         ({"lock_timeout": -1}, ErrorCode.INVALID_ARGUMENT),
     ],
 )

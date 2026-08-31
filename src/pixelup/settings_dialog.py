@@ -4,7 +4,6 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QGridLayout,
@@ -29,9 +28,8 @@ def _captioned(control: QWidget, caption: str) -> QWidget:
     """Group a control with a muted caption directly beneath it.
 
     The caption reads as sub-text of its control (a tight 2px gap) rather than a
-    peer form row a full row-gap away. The control spans the column: the font line
-    edit and the model-download checkbox are the captioned fields here, now that
-    the parameters live in the main window's panel.
+    peer form row a full row-gap away. The control spans the column; the parameters
+    live in the main window's panel rather than this dialog.
     """
     container = QWidget()
     container.setFixedWidth(_FIELD_WIDTH)
@@ -50,11 +48,10 @@ class SettingsDialog(QDialog):
 
     One home per thing. The image-processing parameters live in the main window's
     Parameters panel, which persists its own edits and resets to its own built-ins,
-    so this dialog deliberately holds only the leftovers: the UI font, the
-    model-download toggle, and the concurrent job count. It carries no reset button
-    — none of these three is a stale-able built-in or a tuned, interacting set worth
-    returning to (a font is a preference, a toggle is a toggle, a job count is one
-    number), so there is no default worth a control (config-seeding-conventions).
+    so this dialog deliberately holds only the leftovers: the UI font and the
+    concurrent job count. It carries no reset button — neither setting is a stale-able
+    built-in or a tuned, interacting set worth returning to, so there is no default
+    worth a control (config-seeding-conventions).
 
     The widgets hold a draft; the incoming config is never mutated. The commit
     (OK) button stays disabled until the draft differs from the config the
@@ -78,9 +75,6 @@ class SettingsDialog(QDialog):
         self.concurrent.setRange(MIN_CONCURRENT_JOBS, MAX_CONCURRENT_JOBS)
         self.concurrent.setValue(config.max_concurrent_jobs)
 
-        self.auto_download = QCheckBox("Download missing models automatically")
-        self.auto_download.setChecked(config.auto_download)
-
         self.font_family = QLineEdit()
         self.font_family.setText(config.font_family)
         self.font_family.setPlaceholderText("Platform default")
@@ -97,19 +91,6 @@ class SettingsDialog(QDialog):
             _captioned(
                 self.font_family,
                 "Blank uses the platform UI face. Otherwise, the first installed font is used.",
-            ),
-            row,
-            1,
-        )
-        row += 1
-        form.addWidget(QLabel("Models"), row, 0, label_align)
-        form.addWidget(
-            _captioned(
-                self.auto_download,
-                "Off by default: a job whose model is missing fails and points here "
-                "instead of downloading anything on its own. A selected upscaler is "
-                "about 3–67 MB; face enhancement can add about 543 MB of downloads "
-                "and disk use.",
             ),
             row,
             1,
@@ -135,14 +116,13 @@ class SettingsDialog(QDialog):
 
         for changed in (
             self.concurrent.valueChanged,
-            self.auto_download.toggled,
             self.font_family.textChanged,
         ):
             changed.connect(self._update_commit_enabled)
         self._update_commit_enabled()
 
     def config(self) -> AppConfig:
-        """The draft config: the opened one with exactly this dialog's three fields replaced.
+        """The draft config: the opened one with exactly this dialog's two fields replaced.
 
         Built by ``replace`` rather than a fresh ``AppConfig(...)`` so the settings this
         dialog does not show — today the Parameters panel — pass through untouched.
@@ -152,7 +132,6 @@ class SettingsDialog(QDialog):
         return replace(
             self._initial,
             max_concurrent_jobs=self.concurrent.value(),
-            auto_download=self.auto_download.isChecked(),
             font_family=normalize_font_family(self.font_family.text(), DEFAULT_UI_FONT_FAMILY),
         )
 

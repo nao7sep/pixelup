@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig
 from pixelup.jobs import JobSettings
 from pixelup.settings_dialog import SettingsDialog
 
-# The dialog holds only what the main window does not show: the UI font, the
-# model-download toggle, and the concurrent job count. The image-processing
+# The dialog holds only what the main window does not show: the UI font and the
+# concurrent job count. The image-processing
 # parameters live in the main window's Parameters panel and are no business of this
 # dialog — not to edit, and not to reset.
 
@@ -15,7 +15,6 @@ from pixelup.settings_dialog import SettingsDialog
 def test_round_trips_config_without_changes(qapp: QApplication) -> None:
     config = AppConfig(
         max_concurrent_jobs=4,
-        auto_download=False,
         font_family="Courier New",
     )
     dialog = SettingsDialog(config)
@@ -87,25 +86,10 @@ def test_blank_font_family_is_the_builtin_default(qapp: QApplication) -> None:
         dialog.deleteLater()
 
 
-def test_auto_download_toggle_marks_dirty(qapp: QApplication) -> None:
-    dialog = SettingsDialog(AppConfig(auto_download=True))
-    try:
-        assert dialog.auto_download.isChecked() is True
-        dialog.auto_download.setChecked(False)
-        assert dialog.config().auto_download is False
-        assert dialog.is_dirty() is True
-    finally:
-        dialog.deleteLater()
-
-
-def test_auto_download_opt_in_discloses_material_download_size(qapp: QApplication) -> None:
+def test_model_management_is_not_a_setting(qapp: QApplication) -> None:
     dialog = SettingsDialog(AppConfig())
     try:
-        text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
-
-        assert "3–67 MB" in text
-        assert "543 MB" in text
-        assert "disk use" in text
+        assert not hasattr(dialog, "auto_download")
     finally:
         dialog.deleteLater()
 
