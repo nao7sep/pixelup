@@ -5,7 +5,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import count
 from pathlib import Path
 from typing import Literal
@@ -86,10 +86,9 @@ from pixelup.message_dialogs import (
 )
 from pixelup.model_management import (
     UPSCALE_MODELS,
-    missing_artifact_names,
-    ready_artifact_count,
     required_artifact_names,
 )
+from pixelup.model_manager import ModelManager
 from pixelup.parameters import (
     ALPHA_MODE_CHOICES,
     DEFAULT_SCALE,
@@ -138,6 +137,31 @@ _NAME_MIN_WIDTH = 180
 # "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
 _REVEAL_TIMEOUT_SECONDS = 5
+
+
+@dataclass(frozen=True, slots=True)
+class PendingEnqueue:
+    input_paths: tuple[Path, ...]
+    models: tuple[str, ...]
+    settings: JobSettings
+    required_artifacts: tuple[str, ...]
+
+    @property
+    def job_count(self) -> int:
+        return len(self.input_paths) * len(self.models)
+
+
+@dataclass(frozen=True, slots=True)
+class PendingRetry:
+    job_ids: frozenset[int]
+    required_artifacts: tuple[str, ...]
+
+    @property
+    def job_count(self) -> int:
+        return len(self.job_ids)
+
+
+PendingModelWork = PendingEnqueue | PendingRetry
 _WINDOW_TARGET_EXTRA_WIDTH = 160
 _WINDOW_TARGET_EXTRA_HEIGHT = 120
 
@@ -304,6 +328,9 @@ class MainWindow(QMainWindow):
         self._image_rows: dict[Path, int] = {}
         self._queue_rows: dict[int, int] = {}
         self._queue_failure_count = 0
+        self.model_manager = ModelManager(self.runtime_dirs.models_dir, self)
+        self._active_models_dialog: ManagedModelsDialog | None = None
+        self._pending_model_work: PendingModelWork | None = None
         self.jobs: list[Job] = []
         self.runner = JobRunner(self.jobs, self, runtime_dirs=self.runtime_dirs)
         self.runner.progress.connect(self._job_progress)
@@ -321,6 +348,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("PixelUp")
         self._build_ui()
+        self.model_manager.changed.connect(self._model_manager_changed)
+        self.model_manager.idle.connect(self._close_when_workers_stop)
         self._bind_shortcuts()
         # Window minimum = the layout's content-based size hint: the central widget
         # sums the panes' needs, and each table's minimum is its measured column
@@ -375,7 +404,7 @@ class MainWindow(QMainWindow):
         is_saving_session = app.isSavingSession() if app is not None else False
         session_shutdown = self._session_shutdown or is_saving_session
         if self._quit_when_workers_idle:
-            if self.runner.cleanup_for_quit():
+            if self._workers_clean_for_quit():
                 event.accept()
             else:
                 event.ignore()
@@ -405,7 +434,8 @@ class MainWindow(QMainWindow):
 
     def _finish_or_defer_close(self, event: QCloseEvent, *, surface_wait: bool) -> None:
         self.runner.begin_shutdown()
-        if self.runner.cleanup_for_quit():
+        self.model_manager.begin_shutdown()
+        if self._workers_clean_for_quit():
             event.accept()
             return
         self._quit_when_workers_idle = True
@@ -414,8 +444,11 @@ class MainWindow(QMainWindow):
             warn_jobs_stopping(self)
 
     def _close_when_workers_stop(self) -> None:
-        if self._quit_when_workers_idle:
+        if self._quit_when_workers_idle and self._workers_clean_for_quit():
             QTimer.singleShot(0, self.close)
+
+    def _workers_clean_for_quit(self) -> bool:
+        return self.runner.cleanup_for_quit() and self.model_manager.cleanup_for_quit()
 
     def open_paths(self, paths: list[Path]) -> None:
         log.info("open.requested", paths=[str(path) for path in paths])
@@ -924,13 +957,94 @@ class MainWindow(QMainWindow):
         log.info("settings.dialog_cancelled")
 
     def _managed_models_dialog(self) -> None:
+        self.model_manager.refresh_readiness()
+        pending = self._pending_model_work
+        self._open_models_dialog(
+            required_artifacts=pending.required_artifacts if pending is not None else (),
+            pending_job_count=pending.job_count if pending is not None else 0,
+        )
+
+    def _open_models_dialog(
+        self,
+        *,
+        required_artifacts: tuple[str, ...] = (),
+        pending_job_count: int = 0,
+    ) -> None:
+        if self._active_models_dialog is not None:
+            self._active_models_dialog.raise_()
+            self._active_models_dialog.activateWindow()
+            return
+
         log.info("models.dialog_opened")
-        ManagedModelsDialog(self.runtime_dirs.models_dir, self).exec()
+        dialog = ManagedModelsDialog(
+            self.model_manager,
+            self,
+            required_artifacts=required_artifacts,
+            pending_job_count=pending_job_count,
+        )
+        self._active_models_dialog = dialog
+        dialog.finished.connect(lambda _result: self._models_dialog_finished(dialog))
+        dialog.open()
+
+    def _models_dialog_finished(self, dialog: ManagedModelsDialog) -> None:
+        if self._active_models_dialog is dialog:
+            self._active_models_dialog = None
+        if (
+            self._pending_model_work is not None
+            and self.model_manager.operation.kind != "running"
+        ):
+            log.info("models.pending_work_abandoned")
+            self._pending_model_work = None
         self._refresh_model_rollup()
         log.info("models.dialog_closed")
+        dialog.deleteLater()
+
+    def _model_manager_changed(self) -> None:
+        self._refresh_model_rollup()
+        pending = self._pending_model_work
+        if pending is None:
+            return
+        operation = self.model_manager.operation
+        if operation.kind == "cancelled":
+            self._pending_model_work = None
+            dialog = self._active_models_dialog
+            if dialog is not None:
+                dialog.reject()
+            log.info("models.pending_work_cancelled")
+            return
+        if operation.kind != "idle" or self.model_manager.missing(
+            pending.required_artifacts
+        ):
+            return
+
+        self._pending_model_work = None
+        dialog = self._active_models_dialog
+        if dialog is not None:
+            dialog.accept()
+        if isinstance(pending, PendingEnqueue):
+            self._materialize_jobs(
+                list(pending.input_paths),
+                list(pending.models),
+                pending.settings,
+            )
+        else:
+            self._retry_failed_snapshot(pending.job_ids)
 
     def _refresh_model_rollup(self) -> None:
-        ready, total = ready_artifact_count(self.runtime_dirs.models_dir)
+        ready, total = self.model_manager.ready_count()
+        operation = self.model_manager.operation
+        if operation.kind == "running":
+            progress = (
+                0
+                if operation.total_bytes <= 0
+                else min(100, operation.completed_bytes * 100 // operation.total_bytes)
+            )
+            self.manage_models_button.setText(f"Managed models (installing {progress}%)")
+            self.manage_models_button.setAccessibleName(
+                f"Managed models, installing, {progress} percent; "
+                f"{ready} of {total} model files ready"
+            )
+            return
         self.manage_models_button.setText(f"Managed models ({ready}/{total} ready)")
         self.manage_models_button.setAccessibleName(
             f"Managed models, {ready} of {total} model files ready"
@@ -1160,9 +1274,29 @@ class MainWindow(QMainWindow):
             face_enhance=settings.face_enhance,
             denoise_strength=settings.denoise_strength,
         )
-        pending_job_count = len(input_paths) * len(models)
-        if not self._ensure_models_ready(required, pending_job_count=pending_job_count):
+        self.model_manager.refresh_readiness()
+        missing = self.model_manager.missing(required)
+        if missing:
+            pending = PendingEnqueue(
+                input_paths=tuple(input_paths),
+                models=tuple(models),
+                settings=settings,
+                required_artifacts=required,
+            )
+            self._pending_model_work = pending
+            self._open_models_dialog(
+                required_artifacts=pending.required_artifacts,
+                pending_job_count=pending.job_count,
+            )
             return
+        self._materialize_jobs(input_paths, models, settings)
+
+    def _materialize_jobs(
+        self,
+        input_paths: list[Path],
+        models: list[str],
+        settings: JobSettings,
+    ) -> None:
         new_jobs = create_jobs(
             input_paths=input_paths,
             models=models,
@@ -1183,27 +1317,6 @@ class MainWindow(QMainWindow):
         self._refresh_image_job_summaries()
         self._update_action_buttons()
         self.runner.schedule(self.config.max_concurrent_jobs)
-
-    def _ensure_models_ready(
-        self,
-        artifact_names: tuple[str, ...],
-        *,
-        pending_job_count: int,
-    ) -> bool:
-        missing = missing_artifact_names(self.runtime_dirs.models_dir, artifact_names)
-        if not missing:
-            return True
-        dialog = ManagedModelsDialog(
-            self.runtime_dirs.models_dir,
-            self,
-            required_artifacts=missing,
-            pending_job_count=pending_job_count,
-        )
-        accepted = dialog.exec() == QDialog.DialogCode.Accepted
-        self._refresh_model_rollup()
-        return accepted and not missing_artifact_names(
-            self.runtime_dirs.models_dir, artifact_names
-        )
 
     def _add_queue_rows(self, jobs: list[Job]) -> None:
         for job in jobs:
@@ -1248,6 +1361,7 @@ class MainWindow(QMainWindow):
 
     def _retry_failed(self) -> None:
         failed_jobs = [job for job in self.jobs if job.status == "failed"]
+        failed_job_ids = frozenset(job.id for job in failed_jobs)
         required = tuple(
             dict.fromkeys(
                 artifact
@@ -1259,11 +1373,23 @@ class MainWindow(QMainWindow):
                 )
             )
         )
-        if required and not self._ensure_models_ready(
-            required, pending_job_count=len(failed_jobs)
-        ):
+        self.model_manager.refresh_readiness()
+        missing = self.model_manager.missing(required)
+        if missing:
+            pending = PendingRetry(
+                job_ids=failed_job_ids,
+                required_artifacts=required,
+            )
+            self._pending_model_work = pending
+            self._open_models_dialog(
+                required_artifacts=pending.required_artifacts,
+                pending_job_count=pending.job_count,
+            )
             return
-        retried_jobs = retry_failed_jobs(self.jobs)
+        self._retry_failed_snapshot(failed_job_ids)
+
+    def _retry_failed_snapshot(self, failed_job_ids: frozenset[int]) -> None:
+        retried_jobs = retry_failed_jobs(self.jobs, only_job_ids=failed_job_ids)
         retried = set(retried_jobs)
         for job in self.jobs:
             if job.id in retried:
@@ -1523,6 +1649,7 @@ def _selftest() -> int:
     every such import up front, so CI/packaging catches a missing hidden-import here
     rather than in the user's hands. Import-only: no window, no network, no weights.
     """
+    import codecs
     import importlib
 
     for module in (
@@ -1542,6 +1669,9 @@ def _selftest() -> int:
         "PySide6.QtWidgets",
     ):
         importlib.import_module(module)
+    # urllib resolves this codec dynamically at the first HTTPS hostname. The
+    # packaged smoke must exercise the registry lookup, not merely import urllib.
+    codecs.lookup("idna")
     return 0
 
 

@@ -46,6 +46,10 @@ binaries = []
 # explicitly so they survive even if a future collect_all misses them.
 hiddenimports = [
     "basicsr.archs.rrdbnet_arch",
+    # urllib asks the codec registry for this name only when an HTTPS hostname is
+    # encoded. There is no import edge for PyInstaller to discover, so a frozen
+    # downloader otherwise fails before connecting with "unknown encoding: idna".
+    "encodings.idna",
     "realesrgan.archs.srvgg_arch",
 ]
 

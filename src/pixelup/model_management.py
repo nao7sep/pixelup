@@ -49,6 +49,10 @@ MANAGED_MODEL_BUNDLES = (
     ),
 )
 
+MANAGED_ARTIFACT_NAMES = tuple(
+    dict.fromkeys(name for bundle in MANAGED_MODEL_BUNDLES for name in bundle.artifact_names)
+)
+
 
 def model_supports_denoise(model: str) -> bool:
     return model == GENERAL_MODEL
@@ -89,12 +93,9 @@ def bundle_ready_count(models_dir: Path, bundle: ManagedModelBundle) -> int:
 
 
 def ready_artifact_count(models_dir: Path) -> tuple[int, int]:
-    artifact_names = tuple(
-        dict.fromkeys(name for bundle in MANAGED_MODEL_BUNDLES for name in bundle.artifact_names)
-    )
     return (
-        sum(model_is_ready(models_dir, name) for name in artifact_names),
-        len(artifact_names),
+        sum(model_is_ready(models_dir, name) for name in MANAGED_ARTIFACT_NAMES),
+        len(MANAGED_ARTIFACT_NAMES),
     )
 
 

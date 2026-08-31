@@ -43,8 +43,8 @@ def warn_config_save_failed(parent: QWidget) -> None:
 def warn_jobs_stopping(parent: QWidget) -> None:
     _info(
         parent,
-        "PixelUp is still stopping running jobs. "
-        "It will close as soon as they have stopped safely.",
+        "PixelUp is still stopping active work. "
+        "It will close as soon as everything has stopped safely.",
     )
 
 

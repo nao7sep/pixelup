@@ -388,3 +388,35 @@ def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
     assert failed.message == ""
     assert failed.warnings == []
     assert failed.output_path.name == "a-realesr-general-x4v3-4x-2.png"
+
+
+def test_retry_failed_jobs_limits_work_to_the_disclosed_snapshot(tmp_path: Path) -> None:
+    source = tmp_path / "a.png"
+    source.write_bytes(b"")
+    disclosed = Job(
+        id=1,
+        input_path=source,
+        model="realesr-general-x4v3",
+        output_path=tmp_path / "old-disclosed.png",
+        settings=JobSettings(),
+        status="failed",
+        message="first",
+    )
+    later_failure = Job(
+        id=2,
+        input_path=source,
+        model="realesr-general-x4v3",
+        output_path=tmp_path / "a-realesr-general-x4v3-4x.png",
+        settings=JobSettings(),
+        status="failed",
+        message="later",
+    )
+
+    assert retry_failed_jobs(
+        [disclosed, later_failure], only_job_ids=frozenset({disclosed.id})
+    ) == [disclosed.id]
+    assert disclosed.status == "pending"
+    assert disclosed.output_path.name == "a-realesr-general-x4v3-4x-2.png"
+    assert later_failure.status == "failed"
+    assert later_failure.message == "later"
+    assert later_failure.output_path.name == "a-realesr-general-x4v3-4x.png"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Collection, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -113,17 +113,21 @@ def create_jobs(
     return jobs
 
 
-def retry_failed_jobs(jobs: list[Job]) -> list[int]:
+def retry_failed_jobs(
+    jobs: list[Job],
+    *,
+    only_job_ids: Collection[int] | None = None,
+) -> list[int]:
     # One reservation set for the whole batch (see create_jobs): case-only
     # sibling inputs must disambiguate against each other, not just live files.
     reserved: set[Path] = set()
     for job in jobs:
-        if job.status != "failed":
+        if job.status != "failed" or (only_job_ids is not None and job.id not in only_job_ids):
             _reserve_output_bundle(reserved, job.output_path)
 
     retried: list[int] = []
     for job in jobs:
-        if job.status != "failed":
+        if job.status != "failed" or (only_job_ids is not None and job.id not in only_job_ids):
             continue
         job.output_path = default_output_path(
             job.input_path,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -602,7 +604,9 @@ def test_settings_only_options_have_no_main_window_control(make_window) -> None:
 
 
 def test_missing_models_cancel_before_queue_materialization(
-    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    make_window,
+    qapp: QApplication,
+    tmp_path: Path,
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
@@ -610,33 +614,26 @@ def test_missing_models_cancel_before_queue_materialization(
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     for name in ("realesr-general-x4v3", "realesr-general-wdn-x4v3"):
         model_file(window.runtime_dirs.models_dir, name).unlink()
-    opened: list[tuple[tuple[str, ...], int]] = []
-
-    class RejectInstall:
-        def __init__(
-            self,
-            _models_dir: Path,
-            _parent: object,
-            *,
-            required_artifacts: tuple[str, ...],
-            pending_job_count: int,
-        ) -> None:
-            opened.append((required_artifacts, pending_job_count))
-
-        def exec(self) -> QDialog.DialogCode:
-            return QDialog.DialogCode.Rejected
-
-    monkeypatch.setattr("pixelup.gui.ManagedModelsDialog", RejectInstall)
-
     window._queue_selected_image()
+    dialog = window._active_models_dialog
+    assert dialog is not None
+    assert dialog._required_artifacts == (
+        "realesr-general-x4v3",
+        "realesr-general-wdn-x4v3",
+    )
+    assert dialog._pending_job_count == 1
+    dialog.reject()
+    qapp.processEvents()
 
-    assert opened == [(("realesr-general-x4v3", "realesr-general-wdn-x4v3"), 1)]
+    assert window._pending_model_work is None
     assert window.jobs == []
     assert window.queue_table.rowCount() == 0
 
 
 def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
-    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    make_window,
+    qapp: QApplication,
+    tmp_path: Path,
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
@@ -646,37 +643,74 @@ def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
     for name in required:
         model_file(window.runtime_dirs.models_dir, name).unlink()
 
-    class AcceptInstall:
-        def __init__(
-            self,
-            models_dir: Path,
-            _parent: object,
-            *,
-            required_artifacts: tuple[str, ...],
-            pending_job_count: int,
-        ) -> None:
-            assert required_artifacts == required
-            assert pending_job_count == 1
-            self.models_dir = models_dir
-
-        def exec(self) -> QDialog.DialogCode:
-            for name in required:
-                target = model_file(self.models_dir, name)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(b"ready")
-            return QDialog.DialogCode.Accepted
-
-    monkeypatch.setattr("pixelup.gui.ManagedModelsDialog", AcceptInstall)
-
     window._queue_selected_image()
+    assert window._pending_model_work is not None
+    assert window.jobs == []
+    for name in required:
+        target = model_file(window.runtime_dirs.models_dir, name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"ready")
+    window.model_manager.refresh_readiness()
+    qapp.processEvents()
 
+    assert window._pending_model_work is None
     assert len(window.jobs) == 1
     assert window.queue_table.rowCount() == 1
     assert window.manage_models_button.text() == "Managed models (10/10 ready)"
 
 
+def test_install_and_queue_survives_closing_its_presentation(
+    make_window,
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    required = ("realesr-general-x4v3", "realesr-general-wdn-x4v3")
+    for name in required:
+        model_file(window.runtime_dirs.models_dir, name).unlink()
+    window.model_manager.refresh_readiness()
+    started = threading.Event()
+    release = threading.Event()
+
+    def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
+        started.set()
+        assert release.wait(2)
+        model_file(models_dir, name).write_bytes(b"ready")
+        return {"status": "downloaded"}
+
+    monkeypatch.setattr("pixelup.model_manager.download_model", install)
+    window._queue_selected_image()
+    dialog = window._active_models_dialog
+    assert dialog is not None
+    dialog._install_or_cancel()
+    assert started.wait(1)
+
+    dialog.reject()
+    qapp.processEvents()
+    assert window._active_models_dialog is None
+    assert window._pending_model_work is not None
+    assert window.jobs == []
+
+    release.set()
+    deadline = time.monotonic() + 3
+    while not window.model_manager.cleanup_for_quit() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.001)
+    qapp.processEvents()
+
+    assert window.model_manager.cleanup_for_quit()
+    assert window._pending_model_work is None
+    assert len(window.jobs) == 1
+
+
 def test_retry_stays_failed_when_model_install_is_cancelled(
-    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    make_window,
+    qapp: QApplication,
+    tmp_path: Path,
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
@@ -689,17 +723,13 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
     window._update_job(job)
     model_file(window.runtime_dirs.models_dir, job.model).unlink()
 
-    class RejectInstall:
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
-            pass
-
-        def exec(self) -> QDialog.DialogCode:
-            return QDialog.DialogCode.Rejected
-
-    monkeypatch.setattr("pixelup.gui.ManagedModelsDialog", RejectInstall)
-
     window._retry_failed()
+    dialog = window._active_models_dialog
+    assert dialog is not None
+    dialog.reject()
+    qapp.processEvents()
 
+    assert window._pending_model_work is None
     assert job.status == "failed"
     assert job.message == "Model was removed"
 
