@@ -53,8 +53,25 @@ hiddenimports = [
     "realesrgan.archs.srvgg_arch",
 ]
 
+
+def _is_shadowing_windows_icu(binary):
+    """True for inference-bundled ICU DLLs that must not enter the app root."""
+    if sys.platform != "win32":
+        return False
+
+    name = Path(binary[0]).name.casefold()
+    return name.endswith(".dll") and name.startswith(("icudt", "icuin", "icuuc"))
+
 for pkg in ("realesrgan", "basicsr", "gfpgan", "facexlib"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
+    # Some inference wheels carry their own ICU DLLs. In a Windows onedir build those
+    # land beside PixelUp.exe, win DLL search precedence gives them to QtCore, and Qt
+    # then fails before the app can start. PySide6's maintained hook owns Qt's runtime;
+    # exclude only the inference copies here instead of mutating the frozen directory
+    # afterward. Version-suffixed ICU names are covered by the three family prefixes.
+    pkg_binaries = [
+        binary for binary in pkg_binaries if not _is_shadowing_windows_icu(binary)
+    ]
     datas += pkg_datas
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
