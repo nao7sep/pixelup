@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from PIL import Image
+from PySide6.QtCore import QSize
 
 from pixelup.gui import (
     _image_size_text,
     _plural,
     _safe_image_size,
     _status_text,
+    bounded_initial_window_size,
 )
 
 
@@ -48,3 +50,11 @@ def test_safe_image_size_returns_none_for_non_image(tmp_path: Path) -> None:
     path = tmp_path / "bad.png"
     path.write_text("not an image", encoding="utf-8")
     assert _safe_image_size(path) is None
+
+
+def test_initial_window_target_fits_work_area_without_weakening_minimum() -> None:
+    minimum = QSize(1000, 700)
+
+    assert bounded_initial_window_size(minimum, QSize(1400, 1000)) == QSize(1160, 820)
+    assert bounded_initial_window_size(minimum, QSize(1080, 740)) == QSize(1080, 740)
+    assert bounded_initial_window_size(minimum, QSize(900, 600)) == minimum

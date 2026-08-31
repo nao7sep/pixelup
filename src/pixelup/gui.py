@@ -10,8 +10,10 @@ from itertools import count
 from pathlib import Path
 from typing import Literal
 
-from PySide6.QtCore import Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (
+    QAccessible,
+    QAccessibleEvent,
     QCloseEvent,
     QDesktopServices,
     QDragEnterEvent,
@@ -33,6 +35,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -141,6 +144,29 @@ _NAME_MIN_WIDTH = 180
 # "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
 _REVEAL_TIMEOUT_SECONDS = 5
+_WINDOW_TARGET_EXTRA_WIDTH = 160
+_WINDOW_TARGET_EXTRA_HEIGHT = 120
+
+
+def bounded_initial_window_size(minimum: QSize, work_area: QSize) -> QSize:
+    """Roomy launch target capped to the current desktop work area.
+
+    The content-derived minimum remains authoritative: on a work area smaller
+    than that floor Qt/OS policy decides placement, but this function never
+    weakens the floor merely to make a preferred startup target fit.
+    """
+    return QSize(
+        max(minimum.width(), min(minimum.width() + _WINDOW_TARGET_EXTRA_WIDTH, work_area.width())),
+        max(
+            minimum.height(),
+            min(minimum.height() + _WINDOW_TARGET_EXTRA_HEIGHT, work_area.height()),
+        ),
+    )
+
+
+def announce_accessible_alert(widget: QWidget) -> None:
+    """Announce a newly changed actionable result through Qt accessibility."""
+    QAccessible.updateAccessibility(QAccessibleEvent(widget, QAccessible.Event.Alert))
 
 
 def local_drop_paths(urls: Iterable[QUrl]) -> list[Path]:
@@ -282,6 +308,7 @@ class MainWindow(QMainWindow):
         self._image_order: list[Path] = []
         self._image_rows: dict[Path, int] = {}
         self._queue_rows: dict[int, int] = {}
+        self._queue_failure_count = 0
         self.jobs: list[Job] = []
         self.runner = JobRunner(self.jobs, self)
         self.runner.progress.connect(self._job_progress)
@@ -305,9 +332,13 @@ class MainWindow(QMainWindow):
         # widths plus a filename floor (see _fit_columns). Open a little roomier than
         # that floor so the stretch (filename) columns have slack on first launch.
         # The old fixed resize(1260, …) sat below this minimum, so it was dead.
-        hint = self.centralWidget().sizeHint()
-        self.setMinimumSize(hint)
-        self.resize(hint.width() + 160, hint.height() + 120)
+        hint = self._refresh_layout_metrics()
+        screen = self.screen() or QApplication.primaryScreen()
+        work_area = screen.availableGeometry().size() if screen is not None else QSize(
+            hint.width() + _WINDOW_TARGET_EXTRA_WIDTH,
+            hint.height() + _WINDOW_TARGET_EXTRA_HEIGHT,
+        )
+        self.resize(bounded_initial_window_size(hint, work_area))
         # The panel opens on what the user last left it at, not on a defaults layer:
         # config.parameters is the persisted panel, and on a fresh install the loader
         # has already filled it with JobSettings() — the built-ins.
@@ -572,11 +603,7 @@ class MainWindow(QMainWindow):
         # the current UI font (see _fit_columns): Size holds "99999 x 99999"; Jobs
         # holds a common two-state roll-up and elides + tooltips the rarer longer
         # summaries. "Image" stretches (filename, elides to the floor with a tooltip).
-        size_width = _fit_columns(self.image_table, "Size", "99999 x 99999", "Unavailable")
-        jobs_width = _fit_columns(self.image_table, "Jobs", "12 done, 5 failed")
-        image_header.resizeSection(1, size_width)
-        image_header.resizeSection(2, jobs_width)
-        self.image_table.setMinimumWidth(_NAME_MIN_WIDTH + size_width + jobs_width)
+        self._fit_image_table_columns()
         self.image_table.setMinimumHeight(180)
         layout.addWidget(self.image_table, 1)
 
@@ -798,19 +825,66 @@ class MainWindow(QMainWindow):
         # shows the longest model name in full; Scale fits its header; Status holds
         # "Cancelling...". "Image" elides a long filename to a readable floor (with a
         # tooltip) and "Output" stretches.
+        self._fit_queue_table_columns()
+        self.queue_table.setMinimumHeight(180)
+
+        self.queue_failure_result = QFrame()
+        self.queue_failure_result.setObjectName("queueFailureResult")
+        self.queue_failure_result.setStyleSheet(
+            "QFrame#queueFailureResult {"
+            " border: 1px solid #c0392b;"
+            " border-radius: 5px;"
+            " background: palette(base);"
+            "}"
+            "QLabel#queueFailureSeverity { color: #c0392b; font-weight: 600; }"
+        )
+        failure_layout = QHBoxLayout(self.queue_failure_result)
+        failure_layout.setContentsMargins(10, 7, 10, 7)
+        failure_layout.setSpacing(8)
+        severity_label = QLabel("Error")
+        severity_label.setObjectName("queueFailureSeverity")
+        self.queue_failure_label = QLabel()
+        self.queue_failure_label.setWordWrap(True)
+        failure_layout.addWidget(severity_label, 0, Qt.AlignmentFlag.AlignTop)
+        failure_layout.addWidget(self.queue_failure_label, 1)
+        self.queue_failure_result.hide()
+        layout.addWidget(self.queue_failure_result)
+        layout.addWidget(self.queue_table)
+        return group
+
+    def _fit_image_table_columns(self) -> None:
+        header = self.image_table.horizontalHeader()
+        size_width = _fit_columns(self.image_table, "Size", "99999 x 99999", "Unavailable")
+        jobs_width = _fit_columns(self.image_table, "Jobs", "12 done, 5 failed")
+        header.resizeSection(1, size_width)
+        header.resizeSection(2, jobs_width)
+        self.image_table.setMinimumWidth(_NAME_MIN_WIDTH + size_width + jobs_width)
+
+    def _fit_queue_table_columns(self) -> None:
+        header = self.queue_table.horizontalHeader()
         model_width = _fit_columns(self.queue_table, "Model", max(MODEL_ORDER, key=len))
         scale_width = _fit_columns(self.queue_table, "Scale", "4x")
         status_width = _fit_columns(self.queue_table, "Status", "Cancelling...")
-        queue_header.resizeSection(0, _NAME_MIN_WIDTH)
-        queue_header.resizeSection(1, model_width)
-        queue_header.resizeSection(2, scale_width)
-        queue_header.resizeSection(4, status_width)
+        header.resizeSection(0, _NAME_MIN_WIDTH)
+        header.resizeSection(1, model_width)
+        header.resizeSection(2, scale_width)
+        header.resizeSection(4, status_width)
         self.queue_table.setMinimumWidth(
             _NAME_MIN_WIDTH + model_width + scale_width + _NAME_MIN_WIDTH + status_width
         )
-        self.queue_table.setMinimumHeight(180)
-        layout.addWidget(self.queue_table)
-        return group
+
+    def _refresh_layout_metrics(self) -> QSize:
+        """Re-measure font-dependent chrome and publish the resulting floor."""
+        self._fit_image_table_columns()
+        self._fit_queue_table_columns()
+        central = self.centralWidget()
+        central.updateGeometry()
+        if central.layout() is not None:
+            central.layout().invalidate()
+            central.layout().activate()
+        hint = central.sizeHint()
+        self.setMinimumSize(hint)
+        return hint
 
     def _open_dialog(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, "Open images")
@@ -832,7 +906,10 @@ class MainWindow(QMainWindow):
                 continue  # the same draft reopens; no accepted edit is lost
             # Re-apply the UI font so a changed family takes effect immediately,
             # no restart needed.
-            apply_ui_font(QApplication.instance(), self.config.font_family)
+            app = QApplication.instance()
+            apply_ui_font(app, self.config.font_family)
+            self.setFont(app.font())
+            self._refresh_layout_metrics()
             log.info(
                 "settings.saved",
                 path=str(config_path()),
@@ -1225,6 +1302,25 @@ class MainWindow(QMainWindow):
         self.queue_all_all_models_button.setEnabled(has_images and bool(UPSCALE_MODELS))
         self.retry_button.setEnabled(has_failed)
         self.cancel_button.setEnabled(has_cancellable)
+        self._refresh_queue_failure_result()
+
+    def _refresh_queue_failure_result(self) -> None:
+        failed_count = sum(job.status == "failed" for job in self.jobs)
+        if failed_count == 0:
+            self._queue_failure_count = 0
+            self.queue_failure_result.hide()
+            self.queue_failure_label.clear()
+            self.queue_failure_result.setAccessibleName("")
+            return
+
+        noun = "job has" if failed_count == 1 else "jobs have"
+        message = f"{failed_count} queue {noun} failed. Review the failed rows or retry them."
+        self.queue_failure_label.setText(message)
+        self.queue_failure_result.setAccessibleName(f"Error: {message}")
+        self.queue_failure_result.show()
+        if failed_count != self._queue_failure_count:
+            self._queue_failure_count = failed_count
+            announce_accessible_alert(self.queue_failure_result)
 
 
 def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:

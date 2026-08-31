@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +10,7 @@ import pytest
 from PIL import Image
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QCloseEvent, QKeySequence
-from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
 from pixelup import gui
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
@@ -406,6 +407,96 @@ def test_job_finished_maps_outcomes_and_updates_summary(
     window._job_finished(job.id, False, "Cancelled", {"cancelled": True}, [])
     assert job.status == "cancelled"
     assert _summary(window, image) == "1 cancelled"
+
+
+def test_failed_jobs_keep_a_queue_local_accessible_summary_until_retry(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    announced: list[object] = []
+    monkeypatch.setattr("pixelup.gui.announce_accessible_alert", announced.append)
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    window.model_checks["RealESRGAN_x4plus"].setChecked(True)
+    window._queue_selected_image()
+
+    first, second = window.jobs
+    window._job_finished(first.id, False, "model failed", {}, [])
+
+    assert window.queue_failure_result.isVisibleTo(window) is True
+    assert window.queue_failure_label.text() == (
+        "1 queue job has failed. Review the failed rows or retry them."
+    )
+    assert window.queue_failure_result.accessibleName().startswith("Error:")
+    assert announced == [window.queue_failure_result]
+
+    # An unrelated success does not erase the unresolved failure.
+    window._job_finished(second.id, True, "Done", {"ok": True}, [])
+    assert window.queue_failure_result.isVisibleTo(window) is True
+    assert "1 queue job has failed" in window.queue_failure_label.text()
+    assert announced == [window.queue_failure_result]
+
+    window._retry_failed()
+    assert window.queue_failure_result.isHidden() is True
+    assert window.queue_failure_result.accessibleName() == ""
+
+
+def test_font_metric_refresh_remeasures_tables_and_window_floor(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    widths = {
+        "Size": 111,
+        "Jobs": 122,
+        "Model": 133,
+        "Scale": 144,
+        "Status": 155,
+    }
+    monkeypatch.setattr(
+        "pixelup.gui._fit_columns",
+        lambda _widget, header, *_samples: widths[header],
+    )
+
+    hint = window._refresh_layout_metrics()
+
+    assert window.image_table.horizontalHeader().sectionSize(1) == 111
+    assert window.image_table.horizontalHeader().sectionSize(2) == 122
+    assert window.image_table.minimumWidth() == 180 + 111 + 122
+    assert window.queue_table.horizontalHeader().sectionSize(1) == 133
+    assert window.queue_table.horizontalHeader().sectionSize(2) == 144
+    assert window.queue_table.horizontalHeader().sectionSize(4) == 155
+    assert window.queue_table.minimumWidth() == 180 + 133 + 144 + 180 + 155
+    assert window.minimumSize() == hint
+
+
+def test_saved_font_change_refreshes_live_layout_metrics(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    candidate = replace(window.config, font_family="Menlo")
+
+    class AcceptedSettings:
+        def __init__(self, _config, _parent) -> None:
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def config(self):
+            return candidate
+
+    applied: list[str] = []
+    refreshed: list[bool] = []
+    monkeypatch.setattr("pixelup.gui.SettingsDialog", AcceptedSettings)
+    monkeypatch.setattr("pixelup.gui.apply_ui_font", lambda _app, family: applied.append(family))
+    monkeypatch.setattr(window, "_refresh_layout_metrics", lambda: refreshed.append(True))
+
+    window._settings_dialog()
+
+    assert window.config.font_family == "Menlo"
+    assert applied == ["Menlo"]
+    assert refreshed == [True]
 
 
 def test_remove_is_blocked_while_jobs_active_then_allowed(
