@@ -166,6 +166,7 @@ def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplica
         assert dialog.font_family.text() == "Menlo"
         assert dialog.error_message.isHidden() is False
         assert "could not save" in dialog.error_message.text()
+        assert "font-weight: 600" in dialog.error_message.styleSheet()
     finally:
         dialog.deleteLater()
 

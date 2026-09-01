@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -117,7 +118,10 @@ class SettingsDialog(QDialog):
         self.ok_button = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.error_message = QLabel()
         self.error_message.setWordWrap(True)
-        self.error_message.setStyleSheet("color: palette(bright-text);")
+        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.error_message.setStyleSheet(
+            f"color: {'#ff766a' if dark else '#b3261e'}; font-weight: 600;"
+        )
         self.error_message.setAccessibleName("Settings save error")
         self.error_message.hide()
         self.buttons.accepted.connect(self._save)
