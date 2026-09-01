@@ -47,7 +47,7 @@ class AboutDialog(QDialog):
         links_layout.addWidget(issues_button)
         links_layout.addStretch()
 
-        meta = secondary_label("(c) 2026 Yoshinao Inoguchi - MIT License")
+        meta = secondary_label("© 2026 Yoshinao Inoguchi · MIT License")
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         # Close has RejectRole, so `rejected` covers both the button click and
