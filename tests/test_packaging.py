@@ -109,3 +109,13 @@ def test_windows_installer_embeds_the_canonical_app_icon() -> None:
     installer = Path("scripts/pixelup.iss").read_text(encoding="utf-8")
 
     assert "SetupIconFile=build\\icon.ico" in installer
+
+
+def test_windows_installer_supports_both_install_modes_without_an_admin_launch_broker() -> None:
+    installer = Path("scripts/pixelup.iss").read_text(encoding="utf-8")
+
+    assert "DefaultDirName={autopf}\\{#MyAppName}" in installer
+    assert "PrivilegesRequiredOverridesAllowed=dialog" in installer
+    assert "PrivilegesRequired=lowest" not in installer
+    assert "runascurrentuser" in installer
+    assert "Check: not IsAdminInstallMode" in installer

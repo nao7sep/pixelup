@@ -26,6 +26,7 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
+PrivilegesRequiredOverridesAllowed=dialog
 
 [Files]
 Source: "dist\PixelUp\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
@@ -38,4 +39,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; In per-user mode Setup and PixelUp already share the user's normal integrity
+; level, so no original-user spawn broker is needed. In per-system mode the
+; Start shortcut remains the safe non-elevated launch boundary after Setup.
+Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent runascurrentuser; Check: not IsAdminInstallMode
