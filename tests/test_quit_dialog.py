@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QPushButton
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton
 
 from pixelup.quit_dialog import QuitConfirmDialog, quit_confirmation_text
 
@@ -33,5 +33,8 @@ def test_quit_dialog_button_order_and_styling(qapp: QApplication) -> None:
         quit_button = next(b for b in dialog.findChildren(QPushButton) if b.text() == "Quit")
         assert cancel.isDefault()  # Enter/closes-safe defaults to Cancel
         assert quit_button.styleSheet()  # danger styling applied to the destructive action
+        assert dialog.windowTitle() in {
+            label.text() for label in dialog.findChildren(QLabel)
+        }
     finally:
         dialog.deleteLater()

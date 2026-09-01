@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pixelup.ui_common import secondary_label, use_regular_spacing
+from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing, use_regular_spacing
 
 # One entry per Parameters-panel control, in the panel's own order. This dialog is
 # the single home for parameter explanations — the panel itself carries none, so
@@ -76,11 +76,12 @@ class ParametersHelpDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Parameters Help")
+        self.setWindowTitle("Parameters help")
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        use_regular_spacing(layout)
+        use_dialog_spacing(layout)
+        layout.addWidget(title_label("Parameters help"))
 
         # Title/footer fixed, body the sole scroll region (modal-dialog
         # conventions): the entries live in a scroll area with a bounded height,

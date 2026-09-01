@@ -1,32 +1,34 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QAccessible, QAccessibleEvent, QDesktopServices
+from PySide6.QtGui import QAccessible, QAccessibleEvent, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
     QPushButton,
-    QRadioButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from pixelup.model_management import (
+    MANAGED_ARTIFACT_NAMES,
     MANAGED_MODEL_BUNDLES,
-    ManagedModelBundle,
     artifact_size_bytes,
     bundle_size_bytes,
 )
-from pixelup.model_manager import ModelManager
+from pixelup.model_manager import ModelManager, ModelOperation
 from pixelup.session_log import log
-from pixelup.ui_common import use_regular_spacing
+from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing
 
-_DIALOG_TARGET_WIDTH = 760
+_MODEL_ROW_SPACING = 12
+_MODEL_LIST_MAX_HEIGHT = 420
+_COLUMN_TEXT_PADDING = 24
 
 
 class ManagedModelsDialog(QDialog):
@@ -40,60 +42,79 @@ class ManagedModelsDialog(QDialog):
         required_artifacts: tuple[str, ...] = (),
         pending_job_count: int = 0,
     ) -> None:
-        super().__init__(parent)
+        # Dialog + show() produces an ordinary titled native window on macOS.
+        # QDialog.open() chooses the sheet presentation instead, hiding the native
+        # title bar and traffic-light controls even though this is a normal dialog.
+        super().__init__(parent, Qt.WindowType.Dialog)
         self._manager = manager
         self._required_artifacts = tuple(dict.fromkeys(required_artifacts))
         self._pending_job_count = pending_job_count
         self._announced_error = ""
 
         self.setWindowTitle("Managed models")
-        self.setModal(True)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
         layout = QVBoxLayout(self)
-        use_regular_spacing(layout)
+        use_dialog_spacing(layout)
+        layout.addWidget(title_label("Managed models"))
 
-        self.summary_label = QLabel()
+        self.summary_label = secondary_label("")
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
-        self.models_panel = QWidget()
+        self.models_panel = QFrame()
+        self.models_panel.setObjectName("managedModelsList")
+        self.models_panel.setStyleSheet(
+            "QFrame#managedModelsList {"
+            " border: 1px solid palette(mid);"
+            " border-radius: 7px;"
+            " background: palette(base);"
+            "}"
+        )
         models_layout = QGridLayout(self.models_panel)
-        models_layout.setContentsMargins(0, 0, 0, 0)
-        models_layout.setHorizontalSpacing(14)
-        models_layout.setVerticalSpacing(7)
-        for column, title in enumerate(("Model", "Use", "Download", "Status")):
-            heading = QLabel(title)
-            heading.setStyleSheet("font-weight: 600;")
-            models_layout.addWidget(heading, 0, column)
-        models_layout.setColumnStretch(0, 1)
+        models_layout.setContentsMargins(14, 12, 14, 12)
+        models_layout.setHorizontalSpacing(16)
+        models_layout.setVerticalSpacing(_MODEL_ROW_SPACING)
+        for column, heading in enumerate(("Model", "Use", "Size", "Status", "Action")):
+            column_heading = QLabel(heading)
+            column_heading.setStyleSheet("font-weight: 600;")
+            models_layout.addWidget(column_heading, 0, column)
 
-        self.bundle_group = QButtonGroup(self)
-        self.bundle_buttons: list[QRadioButton] = []
         self.status_labels: list[QLabel] = []
+        self.row_action_buttons: list[QPushButton] = []
         for index, bundle in enumerate(MANAGED_MODEL_BUNDLES):
             row = index + 1
-            button = QRadioButton(bundle.label)
-            button.toggled.connect(self._render)
-            self.bundle_group.addButton(button, index)
-            self.bundle_buttons.append(button)
-            models_layout.addWidget(button, row, 0)
-            models_layout.addWidget(QLabel(bundle.purpose), row, 1)
-            models_layout.addWidget(QLabel(_format_bytes(bundle_size_bytes(bundle))), row, 2)
+            models_layout.addWidget(QLabel(bundle.label), row, 0)
+            models_layout.addWidget(secondary_label(bundle.purpose), row, 1)
+            models_layout.addWidget(
+                secondary_label(_format_bytes(bundle_size_bytes(bundle))),
+                row,
+                2,
+            )
             status_label = QLabel()
             self.status_labels.append(status_label)
             models_layout.addWidget(status_label, row, 3)
-        layout.addWidget(self.models_panel)
+            action = QPushButton()
+            action.clicked.connect(
+                lambda _checked=False, bundle_index=index: self._install_bundle(bundle_index)
+            )
+            self.row_action_buttons.append(action)
+            models_layout.addWidget(action, row, 4)
 
-        self.progress_frame = QFrame()
-        progress_layout = QVBoxLayout(self.progress_frame)
-        progress_layout.setContentsMargins(0, 0, 0, 0)
-        progress_layout.setSpacing(4)
-        self.progress_label = QLabel()
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 1000)
-        progress_layout.addWidget(self.progress_label)
-        progress_layout.addWidget(self.progress_bar)
-        layout.addWidget(self.progress_frame)
+        self.column_minimum_widths = _model_column_widths(self.fontMetrics())
+        for column, width in enumerate(self.column_minimum_widths):
+            models_layout.setColumnMinimumWidth(column, width)
+
+        models_scroll = QScrollArea()
+        models_scroll.setWidgetResizable(True)
+        models_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        models_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        models_scroll.setWidget(self.models_panel)
+        models_scroll.setMinimumWidth(models_layout.sizeHint().width() + 4)
+        models_scroll.setMinimumHeight(
+            min(_MODEL_LIST_MAX_HEIGHT, models_layout.sizeHint().height() + 4)
+        )
+        layout.addWidget(models_scroll, 1)
 
         self.result_frame = QFrame()
         self.result_frame.setObjectName("modelInstallResult")
@@ -117,41 +138,32 @@ class ManagedModelsDialog(QDialog):
         layout.addWidget(self.result_frame)
 
         footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(10)
         footer.addStretch()
+        self.dismiss_button = QPushButton("Close")
+        self.dismiss_button.clicked.connect(self.reject)
         self.reveal_button = QPushButton("Reveal models folder")
         self.reveal_button.clicked.connect(self._reveal_models_folder)
-        self.dismiss_button = QPushButton("Cancel" if self._required_artifacts else "Close")
-        self.dismiss_button.clicked.connect(self.reject)
-        self.install_button = QPushButton()
-        self.install_button.clicked.connect(self._install_or_cancel)
-        footer.addWidget(self.reveal_button)
+        self.primary_button = QPushButton()
+        self.primary_button.clicked.connect(self._install_all_or_cancel)
         footer.addWidget(self.dismiss_button)
-        footer.addWidget(self.install_button)
+        footer.addWidget(self.reveal_button)
+        footer.addWidget(self.primary_button)
         layout.addLayout(footer)
 
-        self._select_initial_row()
         self._manager.changed.connect(self._render)
         self._render()
-        if self._required_artifacts:
-            self.install_button.setFocus(Qt.FocusReason.OtherFocusReason)
-        else:
-            selected = self.bundle_group.checkedButton()
-            if selected is not None:
-                selected.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.primary_button.setFocus(Qt.FocusReason.OtherFocusReason)
         self.adjustSize()
-        minimum = self.sizeHint()
-        self.setMinimumSize(minimum)
-        self.resize(
-            max(_DIALOG_TARGET_WIDTH, minimum.width()),
-            minimum.height(),
-        )
+        self.setMinimumSize(self.sizeHint())
 
     def _summary_text(self) -> str:
         if not self._required_artifacts:
             return (
-                "Install models before you need them. PixelUp verifies every download and "
-                "keeps the installed files for later jobs. Closing this window does not stop "
-                "an installation."
+                "Install any model you want to use, or install every missing model at once. "
+                "PixelUp verifies each model and keeps it for later jobs. Closing this window "
+                "does not stop an installation."
             )
         missing = self._manager.missing(self._required_artifacts)
         return (
@@ -161,109 +173,114 @@ class ManagedModelsDialog(QDialog):
             "queued. No jobs will be created unless installation succeeds."
         )
 
-    def _select_initial_row(self) -> None:
-        required = set(self._required_artifacts)
-        row = next(
-            (
-                index
-                for index, bundle in enumerate(MANAGED_MODEL_BUNDLES)
-                if required.intersection(bundle.artifact_names)
-            ),
-            0,
-        )
-        self.bundle_buttons[row].setChecked(True)
-
-    def _selected_bundle(self) -> ManagedModelBundle | None:
-        row = self.bundle_group.checkedId()
-        return MANAGED_MODEL_BUNDLES[row] if 0 <= row < len(MANAGED_MODEL_BUNDLES) else None
-
     def _render(self) -> None:
-        operation = self._manager.operation
         ready_names = self._manager.ready_names
         required = set(self._required_artifacts)
         self.summary_label.setText(self._summary_text())
 
         for row, bundle in enumerate(MANAGED_MODEL_BUNDLES):
+            bundle_operations = self._manager.operations_for(bundle.artifact_names)
+            active = next(
+                (operation for operation in bundle_operations if operation.kind == "running"),
+                None,
+            )
+            failed = next(
+                (operation for operation in bundle_operations if operation.kind == "failed"),
+                None,
+            )
             ready = len(ready_names.intersection(bundle.artifact_names))
             total = len(bundle.artifact_names)
-            status = (
-                "Ready"
-                if ready == total
-                else "Not installed"
-                if ready == 0
-                else f"{ready} of {total} ready"
-            )
+            status = _bundle_status(active, failed, ready, total)
             if required.intersection(bundle.artifact_names):
                 status = f"Required — {status}"
             self.status_labels[row].setText(status)
             self.status_labels[row].setToolTip(status)
 
-        running = operation.kind == "running"
-        self.models_panel.setEnabled(not running)
-        self.reveal_button.setEnabled(not running)
-        self.progress_frame.setVisible(running)
-        if running:
-            if operation.cancelling:
-                self.progress_label.setText("Cancelling model installation…")
-                self.install_button.setText("Cancelling…")
-                self.install_button.setEnabled(False)
+            action = self.row_action_buttons[row]
+            if active is not None:
+                action.setText("Cancelling…" if active.cancelling else "Cancel")
+                action.setEnabled(not active.cancelling and not self._required_artifacts)
             else:
-                name = operation.current_artifact
-                self.progress_label.setText(
-                    f"Installing {name}…" if name else "Starting model installation…"
-                )
-                self.install_button.setText("Cancel installation")
-                self.install_button.setEnabled(True)
-            total = operation.total_bytes
-            self.progress_bar.setValue(
-                1000
-                if total <= 0
-                else min(1000, operation.completed_bytes * 1000 // total)
+                action.setText("Reinstall" if ready == total else "Install")
+                # A queue-preflight surface has one exact authorization action in
+                # its footer. Its row actions remain visible only for orientation.
+                action.setEnabled(not self._required_artifacts)
+            action.setToolTip(
+                "Use Install and queue below for this batch."
+                if self._required_artifacts
+                else ""
             )
-        else:
-            self._render_install_action()
 
-        if operation.kind == "failed" and operation.error:
-            self._show_error(operation.error)
+        self._render_primary_action()
+        errors = tuple(
+            dict.fromkeys(
+                operation.error
+                for operation in self._manager.failed_operations
+                if operation.error
+            )
+        )
+        if errors:
+            self._show_error(" ".join(errors))
         else:
             self.result_frame.hide()
             self.result_frame.setAccessibleName("")
             self._announced_error = ""
 
-    def _render_install_action(self) -> None:
+    def _render_primary_action(self) -> None:
         if self._required_artifacts:
+            active = self._manager.active_for(self._required_artifacts)
+            if active:
+                self.primary_button.setText(
+                    "Cancelling…"
+                    if all(item.cancelling for item in active)
+                    else "Cancel installation"
+                )
+                self.primary_button.setEnabled(not all(item.cancelling for item in active))
+                return
             count = self._pending_job_count
-            self.install_button.setText(
+            self.primary_button.setText(
                 f"Install and queue {count} job{'' if count == 1 else 's'}"
             )
-            self.install_button.setEnabled(bool(self._manager.missing(self._required_artifacts)))
+            missing = self._manager.missing(self._required_artifacts)
+            self.primary_button.setEnabled(
+                bool(self._manager.available_to_install(missing))
+            )
             return
-        bundle = self._selected_bundle()
-        if bundle is None:
-            self.install_button.setText("Install selected")
-            self.install_button.setEnabled(False)
+
+        self.primary_button.setText("Install all")
+        missing = self._manager.missing(MANAGED_ARTIFACT_NAMES)
+        self.primary_button.setEnabled(bool(self._manager.available_to_install(missing)))
+
+    def _install_bundle(self, bundle_index: int) -> None:
+        if self._required_artifacts or not 0 <= bundle_index < len(MANAGED_MODEL_BUNDLES):
+            return
+        bundle = MANAGED_MODEL_BUNDLES[bundle_index]
+        active = self._manager.active_for(bundle.artifact_names)
+        if active:
+            self._manager.cancel(active[0].id)
             return
         missing = self._manager.missing(bundle.artifact_names)
-        self.install_button.setText("Install selected" if missing else "Reinstall selected")
-        self.install_button.setEnabled(True)
+        artifact_names = missing or bundle.artifact_names
+        self._manager.install(artifact_names, force=not missing)
 
-    def _install_or_cancel(self) -> None:
-        operation = self._manager.operation
-        if operation.kind == "running":
-            self._manager.cancel()
+    def _install_all_or_cancel(self) -> None:
+        targets = (
+            self._required_artifacts
+            if self._required_artifacts
+            else MANAGED_ARTIFACT_NAMES
+        )
+        if self._required_artifacts and self._manager.active_for(targets):
+            self._manager.cancel_for(targets)
             return
-        if self._required_artifacts:
-            artifact_names = self._manager.missing(self._required_artifacts)
-            force = False
-        else:
-            bundle = self._selected_bundle()
-            if bundle is None:
-                return
-            missing = self._manager.missing(bundle.artifact_names)
-            artifact_names = missing or bundle.artifact_names
-            force = not missing
-        if artifact_names:
-            self._manager.install(artifact_names, force=force)
+        missing = self._manager.missing(targets)
+        self._install_artifact_groups(self._manager.available_to_install(missing))
+
+    def _install_artifact_groups(self, artifact_names: tuple[str, ...]) -> None:
+        requested = set(artifact_names)
+        for bundle in MANAGED_MODEL_BUNDLES:
+            group = tuple(name for name in bundle.artifact_names if name in requested)
+            if group:
+                self._manager.install(group, force=False)
 
     def _reveal_models_folder(self) -> None:
         models_dir = self._manager.models_dir
@@ -288,6 +305,57 @@ class ManagedModelsDialog(QDialog):
         QAccessible.updateAccessibility(
             QAccessibleEvent(self.result_frame, QAccessible.Event.Alert)
         )
+
+
+def _bundle_status(
+    active: ModelOperation | None,
+    failed: ModelOperation | None,
+    ready: int,
+    total: int,
+) -> str:
+    if active is not None:
+        if active.cancelling:
+            return "Cancelling…"
+        return f"Installing {_percentage(active.completed_bytes, active.total_bytes)}%"
+    if failed is not None:
+        return "Failed"
+    if ready == total:
+        return "Installed"
+    if ready == 0:
+        return "Not installed"
+    return f"{ready} of {total} installed"
+
+
+def _percentage(done: int, total: int) -> int:
+    return 0 if total <= 0 else min(100, done * 100 // total)
+
+
+def _model_column_widths(metrics: QFontMetrics) -> tuple[int, ...]:
+    model_values = ("Model", *(bundle.label for bundle in MANAGED_MODEL_BUNDLES))
+    purpose_values = ("Use", *(bundle.purpose for bundle in MANAGED_MODEL_BUNDLES))
+    size_values = (
+        "Size",
+        *(_format_bytes(bundle_size_bytes(bundle)) for bundle in MANAGED_MODEL_BUNDLES),
+    )
+    status_values = (
+        "Status",
+        "Installed",
+        "Not installed",
+        "3 of 3 installed",
+        "Required — 3 of 3 installed",
+        "Required — Installing 100%",
+        "Cancelling…",
+        "Failed",
+    )
+    action_values = ("Action", "Install", "Reinstall", "Cancel", "Cancelling…")
+    return tuple(
+        _column_width(metrics, values)
+        for values in (model_values, purpose_values, size_values, status_values, action_values)
+    )
+
+
+def _column_width(metrics: QFontMetrics, values: Iterable[str]) -> int:
+    return max(metrics.horizontalAdvance(value) for value in values) + _COLUMN_TEXT_PADDING
 
 
 def _format_bytes(value: int) -> str:

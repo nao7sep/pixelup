@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig
 from pixelup.jobs import JobSettings
@@ -21,6 +21,16 @@ def test_round_trips_config_without_changes(qapp: QApplication) -> None:
     try:
         assert dialog.config() == config
         assert dialog.is_dirty() is False
+    finally:
+        dialog.deleteLater()
+
+
+def test_settings_has_matching_native_and_in_content_titles(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig())
+    try:
+        labels = {label.text() for label in dialog.findChildren(QLabel)}
+        assert dialog.windowTitle() == "Settings"
+        assert dialog.windowTitle() in labels
     finally:
         dialog.deleteLater()
 

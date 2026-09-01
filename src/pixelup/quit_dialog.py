@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pixelup.ui_common import use_regular_spacing
+from pixelup.ui_common import title_label, use_dialog_spacing, use_regular_spacing
 
 # Destructive actions get danger styling per the modal-dialog conventions; red is
 # not a standard palette role, so it is set explicitly here.
@@ -42,7 +42,8 @@ class QuitConfirmDialog(QDialog):
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        use_regular_spacing(layout)
+        use_dialog_spacing(layout)
+        layout.addWidget(title_label("Quit PixelUp?"))
 
         message = QLabel(quit_confirmation_text(active))
         message.setWordWrap(True)

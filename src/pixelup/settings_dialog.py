@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, MIN_CONCURRENT_JOBS, AppConfig
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
-from pixelup.ui_common import secondary_label, use_regular_spacing
+from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing, use_regular_spacing
 from pixelup.widgets import NoWheelSpinBox
 
 # A settled column width for the value field so the control and its wrapped
@@ -65,7 +65,8 @@ class SettingsDialog(QDialog):
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        use_regular_spacing(layout)
+        use_dialog_spacing(layout)
+        layout.addWidget(title_label("Settings"))
 
         form_widget = QWidget()
         form = QGridLayout(form_widget)

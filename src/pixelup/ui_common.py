@@ -7,6 +7,8 @@ from PySide6.QtWidgets import QApplication, QLabel, QLayout
 from .fonts import DEFAULT_UI_FONT_SIZE
 
 REGULAR_SPACING = 10
+DIALOG_MARGIN = 20
+DIALOG_SPACING = 16
 
 # A thin, rounded, themed scroll bar applied app-wide. Fusion ships a thick,
 # square scroll bar, so per the window-chrome conventions we override it with a
@@ -48,6 +50,12 @@ def use_regular_spacing(layout: QLayout, *, margins: bool = True) -> None:
     margin = REGULAR_SPACING if margins else 0
     layout.setContentsMargins(margin, margin, margin, margin)
     layout.setSpacing(REGULAR_SPACING)
+
+
+def use_dialog_spacing(layout: QLayout) -> None:
+    """Apply the roomy outer title/body/footer rhythm for app-authored dialogs."""
+    layout.setContentsMargins(DIALOG_MARGIN, DIALOG_MARGIN, DIALOG_MARGIN, DIALOG_MARGIN)
+    layout.setSpacing(DIALOG_SPACING)
 
 
 def title_label(text: str) -> QLabel:

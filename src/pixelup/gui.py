@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QGuiApplication,
     QIcon,
     QKeySequence,
+    QPalette,
     QPixmap,
     QResizeEvent,
     QShortcut,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -137,6 +139,36 @@ _NAME_MIN_WIDTH = 180
 # "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
 _REVEAL_TIMEOUT_SECONDS = 5
+
+
+def _managed_models_warning_style(palette: QPalette) -> str:
+    """Return a complete warning-button treatment for the current theme."""
+    dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
+    if dark:
+        background, hover, pressed, border, foreground = (
+            "#8a5a00",
+            "#a86d00",
+            "#704900",
+            "#d89a28",
+            "#ffffff",
+        )
+    else:
+        background, hover, pressed, border, foreground = (
+            "#f2c94c",
+            "#ffd86b",
+            "#dbae30",
+            "#a66b00",
+            "#2a1d00",
+        )
+    return (
+        "QPushButton {"
+        f" background-color: {background}; color: {foreground};"
+        f" border: 1px solid {border}; border-radius: 3px;"
+        " padding: 4px 10px; font-weight: 600;"
+        "}"
+        f"QPushButton:hover {{ background-color: {hover}; }}"
+        f"QPushButton:pressed {{ background-color: {pressed}; }}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +381,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("PixelUp")
         self._build_ui()
         self.model_manager.changed.connect(self._model_manager_changed)
+        self.model_manager.cancelled.connect(self._model_install_cancelled)
         self.model_manager.idle.connect(self._close_when_workers_stop)
         self._bind_shortcuts()
         # Window minimum = the layout's content-based size hint: the central widget
@@ -568,28 +601,27 @@ class MainWindow(QMainWindow):
 
     def _build_window_actions(self) -> QWidget:
         row = QWidget()
-        layout = QHBoxLayout(row)
+        layout = QGridLayout(row)
         use_regular_spacing(layout, margins=False)
 
-        logs_button = QPushButton("Reveal log")
-        logs_button.clicked.connect(self._reveal_log_file)
-        settings_button = QPushButton("Settings")
-        settings_button.clicked.connect(self._settings_dialog)
+        self.logs_button = QPushButton("Reveal log")
+        self.logs_button.clicked.connect(self._reveal_log_file)
+        self.settings_button = QPushButton("Settings")
+        self.settings_button.clicked.connect(self._settings_dialog)
         settings_shortcut = QKeySequence("Ctrl+,")
-        settings_button.setShortcut(settings_shortcut)
-        settings_button.setToolTip(
+        self.settings_button.setShortcut(settings_shortcut)
+        self.settings_button.setToolTip(
             f"Settings ({settings_shortcut.toString(QKeySequence.SequenceFormat.NativeText)})"
         )
-        about_button = QPushButton("About")
-        about_button.clicked.connect(self._about_dialog)
-        shortcuts_button = QPushButton("Shortcuts")
-        shortcuts_button.clicked.connect(self._shortcuts_dialog)
+        self.shortcuts_button = QPushButton("Shortcuts")
+        self.shortcuts_button.clicked.connect(self._shortcuts_dialog)
+        self.about_button = QPushButton("About")
+        self.about_button.clicked.connect(self._about_dialog)
 
-        layout.addStretch()
-        layout.addWidget(logs_button)
-        layout.addWidget(settings_button)
-        layout.addWidget(shortcuts_button)
-        layout.addWidget(about_button)
+        layout.addWidget(self.logs_button, 0, 0)
+        layout.addWidget(self.settings_button, 0, 1)
+        layout.addWidget(self.shortcuts_button, 1, 0)
+        layout.addWidget(self.about_button, 1, 1)
         return row
 
     def _bind_shortcuts(self) -> None:
@@ -683,8 +715,8 @@ class MainWindow(QMainWindow):
         column = QWidget()
         layout = QVBoxLayout(column)
         use_regular_spacing(layout, margins=False)
-        layout.addWidget(self._build_window_actions())
         layout.addWidget(self._build_actions_group())
+        layout.addWidget(self._build_window_actions())
         return column
 
     def _build_selected_image_group(self) -> QWidget:
@@ -705,11 +737,7 @@ class MainWindow(QMainWindow):
             checkbox.toggled.connect(self._update_action_buttons)
             self.model_checks[model] = checkbox
             layout.addWidget(checkbox)
-        self.manage_models_button = QPushButton()
-        self.manage_models_button.setText("Managed models (10/10 ready)")
-        self.manage_models_button.setMinimumWidth(
-            self.manage_models_button.sizeHint().width()
-        )
+        self.manage_models_button = QPushButton("Managed models")
         self.manage_models_button.clicked.connect(self._managed_models_dialog)
         layout.addWidget(self.manage_models_button)
         self._refresh_model_rollup()
@@ -984,14 +1012,18 @@ class MainWindow(QMainWindow):
         )
         self._active_models_dialog = dialog
         dialog.finished.connect(lambda _result: self._models_dialog_finished(dialog))
-        dialog.open()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _models_dialog_finished(self, dialog: ManagedModelsDialog) -> None:
         if self._active_models_dialog is dialog:
             self._active_models_dialog = None
         if (
             self._pending_model_work is not None
-            and self.model_manager.operation.kind != "running"
+            and not self.model_manager.active_for(
+                self._pending_model_work.required_artifacts
+            )
         ):
             log.info("models.pending_work_abandoned")
             self._pending_model_work = None
@@ -1004,17 +1036,9 @@ class MainWindow(QMainWindow):
         pending = self._pending_model_work
         if pending is None:
             return
-        operation = self.model_manager.operation
-        if operation.kind == "cancelled":
-            self._pending_model_work = None
-            dialog = self._active_models_dialog
-            if dialog is not None:
-                dialog.reject()
-            log.info("models.pending_work_cancelled")
-            return
-        if operation.kind != "idle" or self.model_manager.missing(
+        if self.model_manager.active_for(
             pending.required_artifacts
-        ):
+        ) or self.model_manager.missing(pending.required_artifacts):
             return
 
         self._pending_model_work = None
@@ -1030,25 +1054,53 @@ class MainWindow(QMainWindow):
         else:
             self._retry_failed_snapshot(pending.job_ids)
 
+    @Slot(object)
+    def _model_install_cancelled(self, artifact_names: object) -> None:
+        pending = self._pending_model_work
+        if not isinstance(artifact_names, tuple) or pending is None:
+            return
+        if not set(pending.required_artifacts).intersection(artifact_names):
+            return
+        self._pending_model_work = None
+        dialog = self._active_models_dialog
+        if dialog is not None:
+            dialog.reject()
+        log.info("models.pending_work_cancelled")
+
     def _refresh_model_rollup(self) -> None:
         ready, total = self.model_manager.ready_count()
-        operation = self.model_manager.operation
-        if operation.kind == "running":
+        missing = ready < total
+        if missing:
+            self.manage_models_button.setStyleSheet(
+                _managed_models_warning_style(self.palette())
+            )
+        else:
+            self.manage_models_button.setStyleSheet("")
+        if self.model_manager.active_operations:
+            completed, operation_total = self.model_manager.aggregate_progress()
             progress = (
                 0
-                if operation.total_bytes <= 0
-                else min(100, operation.completed_bytes * 100 // operation.total_bytes)
+                if operation_total <= 0
+                else min(100, completed * 100 // operation_total)
             )
-            self.manage_models_button.setText(f"Managed models (installing {progress}%)")
+            self.manage_models_button.setText(f"Installing models — {progress}%")
             self.manage_models_button.setAccessibleName(
-                f"Managed models, installing, {progress} percent; "
-                f"{ready} of {total} model files ready"
+                f"Installing models, {progress} percent"
             )
+            self.manage_models_button.setToolTip("Model installation is in progress.")
             return
-        self.manage_models_button.setText(f"Managed models ({ready}/{total} ready)")
-        self.manage_models_button.setAccessibleName(
-            f"Managed models, {ready} of {total} model files ready"
-        )
+        if missing:
+            self.manage_models_button.setText("Models are missing")
+            self.manage_models_button.setAccessibleName("Models are missing")
+            self.manage_models_button.setToolTip(
+                "Some models are not installed. Open Managed models to install them."
+            )
+        else:
+            self.manage_models_button.setText("Managed models")
+            self.manage_models_button.setAccessibleName(
+                "Managed models, all models installed"
+            )
+            self.manage_models_button.setToolTip("All models are installed.")
 
     def _parameters_help_dialog(self) -> None:
         log.info("parameters_help.dialog_opened")

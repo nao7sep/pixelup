@@ -31,7 +31,7 @@ class AboutDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(0)
 
-        name = title_label("PixelUp")
+        name = title_label("About PixelUp")
         version = secondary_label(f"Version {__version__}")
         copy = QLabel("Upscale local images with Real-ESRGAN in a simple desktop workflow.")
         copy.setWordWrap(True)

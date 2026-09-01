@@ -11,12 +11,12 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QCloseEvent, QKeySequence
+from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
 from pixelup import gui
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
-from pixelup.errors import ErrorCode
+from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
 from pixelup.jobs import JobSettings
 from pixelup.model_registry import ALL_MODELS
@@ -367,6 +367,20 @@ def test_shortcuts_help_chords_open_the_catalogue(
     assert opened == [window, window]
 
 
+def test_window_utilities_sit_below_queue_actions(
+    make_window, qapp: QApplication
+) -> None:
+    window = make_window()
+    window.show()
+    qapp.processEvents()
+
+    utilities = window.logs_button.parentWidget()
+    queue_group = window.queue_selected_button.parentWidget()
+
+    assert utilities.parentWidget() is queue_group.parentWidget()
+    assert utilities.geometry().top() >= queue_group.geometry().bottom()
+
+
 def test_open_paths_ignores_non_files(make_window, tmp_path: Path) -> None:
     window = make_window()
     real = _png(tmp_path, "a.png")
@@ -600,7 +614,42 @@ def test_settings_only_options_have_no_main_window_control(make_window) -> None:
     # The window reads both from config and never offers a widget onto them.
     assert not hasattr(window, "auto_download")
     assert not hasattr(window, "concurrent")
-    assert window.manage_models_button.text() == "Managed models (10/10 ready)"
+    assert window.manage_models_button.text() == "Managed models"
+    assert window.manage_models_button.accessibleName() == (
+        "Managed models, all models installed"
+    )
+    assert window.manage_models_button.icon().isNull()
+
+
+def test_missing_models_make_management_entry_visibly_actionable(make_window) -> None:
+    window = make_window()
+    model_file(window.runtime_dirs.models_dir, "realesr-general-x4v3").unlink()
+
+    window.model_manager.refresh_readiness()
+
+    assert window.manage_models_button.text() == "Models are missing"
+    assert window.manage_models_button.accessibleName() == "Models are missing"
+    assert window.manage_models_button.icon().isNull()
+    assert "background-color" in window.manage_models_button.styleSheet()
+    assert "border-radius: 3px" in window.manage_models_button.styleSheet()
+    assert "not installed" in window.manage_models_button.toolTip()
+
+
+def test_model_warning_button_has_complete_light_and_dark_treatments() -> None:
+    light = QPalette()
+    light.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
+    dark = QPalette()
+    dark.setColor(QPalette.ColorRole.Window, QColor("#111111"))
+
+    light_style = gui._managed_models_warning_style(light)
+    dark_style = gui._managed_models_warning_style(dark)
+
+    assert light_style != dark_style
+    for style in (light_style, dark_style):
+        assert "background-color" in style
+        assert "color:" in style
+        assert "border: 1px" in style
+        assert "border-radius: 3px" in style
 
 
 def test_missing_models_cancel_before_queue_materialization(
@@ -656,7 +705,7 @@ def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
     assert window._pending_model_work is None
     assert len(window.jobs) == 1
     assert window.queue_table.rowCount() == 1
-    assert window.manage_models_button.text() == "Managed models (10/10 ready)"
+    assert window.manage_models_button.text() == "Managed models"
 
 
 def test_install_and_queue_survives_closing_its_presentation(
@@ -686,7 +735,7 @@ def test_install_and_queue_survives_closing_its_presentation(
     window._queue_selected_image()
     dialog = window._active_models_dialog
     assert dialog is not None
-    dialog._install_or_cancel()
+    dialog._install_all_or_cancel()
     assert started.wait(1)
 
     dialog.reject()
@@ -705,6 +754,57 @@ def test_install_and_queue_survives_closing_its_presentation(
     assert window.model_manager.cleanup_for_quit()
     assert window._pending_model_work is None
     assert len(window.jobs) == 1
+
+
+def test_cancelling_preflight_downloads_abandons_the_captured_queue(
+    make_window,
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    required = ("realesr-general-x4v3", "realesr-general-wdn-x4v3")
+    for name in required:
+        model_file(window.runtime_dirs.models_dir, name).unlink()
+    window.model_manager.refresh_readiness()
+    started: set[str] = set()
+    started_lock = threading.Lock()
+    both_started = threading.Event()
+
+    def wait_for_cancel(_models_dir: Path, name: str, **kwargs: object) -> dict[str, object]:
+        with started_lock:
+            started.add(name)
+            if started == set(required):
+                both_started.set()
+        should_cancel = kwargs["should_cancel"]
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if should_cancel():  # type: ignore[operator]
+                raise PixelupError(ErrorCode.JOB_CANCELLED, "Installation cancelled.")
+            time.sleep(0.001)
+        raise AssertionError("cancel was not delivered")
+
+    monkeypatch.setattr("pixelup.model_manager.download_model", wait_for_cancel)
+    window._queue_selected_image()
+    dialog = window._active_models_dialog
+    assert dialog is not None
+    dialog._install_all_or_cancel()
+    assert both_started.wait(1)
+
+    dialog._install_all_or_cancel()
+    deadline = time.monotonic() + 3
+    while not window.model_manager.cleanup_for_quit() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.001)
+    qapp.processEvents()
+
+    assert window.model_manager.cleanup_for_quit()
+    assert window._pending_model_work is None
+    assert window._active_models_dialog is None
+    assert window.jobs == []
 
 
 def test_retry_stays_failed_when_model_install_is_cancelled(
