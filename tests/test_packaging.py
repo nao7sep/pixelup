@@ -95,12 +95,14 @@ def test_frozen_runtime_includes_the_dynamic_https_hostname_codec() -> None:
     assert '"encodings.idna",' in spec
 
 
-def test_windows_freezer_excludes_inference_icu_dlls_before_collection() -> None:
+def test_windows_freezer_excludes_non_qt_icu_from_every_collection_source() -> None:
     spec = Path("pixelup.spec").read_text(encoding="utf-8")
 
     assert 'sys.platform != "win32"' in spec
     assert 'name.startswith(("icudt", "icuin", "icuuc"))' in spec
+    assert '"pyside6" not in source_parts' in spec
     assert "if not _is_shadowing_windows_icu(binary)" in spec
+    assert "binary for binary in a.binaries if not _is_shadowing_windows_icu(binary)" in spec
 
 
 def test_windows_installer_embeds_the_canonical_app_icon() -> None:

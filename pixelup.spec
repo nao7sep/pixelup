@@ -55,12 +55,17 @@ hiddenimports = [
 
 
 def _is_shadowing_windows_icu(binary):
-    """True for inference-bundled ICU DLLs that must not enter the app root."""
+    """True for non-Qt ICU DLLs that must not enter the Windows app root."""
     if sys.platform != "win32":
         return False
 
     name = Path(binary[0]).name.casefold()
-    return name.endswith(".dll") and name.startswith(("icudt", "icuin", "icuuc"))
+    source_parts = {part.casefold() for part in Path(binary[1]).parts}
+    return (
+        name.endswith(".dll")
+        and name.startswith(("icudt", "icuin", "icuuc"))
+        and "pyside6" not in source_parts
+    )
 
 for pkg in ("realesrgan", "basicsr", "gfpgan", "facexlib"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
@@ -92,6 +97,14 @@ a = Analysis(
     excludes=["tkinter", "pytest", "_pytest"],
     noarchive=False,
 )
+# Analysis can discover DLLs outside the explicit inference collections through
+# another hook or the host PATH. Windows searches the app root before Qt's own
+# directory, so reject every non-PySide6 ICU copy at this final owning boundary
+# as well. A future Qt-owned ICU remains intact, and the frozen self-test proves
+# that the resulting Qt runtime actually loads.
+a.binaries = [
+    binary for binary in a.binaries if not _is_shadowing_windows_icu(binary)
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(
