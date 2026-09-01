@@ -149,3 +149,37 @@ def test_accepting_the_dialog_leaves_the_parameters_panel_untouched(qapp: QAppli
         assert committed.max_concurrent_jobs == 4
     finally:
         dialog.deleteLater()
+
+
+def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplication) -> None:
+    attempts: list[AppConfig] = []
+    dialog = SettingsDialog(
+        AppConfig(),
+        try_save=lambda candidate: attempts.append(candidate) or False,
+    )
+    try:
+        dialog.font_family.setText("Menlo")
+        dialog.ok_button.click()
+
+        assert attempts == [dialog.config()]
+        assert dialog.result() == 0
+        assert dialog.font_family.text() == "Menlo"
+        assert dialog.error_message.isHidden() is False
+        assert "could not save" in dialog.error_message.text()
+    finally:
+        dialog.deleteLater()
+
+
+def test_successful_retry_accepts_after_an_inline_failure(qapp: QApplication) -> None:
+    outcomes = iter((False, True))
+    dialog = SettingsDialog(AppConfig(), try_save=lambda _candidate: next(outcomes))
+    try:
+        dialog.concurrent.setValue(2)
+        dialog.ok_button.click()
+        assert dialog.result() == 0
+        assert dialog.error_message.isHidden() is False
+
+        dialog.ok_button.click()
+        assert dialog.result() == int(dialog.DialogCode.Accepted)
+    finally:
+        dialog.deleteLater()

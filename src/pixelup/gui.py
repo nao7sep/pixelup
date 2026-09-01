@@ -962,12 +962,16 @@ class MainWindow(QMainWindow):
         if not self._flush_parameters_save():
             return
         log.info("settings.dialog_opened")
-        dialog = SettingsDialog(self.config, self)
-        while dialog.exec() == QDialog.DialogCode.Accepted:
-            previous_config = self.config
-            candidate = dialog.config()
-            if not self._save_config_candidate(candidate):
-                continue  # the same draft reopens; no accepted edit is lost
+        previous_config = self.config
+        dialog = SettingsDialog(
+            self.config,
+            self,
+            try_save=lambda candidate: self._save_config_candidate(
+                candidate,
+                surface_failure=False,
+            ),
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             # Re-apply the UI font so a changed family takes effect immediately,
             # no restart needed.
             app = QApplication.instance()
