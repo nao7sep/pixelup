@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QAccessible, QAccessibleEvent, QDesktopServices, QFontMetrics
+from PySide6.QtGui import QAccessible, QAccessibleEvent, QDesktopServices, QFontMetrics, QPalette
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -191,10 +191,14 @@ class ManagedModelsDialog(QDialog):
             ready = len(ready_names.intersection(bundle.artifact_names))
             total = len(bundle.artifact_names)
             status = _bundle_status(active, failed, ready, total)
-            if required.intersection(bundle.artifact_names):
-                status = f"Required — {status}"
             self.status_labels[row].setText(status)
             self.status_labels[row].setToolTip(status)
+            missing_required = bool(required.intersection(bundle.artifact_names)) and ready < total
+            self.status_labels[row].setStyleSheet(
+                _required_missing_style(self.palette())
+                if missing_required and active is None and failed is None
+                else ""
+            )
 
             action = self.row_action_buttons[row]
             if active is not None:
@@ -326,6 +330,12 @@ def _bundle_status(
     return f"{ready} of {total} installed"
 
 
+def _required_missing_style(palette: QPalette) -> str:
+    """Use attention styling without changing a factual model status label."""
+    dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
+    return f"color: {'#f2c14e' if dark else '#8a5a00'}; font-weight: 600;"
+
+
 def _percentage(done: int, total: int) -> int:
     return 0 if total <= 0 else min(100, done * 100 // total)
 
@@ -342,8 +352,6 @@ def _model_column_widths(metrics: QFontMetrics) -> tuple[int, ...]:
         "Installed",
         "Not installed",
         "3 of 3 installed",
-        "Required — 3 of 3 installed",
-        "Required — Installing 100%",
         "Cancelling…",
         "Failed",
     )

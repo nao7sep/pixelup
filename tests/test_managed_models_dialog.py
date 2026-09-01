@@ -105,6 +105,14 @@ def test_queue_install_only_changes_manager_state(
         assert dialog.primary_button.text() == "Install and queue 12 jobs"
         assert all(not button.isEnabled() for button in dialog.row_action_buttons)
         assert "No jobs will be created" in dialog.summary_label.text()
+        required_statuses = [
+            label
+            for bundle, label in zip(MANAGED_MODEL_BUNDLES, dialog.status_labels, strict=True)
+            if set(required).intersection(bundle.artifact_names)
+        ]
+        assert required_statuses
+        assert all("Required" not in label.text() for label in required_statuses)
+        assert all("color:" in label.styleSheet() for label in required_statuses)
         dialog._install_all_or_cancel()
         _finish_manager(manager, qapp)
 
