@@ -504,10 +504,11 @@ def test_saved_font_change_refreshes_live_layout_metrics(
     candidate = replace(window.config, font_family="Menlo")
 
     class AcceptedSettings:
-        def __init__(self, _config, _parent) -> None:
-            pass
+        def __init__(self, _config, _parent, *, try_save) -> None:
+            self._try_save = try_save
 
         def exec(self):
+            assert self._try_save(candidate) is True
             return QDialog.DialogCode.Accepted
 
         def config(self):

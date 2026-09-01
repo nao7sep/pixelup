@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -58,9 +60,16 @@ class SettingsDialog(QDialog):
     dialog was opened with, so accepting always means "apply a real change".
     """
 
-    def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        parent: QWidget | None = None,
+        *,
+        try_save: Callable[[AppConfig], bool] | None = None,
+    ) -> None:
         super().__init__(parent)
         self._initial = config
+        self._try_save = try_save
         self.setWindowTitle("Settings")
         self.setModal(True)
 
@@ -107,10 +116,19 @@ class SettingsDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         self.ok_button = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
-        self.buttons.accepted.connect(self.accept)
+        self.error_message = QLabel()
+        self.error_message.setWordWrap(True)
+        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.error_message.setStyleSheet(
+            f"color: {'#ff766a' if dark else '#b3261e'}; font-weight: 600;"
+        )
+        self.error_message.setAccessibleName("Settings save error")
+        self.error_message.hide()
+        self.buttons.accepted.connect(self._save)
         self.buttons.rejected.connect(self.reject)
 
         layout.addWidget(form_widget, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.error_message)
         layout.addWidget(self.buttons)
         self.adjustSize()
         self.setMinimumSize(self.sizeHint())
@@ -141,3 +159,15 @@ class SettingsDialog(QDialog):
 
     def _update_commit_enabled(self) -> None:
         self.ok_button.setEnabled(self.is_dirty())
+
+    def _save(self) -> None:
+        candidate = self.config()
+        self.error_message.clear()
+        self.error_message.hide()
+        if self._try_save is not None and not self._try_save(candidate):
+            self.error_message.setText(
+                "PixelUp could not save your settings. Your changes are still here; try again."
+            )
+            self.error_message.show()
+            return
+        self.accept()
