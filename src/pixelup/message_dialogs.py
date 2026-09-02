@@ -23,11 +23,11 @@ def _info(parent: QWidget, text: str) -> None:
     QMessageBox.information(parent, _APP, text)
 
 
-def warn_config_reset(parent: QWidget, quarantined_name: str) -> None:
+def warn_config_reset(parent: QWidget) -> None:
     _info(
         parent,
         "Your settings file was unreadable and has been reset to defaults.\n\n"
-        f"The unreadable file was kept as {quarantined_name} in the PixelUp folder.",
+        "A preserved copy remains available, and its location is recorded in the log.",
     )
 
 

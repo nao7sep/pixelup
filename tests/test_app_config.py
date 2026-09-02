@@ -225,7 +225,7 @@ def test_corrupt_config_lets_window_open(
     notices: list[str] = []
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset",
-        lambda parent, name: notices.append(name),
+        lambda _parent: notices.append("shown"),
     )
     log_file = home / "logs" / "session.log"
     configure_session_logging(log_file)
@@ -241,7 +241,7 @@ def test_corrupt_config_lets_window_open(
         assert (home / "config.json").exists()
         # The deferred non-fatal notice fires once the event loop turns.
         QApplication.processEvents()
-        assert notices == [window._config_quarantined_to.name]
+        assert notices == ["shown"]
     finally:
         window._session_shutdown = True
         window.close()

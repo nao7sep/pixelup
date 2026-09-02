@@ -424,7 +424,7 @@ class MainWindow(QMainWindow):
 
     def _notify_config_reset(self) -> None:
         if self._config_quarantined_to is not None:
-            warn_config_reset(self, self._config_quarantined_to.name)
+            warn_config_reset(self)
 
     def _on_commit_data_request(self, _manager: object) -> None:
         self._session_shutdown = True

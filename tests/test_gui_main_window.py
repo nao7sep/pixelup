@@ -1272,7 +1272,7 @@ def test_a_stray_persisted_tile_is_quarantined_before_the_panel_is_seeded(
     notices: list[str] = []
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset",
-        lambda _parent, name: notices.append(name),
+        lambda _parent: notices.append("shown"),
     )
     log_file = tmp_path / "logs" / "session.log"
     configure_session_logging(log_file)
@@ -1286,7 +1286,7 @@ def test_a_stray_persisted_tile_is_quarantined_before_the_panel_is_seeded(
         # And the value the panel would hand a job is a real one, not None.
         assert window.current_job_settings().tile in TILE_VALUES
         qapp.processEvents()
-        assert notices == [window._config_quarantined_to.name]
+        assert notices == ["shown"]
     finally:
         window._session_shutdown = True
         window.close()
