@@ -205,7 +205,7 @@ def _bundle_exists(output_path: Path, occupied: Path) -> PixelupError:
     return PixelupError(
         ErrorCode.OUTPUT_EXISTS,
         "The output file or its settings sidecar already exists.",
-        hint="Retry the job to choose a new unused filename.",
+        user_hint="Retry the job to choose a new unused filename.",
         details={"output": str(output_path), "occupied": str(occupied)},
     )
 

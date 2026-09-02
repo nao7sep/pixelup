@@ -69,7 +69,7 @@ def infer_output_format(output_arg: str, forced: OutputFormat | None) -> OutputF
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
             "Output format could not be inferred from the output path.",
-            hint="Choose png, jpg, or webp.",
+            user_hint="Choose png, jpg, or webp.",
             details={"output": output_arg},
         ) from exc
 

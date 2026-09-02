@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
     QPainter,
     QPaintEvent,
     QPalette,
+    QPen,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
@@ -18,11 +19,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QSpinBox,
     QTableWidget,
-    QVBoxLayout,
+    QToolButton,
     QWidget,
 )
 
@@ -32,8 +32,39 @@ from pixelup.paths import OutputFormat
 ResultSeverity = Literal["information", "warning", "error"]
 
 
+class ResultCloseButton(QToolButton):
+    """Quiet result close control with toolkit-independent drawn geometry."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setToolTip("Dismiss")
+        self.setAccessibleName("Dismiss result")
+        self.setAutoRaise(True)
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(
+            "QToolButton {"
+            " border: none; border-radius: 4px; background: transparent; padding: 0;"
+            "}"
+            "QToolButton:hover { background: palette(midlight); }"
+            "QToolButton:pressed { background: palette(mid); }"
+            "QToolButton:focus { border: 1px solid palette(highlight); }"
+        )
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt override name
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(self.palette().color(QPalette.ColorRole.ButtonText))
+        pen.setWidthF(1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(8, 8), QPointF(16, 16))
+        painter.drawLine(QPointF(16, 8), QPointF(8, 16))
+
+
 class OperationResult(QFrame):
-    """A persistent inline result with visible and accessible severity.
+    """A persistent inline result whose severity controls behavior and palette.
 
     The owner decides where the result lives and when its consequence is resolved.
     This widget owns only presentation. If it is hosted by a dialog, revealing new
@@ -46,7 +77,6 @@ class OperationResult(QFrame):
         *,
         object_name: str,
         dismissible: bool = False,
-        stacked: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -54,32 +84,18 @@ class OperationResult(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self._announcement = ""
 
-        layout = QVBoxLayout(self) if stacked else QHBoxLayout(self)
-        layout.setContentsMargins(10, 7, 7 if dismissible else 10, 7)
-        layout.setSpacing(6 if stacked else 8)
-        self.severity_label = QLabel()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 7, 5 if dismissible else 10, 7)
+        layout.setSpacing(8)
         self.message_label = QLabel()
         self.message_label.setWordWrap(True)
         self.message_label.setMinimumWidth(0)
-        if stacked:
-            message_row = QWidget(self)
-            message_layout = QHBoxLayout(message_row)
-            message_layout.setContentsMargins(0, 0, 0, 0)
-            message_layout.setSpacing(8)
-            message_layout.addWidget(self.severity_label, 0, Qt.AlignmentFlag.AlignTop)
-            message_layout.addWidget(self.message_label, 1)
-            layout.addWidget(message_row)
-        else:
-            layout.addWidget(self.severity_label, 0, Qt.AlignmentFlag.AlignTop)
-            layout.addWidget(self.message_label, 1)
+        layout.addWidget(self.message_label, 1)
 
-        self.dismiss_button = QPushButton("Dismiss", self)
+        self.dismiss_button = ResultCloseButton(self)
         self.dismiss_button.clicked.connect(self.clear_result)
         if dismissible:
-            if stacked:
-                layout.addWidget(self.dismiss_button, 0, Qt.AlignmentFlag.AlignRight)
-            else:
-                layout.addWidget(self.dismiss_button)
+            layout.addWidget(self.dismiss_button, 0, Qt.AlignmentFlag.AlignTop)
         else:
             self.dismiss_button.hide()
         self.hide()
@@ -91,11 +107,8 @@ class OperationResult(QFrame):
         severity: ResultSeverity,
         announce: bool = True,
     ) -> None:
-        severity_text = severity.capitalize()
-        accessible_text = f"{severity_text}: {message}"
-        self.severity_label.setText(severity_text)
         self.message_label.setText(message)
-        self.setAccessibleName(accessible_text)
+        self.setAccessibleName(message)
         self._apply_severity_style(severity)
         self.show()
 
@@ -103,18 +116,17 @@ class OperationResult(QFrame):
         if isinstance(owner, QDialog):
             owner.adjustSize()
 
-        if announce and accessible_text != self._announcement:
+        if announce and message != self._announcement:
             event = (
                 QAccessible.Event.NameChanged
                 if severity == "information"
                 else QAccessible.Event.Alert
             )
             QAccessible.updateAccessibility(QAccessibleEvent(self, event))
-        self._announcement = accessible_text
+        self._announcement = message
 
     def clear_result(self) -> None:
         self.hide()
-        self.severity_label.clear()
         self.message_label.clear()
         self.setAccessibleName("")
         self._announcement = ""
@@ -134,7 +146,6 @@ class OperationResult(QFrame):
             " background: palette(base);"
             "}"
         )
-        self.severity_label.setStyleSheet(f"color: {color}; font-weight: 600;")
 
 
 class NoWheelComboBox(QComboBox):

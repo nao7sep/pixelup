@@ -122,7 +122,6 @@ class SettingsDialog(QDialog):
         self.error_message.setStyleSheet(
             f"color: {'#ff766a' if dark else '#b3261e'}; font-weight: 600;"
         )
-        self.error_message.setAccessibleName("Settings save error")
         self.error_message.hide()
         self.buttons.accepted.connect(self._save)
         self.buttons.rejected.connect(self.reject)
@@ -168,6 +167,7 @@ class SettingsDialog(QDialog):
             self.error_message.setText(
                 "PixelUp could not save your settings. Your changes are still here; try again."
             )
+            self.error_message.setAccessibleName(self.error_message.text())
             self.error_message.show()
             self.adjustSize()
             return

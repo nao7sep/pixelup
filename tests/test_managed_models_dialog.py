@@ -137,10 +137,32 @@ def test_install_failure_remains_visible_and_retryable(
         _finish_manager(manager, qapp)
         assert manager.failed_operations[0].kind == "failed"
         assert dialog.result_view.isVisibleTo(dialog)
-        assert dialog.result_view.severity_label.text() == "Error"
         assert dialog.result_view.message_label.text() == "Network unavailable."
-        assert dialog.result_view.accessibleName() == "Error: Network unavailable."
+        assert dialog.result_view.accessibleName() == "Network unavailable."
         assert dialog.row_action_buttons[0].isEnabled()
+    finally:
+        dialog.deleteLater()
+
+
+def test_unexpected_install_failure_uses_safe_copy(
+    qapp: QApplication, tmp_path: Path, monkeypatch
+) -> None:
+    diagnostic_sentinel = "EACCES Error invoking worker /private/var/tmp/pixelup-model"
+
+    def fail(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise OSError(diagnostic_sentinel)
+
+    monkeypatch.setattr("pixelup.model_manager.download_model", fail)
+    manager = ModelManager(tmp_path)
+    dialog = ManagedModelsDialog(manager)
+    try:
+        dialog._install_bundle(0)
+        _finish_manager(manager, qapp)
+
+        assert dialog.result_view.message_label.text() == (
+            "The models could not be installed. Try again."
+        )
+        assert diagnostic_sentinel not in dialog.result_view.message_label.text()
     finally:
         dialog.deleteLater()
 

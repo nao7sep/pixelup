@@ -799,7 +799,6 @@ class MainWindow(QMainWindow):
         self.parameters_result = OperationResult(
             object_name="parametersSaveResult",
             dismissible=True,
-            stacked=True,
         )
         form.addRow(self.parameters_result)
 
@@ -856,7 +855,6 @@ class MainWindow(QMainWindow):
         self.queue_action_result = OperationResult(
             object_name="queueActionResult",
             dismissible=True,
-            stacked=True,
         )
         layout.addWidget(self.queue_action_result)
         layout.addStretch()
@@ -891,16 +889,12 @@ class MainWindow(QMainWindow):
             " border-radius: 5px;"
             " background: palette(base);"
             "}"
-            "QLabel#queueFailureSeverity { color: #c0392b; font-weight: 600; }"
         )
         failure_layout = QHBoxLayout(self.queue_failure_result)
         failure_layout.setContentsMargins(10, 7, 10, 7)
         failure_layout.setSpacing(8)
-        severity_label = QLabel("Error")
-        severity_label.setObjectName("queueFailureSeverity")
         self.queue_failure_label = QLabel()
         self.queue_failure_label.setWordWrap(True)
-        failure_layout.addWidget(severity_label, 0, Qt.AlignmentFlag.AlignTop)
         failure_layout.addWidget(self.queue_failure_label, 1)
         self.queue_failure_result.hide()
         layout.addWidget(self.queue_failure_result)
@@ -1594,7 +1588,7 @@ class MainWindow(QMainWindow):
         noun = "job has" if failed_count == 1 else "jobs have"
         message = f"{failed_count} queue {noun} failed. Review the failed rows or retry them."
         self.queue_failure_label.setText(message)
-        self.queue_failure_result.setAccessibleName(f"Error: {message}")
+        self.queue_failure_result.setAccessibleName(message)
         self.queue_failure_result.show()
         if failed_count != self._queue_failure_count:
             self._queue_failure_count = failed_count
@@ -1778,8 +1772,12 @@ def main() -> int:
         app = QApplication.instance() or QApplication(sys.argv)
         app.setApplicationName("PixelUp")
         app.setApplicationDisplayName("PixelUp")
-        detail = exc.message if isinstance(exc, PixelupError) else str(exc)
-        hint = exc.hint if isinstance(exc, PixelupError) else None
+        detail = (
+            exc.user_message
+            if isinstance(exc, PixelupError)
+            else "PixelUp could not read its storage or application state."
+        )
+        hint = exc.user_hint if isinstance(exc, PixelupError) else None
         show_startup_failure(
             detail,
             hint,

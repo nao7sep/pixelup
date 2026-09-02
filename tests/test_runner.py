@@ -164,7 +164,7 @@ def test_failure_message_carries_the_hint_when_there_is_one() -> None:
     with_hint = PixelupError(
         ErrorCode.MODEL_NOT_FOUND,
         "Model 'x4plus' is not present in the models directory.",
-        hint="Open Managed models to install it.",
+        user_hint="Open Managed models to install it.",
     )
     assert failure_message(with_hint) == (
         "Model 'x4plus' is not present in the models directory. "
@@ -173,6 +173,12 @@ def test_failure_message_carries_the_hint_when_there_is_one() -> None:
 
     bare = PixelupError(ErrorCode.OUT_OF_MEMORY, "Ran out of memory.")
     assert failure_message(bare) == "Ran out of memory."
+
+    internal = PixelupError(
+        ErrorCode.INTERNAL_ERROR,
+        "Inference returned an unsupported private tensor layout.",
+    )
+    assert failure_message(internal) == "The image could not be upscaled. Retry the job."
 
 
 def test_request_cancel_for_unknown_job_is_a_noop(tmp_path: Path) -> None:
@@ -614,8 +620,10 @@ def test_worker_run_unexpected_error_is_wrapped(
 ) -> None:
     job = _make_job(4, tmp_path)
 
+    diagnostic_sentinel = "ValueError EACCES /private/var/tmp/pixelup-internal"
+
     def boom(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
-        raise ValueError("boom")
+        raise ValueError(diagnostic_sentinel)
 
     monkeypatch.setattr("pixelup.runner.run_upscale", boom)
     worker = JobWorker(job)
@@ -623,7 +631,8 @@ def test_worker_run_unexpected_error_is_wrapped(
 
     worker.run()
 
-    assert finished == [(job.id, False, "Unexpected error: boom", {}, [])]
+    assert finished == [(job.id, False, "The image could not be upscaled. Retry the job.", {}, [])]
+    assert diagnostic_sentinel not in finished[0][2]
 
 
 def test_worker_run_forwards_processing_progress_as_text(

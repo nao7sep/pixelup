@@ -5,7 +5,7 @@ import time
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
-from pixelup.errors import ErrorCode, PixelupError
+from pixelup.errors import ErrorCode, PixelupError, user_text
 from pixelup.jobs import Job, job_log_payload, options_for_job
 from pixelup.output_reservation import (
     PublishedFile,
@@ -29,7 +29,10 @@ def failure_message(exc: PixelupError) -> str:
     The row is the only place a processing failure surfaces, so its corrective hint
     must ride along rather than existing only in the log.
     """
-    return f"{exc.message} {exc.hint}" if exc.hint else exc.message
+    return user_text(
+        exc,
+        internal_fallback="The image could not be upscaled. Retry the job.",
+    )
 
 
 class JobWorker(QObject):
@@ -134,22 +137,28 @@ class JobWorker(QObject):
                     warnings,
                 )
                 return
-            log.warning(
+            log.exception(
                 "job.failed",
                 job_id=self.job.id,
                 code=exc.code.value,
-                reason=exc.message,
+                error_details=exc.details,
                 warnings=warnings,
                 details=job_log_payload(self.job),
             )
             self.signals.finished.emit(self.job.id, False, failure_message(exc), {}, warnings)
-        except Exception as exc:
+        except Exception:
             log.exception(
                 "job.failed_unexpectedly",
                 job_id=self.job.id,
                 details=job_log_payload(self.job),
             )
-            self.signals.finished.emit(self.job.id, False, f"Unexpected error: {exc}", {}, warnings)
+            self.signals.finished.emit(
+                self.job.id,
+                False,
+                "The image could not be upscaled. Retry the job.",
+                {},
+                warnings,
+            )
 
 
 class JobRunner(QObject):

@@ -74,8 +74,8 @@ def test_validate_options_rejects_bad_values(overrides: dict[str, object], code:
     assert exc_info.value.code == code
     # Messages surface verbatim in the GUI queue, so they must reference the
     # on-screen control rather than a non-existent CLI flag.
-    assert "--" not in exc_info.value.message
-    assert exc_info.value.hint is None or "--" not in exc_info.value.hint
+    assert "--" not in exc_info.value.user_message
+    assert exc_info.value.user_hint is None or "--" not in exc_info.value.user_hint
 
 
 @pytest.mark.parametrize(
@@ -98,7 +98,7 @@ def test_validate_options_uses_gui_neutral_messages(
 ) -> None:
     with pytest.raises(PixelupError) as exc_info:
         validate_options(make_options(**overrides))
-    assert exc_info.value.message == expected_message
+    assert exc_info.value.user_message == expected_message
 
 
 def test_validate_options_allows_denoise_for_general_model() -> None:

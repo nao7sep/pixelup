@@ -332,7 +332,7 @@ def validate_output_path(path: Path, *, overwrite: bool) -> None:
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
             "Output file already exists.",
-            hint="Remove the existing file, then retry the job.",
+            user_hint="Remove the existing file, then retry the job.",
             details={"output": str(path)},
         )
     if not os.access(parent, os.W_OK):

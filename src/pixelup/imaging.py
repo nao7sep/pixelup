@@ -223,7 +223,7 @@ def _output_exists(output_path: Path) -> PixelupError:
     return PixelupError(
         ErrorCode.OUTPUT_EXISTS,
         "Output file already exists.",
-        hint="Retry the job to choose a new unused filename.",
+        user_hint="Retry the job to choose a new unused filename.",
         details={"output": str(output_path)},
     )
 

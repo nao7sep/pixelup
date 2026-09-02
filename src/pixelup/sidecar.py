@@ -83,7 +83,7 @@ def write_sidecar(
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
             "Output settings sidecar already exists.",
-            hint="Retry the job to choose a new unused filename.",
+            user_hint="Retry the job to choose a new unused filename.",
             details={"sidecar": str(sidecar_path)},
         ) from exc
     except OSError as exc:
@@ -130,7 +130,7 @@ def write_sidecar(
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
             "Output settings sidecar changed during publication.",
-            hint="Retry the job to choose a new unused filename.",
+            user_hint="Retry the job to choose a new unused filename.",
             details={"sidecar": str(sidecar_path)},
         )
     return claim

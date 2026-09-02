@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
+
+from pixelup.ui_common import use_dialog_spacing
 
 # Named, greppable home for PixelUp's informational alerts. A QMessageBox is a
 # framework primitive, not a native picker, so per the modal-dialog conventions it
@@ -29,11 +39,35 @@ def warn_jobs_stopping(parent: QWidget) -> None:
     )
 
 
-def show_startup_failure(detail: str, hint: str | None) -> None:
-    remedy = f"\n\n{hint}" if hint else ""
-    QMessageBox.critical(
-        None,
-        "PixelUp could not start",
-        "PixelUp could not open its storage or application state.\n\n"
-        f"{detail}{remedy}",
-    )
+class StartupFailureDialog(QDialog):
+    """A deliberately plain fatal-startup surface without a severity icon."""
+
+    def __init__(self, user_message: str, user_hint: str | None) -> None:
+        super().__init__(None, Qt.WindowType.Dialog)
+        self.setWindowTitle("PixelUp could not start")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+
+        layout = QVBoxLayout(self)
+        use_dialog_spacing(layout)
+        self.message_label = QLabel(user_message)
+        self.message_label.setWordWrap(True)
+        self.message_label.setMinimumWidth(340)
+        self.message_label.setMaximumWidth(480)
+        layout.addWidget(self.message_label)
+
+        self.hint_label = QLabel(user_hint or "")
+        self.hint_label.setWordWrap(True)
+        self.hint_label.setMaximumWidth(480)
+        self.hint_label.setVisible(bool(user_hint))
+        layout.addWidget(self.hint_label)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+        self.adjustSize()
+        self.setMinimumSize(self.sizeHint())
+
+
+def show_startup_failure(user_message: str, user_hint: str | None) -> None:
+    StartupFailureDialog(user_message, user_hint).exec()

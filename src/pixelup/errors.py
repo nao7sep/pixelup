@@ -24,10 +24,19 @@ class ErrorCode(StrEnum):
 
 @dataclass(slots=True)
 class PixelupError(Exception):
+    """A structured failure with explicitly trusted user-facing fields."""
+
     code: ErrorCode
-    message: str
-    hint: str | None = None
+    user_message: str
+    user_hint: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
-        return self.message
+        return self.user_message
+
+
+def user_text(error: PixelupError, *, internal_fallback: str) -> str:
+    """Map a structured failure to copy safe for the operation's UI owner."""
+    if error.code == ErrorCode.INTERNAL_ERROR:
+        return internal_fallback
+    return f"{error.user_message} {error.user_hint}" if error.user_hint else error.user_message

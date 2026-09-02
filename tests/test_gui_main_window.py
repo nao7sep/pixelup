@@ -279,8 +279,7 @@ def test_external_drop_accepts_local_files_and_rejects_remote_urls(
     assert f"{tmp_path.name}: folders are not supported" in message
     assert "missing.png: the file is unavailable" in message
     assert "not-an-image.txt: not a readable supported image" in message
-    assert window.open_result.severity_label.text() == "Warning"
-    assert window.open_result.accessibleName().startswith("Warning:")
+    assert window.open_result.accessibleName() == message
 
 
 def test_external_drag_leave_clears_receiver_presentation(make_window, tmp_path: Path) -> None:
@@ -309,7 +308,6 @@ def test_open_duplicate_is_information_and_unrelated_success_does_not_clear_it(
 
     window.open_paths([first])
     assert window.open_result.message_label.text() == "Already open: first.png."
-    assert window.open_result.severity_label.text() == "Information"
     assert window.open_result.isVisibleTo(window)
 
     window.open_paths([second])
@@ -343,15 +341,17 @@ def test_unexpected_open_failure_uses_error_presentation(
     window = make_window()
     image = _png(tmp_path, "failure.png")
 
+    diagnostic_sentinel = "EACCES /private/var/tmp/pixelup-internal"
+
     def fail_path(_path: Path) -> Path:
-        raise OSError("denied")
+        raise OSError(diagnostic_sentinel)
 
     monkeypatch.setattr("pixelup.gui.absolute_user_path", fail_path)
     window.open_paths([image])
 
     assert "could not be read" in window.open_result.message_label.text()
-    assert window.open_result.severity_label.text() == "Error"
-    assert window.open_result.accessibleName().startswith("Error:")
+    assert diagnostic_sentinel not in window.open_result.message_label.text()
+    assert window.open_result.accessibleName() == window.open_result.message_label.text()
 
 
 def test_queue_preconditions_stay_with_the_queue_actions_and_clear_on_correction(
@@ -362,7 +362,6 @@ def test_queue_preconditions_stay_with_the_queue_actions_and_clear_on_correction
     window._enqueue_jobs([], ["realesr-general-x4v3"])
 
     assert window.queue_action_result.isVisibleTo(window)
-    assert window.queue_action_result.severity_label.text() == "Warning"
     assert "image" in window.queue_action_result.message_label.text()
     assert window.queue_action_result.layout().indexOf(
         window.queue_action_result.dismiss_button
@@ -393,7 +392,6 @@ def test_image_in_use_failure_stays_with_remove_and_clears_when_work_finishes(
 
     assert window.image_table.rowCount() == 1
     assert window.remove_result.isVisibleTo(window)
-    assert window.remove_result.severity_label.text() == "Warning"
     assert "cannot be removed" in window.remove_result.message_label.text()
 
     job = window.jobs[0]
@@ -508,7 +506,7 @@ def test_failed_jobs_keep_a_queue_local_accessible_summary_until_retry(
     assert window.queue_failure_label.text() == (
         "1 queue job has failed. Review the failed rows or retry them."
     )
-    assert window.queue_failure_result.accessibleName().startswith("Error:")
+    assert window.queue_failure_result.accessibleName() == window.queue_failure_label.text()
     assert announced == [window.queue_failure_result]
 
     # An unrelated success does not erase the unresolved failure.
@@ -897,7 +895,6 @@ def test_reveal_log_file_survives_failure(
     monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", lambda path: False)
     window._reveal_log_file()
     assert window.log_action_result.isVisibleTo(window)
-    assert window.log_action_result.severity_label.text() == "Error"
     assert "Try again" in window.log_action_result.message_label.text()
 
     # An OSError (e.g. the helper binary is missing) is caught and logged.
@@ -1069,7 +1066,6 @@ def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft
     assert window.config is original
     assert window.current_job_settings().quality == 10
     assert window.parameters_result.isVisibleTo(window)
-    assert window.parameters_result.severity_label.text() == "Error"
     assert "changes are still shown" in window.parameters_result.message_label.text()
     assert window.parameters_result.layout().indexOf(
         window.parameters_result.dismiss_button
@@ -1114,7 +1110,7 @@ def test_main_surfaces_startup_storage_failure(
     error = gui.PixelupError(
         ErrorCode.OUTPUT_UNWRITABLE,
         "Could not open PixelUp home.",
-        hint="Choose a writable PIXELUP_HOME.",
+        user_hint="Choose a writable PIXELUP_HOME.",
     )
     monkeypatch.setattr("pixelup.gui.build_app", lambda argv: (_ for _ in ()).throw(error))
     monkeypatch.setattr(
@@ -1124,6 +1120,26 @@ def test_main_surfaces_startup_storage_failure(
 
     assert gui.main() == 1
     assert shown == [("Could not open PixelUp home.", "Choose a writable PIXELUP_HOME.")]
+
+
+def test_main_does_not_surface_an_unexpected_startup_exception(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shown: list[tuple[str, str | None]] = []
+    diagnostic_sentinel = "EACCES Error invoking remote method /private/var/tmp/pixelup"
+    monkeypatch.setattr(
+        "pixelup.gui.build_app",
+        lambda argv: (_ for _ in ()).throw(OSError(diagnostic_sentinel)),
+    )
+    monkeypatch.setattr(
+        "pixelup.gui.show_startup_failure",
+        lambda detail, hint: shown.append((detail, hint)),
+    )
+
+    assert gui.main() == 1
+    assert shown == [("PixelUp could not read its storage or application state.", None)]
+    assert diagnostic_sentinel not in shown[0][0]
 
 
 def test_scale_edit_persists_to_config_json(make_window) -> None:

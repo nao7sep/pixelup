@@ -92,7 +92,7 @@ def run_inference(
             raise PixelupError(
                 ErrorCode.OUT_OF_MEMORY,
                 "Inference ran out of memory.",
-                hint="Try a smaller tile size, such as 512.",
+                user_hint="Try a smaller tile size, such as 512.",
             ) from exc
         raise PixelupError(
             ErrorCode.INTERNAL_ERROR,
@@ -456,8 +456,8 @@ def _missing_inference_dependency(package: str, exc: ImportError) -> PixelupErro
 
 
 def _is_out_of_memory(exc: RuntimeError) -> bool:
-    message = str(exc).lower()
-    return "out of memory" in message or "mps backend out of memory" in message
+    torch = _import_torch()
+    return isinstance(exc, torch.OutOfMemoryError)
 
 
 def _emit(callback: ProgressCallback | None, phase: str) -> None:

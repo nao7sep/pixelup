@@ -334,7 +334,7 @@ def test_download_model_info_refuses_https_redirect_to_http(
         download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
 
     assert excinfo.value.code == "model_download_failed"
-    assert "HTTPS is required" in excinfo.value.message
+    assert "HTTPS is required" in excinfo.value.user_message
     assert opener.calls == 1
     assert not (models_dir / "local-model.pth").exists()
     assert not list(models_dir.glob("*.tmp"))

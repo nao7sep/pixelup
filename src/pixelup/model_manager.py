@@ -7,7 +7,7 @@ from typing import Literal
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from pixelup.errors import ErrorCode, PixelupError
+from pixelup.errors import ErrorCode, PixelupError, user_text
 from pixelup.model_management import MANAGED_ARTIFACT_NAMES, artifact_size_bytes
 from pixelup.models import download_model, model_is_ready
 from pixelup.session_log import log
@@ -99,15 +99,25 @@ class ModelInstallWorker(QObject):
                 )
         except PixelupError as exc:
             cancelled = exc.code == ErrorCode.JOB_CANCELLED
-            message = f"{exc.message} {exc.hint}" if exc.hint else exc.message
+            if not cancelled:
+                log.exception(
+                    "models.install_failed",
+                    operation_id=self._operation_id,
+                    code=exc.code.value,
+                    error_details=exc.details,
+                )
+            message = user_text(
+                exc,
+                internal_fallback="The models could not be installed. Try again.",
+            )
             self.finished.emit(self._operation_id, False, cancelled, message)
-        except Exception as exc:  # noqa: BLE001 - every worker outcome must settle.
+        except Exception:  # noqa: BLE001 - every worker outcome must settle.
             log.exception("models.install_failed_unexpectedly")
             self.finished.emit(
                 self._operation_id,
                 False,
                 False,
-                f"Unexpected error: {exc}",
+                "The models could not be installed. Try again.",
             )
         else:
             self.finished.emit(self._operation_id, True, False, "")

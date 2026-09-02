@@ -68,7 +68,7 @@ def require_model_present(
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
             f"Model '{name}' is not present in the models directory.",
-            hint=(
+            user_hint=(
                 "Open Managed models to install it, or place the .pth file in the "
                 "models directory."
             ),
@@ -221,7 +221,7 @@ def download_model_info(
                         model=info.name,
                         url=info.url,
                         code=exc.code.value,
-                        reason=exc.message,
+                        reason=exc.user_message,
                     )
                 raise
             except (HTTPError, URLError, TimeoutError, OSError) as exc:

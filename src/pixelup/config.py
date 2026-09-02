@@ -113,7 +113,7 @@ def _expand_home_override(raw: str) -> Path:
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
             f"{HOME_ENV} does not expand to a usable path.",
-            hint=(
+            user_hint=(
                 f"Check that every environment variable referenced in {HOME_ENV} "
                 "is set to a non-empty value."
             ),
@@ -136,14 +136,14 @@ def _ensure_state_root(root: Path) -> Path:
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
             "Could not create the PixelUp storage directory.",
-            hint=f"Set {HOME_ENV} to a writable location, or make the path usable.",
+            user_hint=f"Set {HOME_ENV} to a writable location, or make the path usable.",
             details={"path": str(root), "reason": str(exc)},
         ) from exc
     if not root.is_dir():
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
             "The PixelUp storage path is not a usable directory.",
-            hint=f"Set {HOME_ENV} to a writable directory.",
+            user_hint=f"Set {HOME_ENV} to a writable directory.",
             details={"path": str(root)},
         )
     return root
