@@ -799,6 +799,7 @@ class MainWindow(QMainWindow):
         self.parameters_result = OperationResult(
             object_name="parametersSaveResult",
             dismissible=True,
+            stacked=True,
         )
         form.addRow(self.parameters_result)
 
@@ -855,6 +856,7 @@ class MainWindow(QMainWindow):
         self.queue_action_result = OperationResult(
             object_name="queueActionResult",
             dismissible=True,
+            stacked=True,
         )
         layout.addWidget(self.queue_action_result)
         layout.addStretch()

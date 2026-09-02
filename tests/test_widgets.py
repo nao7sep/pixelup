@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAccessible
 from PySide6.QtWidgets import QApplication, QTableWidgetItem
 
@@ -34,6 +35,19 @@ def test_operation_result_exposes_severity_and_announces_only_transitions(
         result.show_result("Already open.", severity="information")
         assert result.severity_label.text() == "Information"
         assert events[-1].type() == QAccessible.Event.NameChanged  # type: ignore[union-attr]
+    finally:
+        result.deleteLater()
+
+
+def test_stacked_operation_result_puts_dismiss_below_message(qapp: QApplication) -> None:
+    result = OperationResult(object_name="stackedResult", dismissible=True, stacked=True)
+    try:
+        result.show_result("Select at least one model before queueing.", severity="warning")
+
+        layout = result.layout()
+        assert layout is not None
+        assert layout.indexOf(result.dismiss_button) == 1
+        assert layout.itemAt(1).alignment() == Qt.AlignmentFlag.AlignRight
     finally:
         result.deleteLater()
 

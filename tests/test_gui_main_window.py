@@ -364,6 +364,9 @@ def test_queue_preconditions_stay_with_the_queue_actions_and_clear_on_correction
     assert window.queue_action_result.isVisibleTo(window)
     assert window.queue_action_result.severity_label.text() == "Warning"
     assert "image" in window.queue_action_result.message_label.text()
+    assert window.queue_action_result.layout().indexOf(
+        window.queue_action_result.dismiss_button
+    ) == 1
 
     image = _png(tmp_path, "queue.png")
     window.open_paths([image])
@@ -1068,6 +1071,9 @@ def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft
     assert window.parameters_result.isVisibleTo(window)
     assert window.parameters_result.severity_label.text() == "Error"
     assert "changes are still shown" in window.parameters_result.message_label.text()
+    assert window.parameters_result.layout().indexOf(
+        window.parameters_result.dismiss_button
+    ) == 1
 
     assert window._flush_parameters_save() is True
     assert window.config.parameters.quality == 10

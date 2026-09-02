@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QTableWidget,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -45,6 +46,7 @@ class OperationResult(QFrame):
         *,
         object_name: str,
         dismissible: bool = False,
+        stacked: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -52,20 +54,32 @@ class OperationResult(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self._announcement = ""
 
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self) if stacked else QHBoxLayout(self)
         layout.setContentsMargins(10, 7, 7 if dismissible else 10, 7)
-        layout.setSpacing(8)
+        layout.setSpacing(6 if stacked else 8)
         self.severity_label = QLabel()
         self.message_label = QLabel()
         self.message_label.setWordWrap(True)
         self.message_label.setMinimumWidth(0)
-        layout.addWidget(self.severity_label, 0, Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.message_label, 1)
+        if stacked:
+            message_row = QWidget(self)
+            message_layout = QHBoxLayout(message_row)
+            message_layout.setContentsMargins(0, 0, 0, 0)
+            message_layout.setSpacing(8)
+            message_layout.addWidget(self.severity_label, 0, Qt.AlignmentFlag.AlignTop)
+            message_layout.addWidget(self.message_label, 1)
+            layout.addWidget(message_row)
+        else:
+            layout.addWidget(self.severity_label, 0, Qt.AlignmentFlag.AlignTop)
+            layout.addWidget(self.message_label, 1)
 
         self.dismiss_button = QPushButton("Dismiss", self)
         self.dismiss_button.clicked.connect(self.clear_result)
         if dismissible:
-            layout.addWidget(self.dismiss_button)
+            if stacked:
+                layout.addWidget(self.dismiss_button, 0, Qt.AlignmentFlag.AlignRight)
+            else:
+                layout.addWidget(self.dismiss_button)
         else:
             self.dismiss_button.hide()
         self.hide()
