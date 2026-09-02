@@ -88,6 +88,24 @@ def _summary(window: MainWindow, path: Path) -> str:
     return window.image_table.item(row, 2).text()
 
 
+def test_open_picker_failure_is_authored_and_retained_by_images_group(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hostile = "EACCES IPC /private/tmp/PIXELUP-PICKER-SENTINEL"
+    window = make_window()
+    monkeypatch.setattr(
+        gui.QFileDialog,
+        "getOpenFileNames",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(hostile)),
+    )
+
+    window._open_dialog()
+
+    assert not window.open_result.isHidden()
+    assert "image picker" in window.open_result.message_label.text()
+    assert hostile not in window.open_result.message_label.text()
+
+
 class _DropEvent:
     def __init__(self, urls: list[QUrl]) -> None:
         self._mime_data = SimpleNamespace(urls=lambda: urls)

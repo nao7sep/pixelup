@@ -936,7 +936,15 @@ class MainWindow(QMainWindow):
         return hint
 
     def _open_dialog(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(self, "Open images")
+        try:
+            files, _ = QFileDialog.getOpenFileNames(self, "Open images")
+        except Exception:  # noqa: BLE001 - native picker failures belong to this action.
+            log.exception("open.picker_failed")
+            self.open_result.show_result(
+                "Could not open the image picker. Try again.",
+                severity="error",
+            )
+            return
         log.info("open.dialog_returned", count=len(files))
         self.open_paths([Path(file) for file in files])
 
