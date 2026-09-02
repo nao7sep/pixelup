@@ -169,5 +169,6 @@ class SettingsDialog(QDialog):
                 "PixelUp could not save your settings. Your changes are still here; try again."
             )
             self.error_message.show()
+            self.adjustSize()
             return
         self.accept()

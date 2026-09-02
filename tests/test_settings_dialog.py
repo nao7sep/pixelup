@@ -171,6 +171,26 @@ def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplica
         dialog.deleteLater()
 
 
+def test_failed_save_grows_dialog_instead_of_compressing_controls(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig(), try_save=lambda _candidate: False)
+    try:
+        dialog.show()
+        qapp.processEvents()
+        initial_height = dialog.height()
+        font_field_height = dialog.font_family.height()
+        concurrent_field_height = dialog.concurrent.height()
+
+        dialog.font_family.setText("Menlo")
+        dialog.ok_button.click()
+        qapp.processEvents()
+
+        assert dialog.height() > initial_height
+        assert dialog.font_family.height() >= font_field_height
+        assert dialog.concurrent.height() >= concurrent_field_height
+    finally:
+        dialog.deleteLater()
+
+
 def test_successful_retry_accepts_after_an_inline_failure(qapp: QApplication) -> None:
     outcomes = iter((False, True))
     dialog = SettingsDialog(AppConfig(), try_save=lambda _candidate: next(outcomes))
