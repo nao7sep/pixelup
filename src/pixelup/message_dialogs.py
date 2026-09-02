@@ -16,7 +16,7 @@ from pixelup.ui_common import use_dialog_spacing, use_regular_spacing
 _APP = "PixelUp"
 _BODY_MIN_WIDTH = 340
 _BODY_MAX_WIDTH = 480
-_BODY_MAX_HEIGHT = 420
+_BODY_INITIAL_MAX_HEIGHT = 420
 
 
 class MessageDialog(QDialog):
@@ -77,15 +77,28 @@ class MessageDialog(QDialog):
 
         screen = self.screen() or QApplication.primaryScreen()
         work_height = screen.availableGeometry().height() if screen is not None else 720
-        body_cap = min(_BODY_MAX_HEIGHT, max(160, int(work_height * 0.65)))
-        body_height = min(self.body.sizeHint().height(), body_cap)
+        resize_cap = max(160, int(work_height * 0.65))
+        initial_body_height = min(
+            self.body.sizeHint().height(),
+            _BODY_INITIAL_MAX_HEIGHT,
+            resize_cap,
+        )
 
-        # A fixed viewport height is intentional: it is the natural body height
-        # until the cap, while the outer dialog and footer keep their own hints.
-        self.body_scroll.setFixedHeight(body_height)
+        # Cap the scroll owner, not the dialog at one exact height. The initial
+        # window fits its content up to the fleet cap; if the user resizes it,
+        # the body may shrink or grow within the available screen while the
+        # footer remains fixed in the outer layout.
+        self.body_scroll.setMinimumHeight(0)
+        self.body_scroll.setMaximumHeight(resize_cap)
         self.body_scroll.setMinimumWidth(_BODY_MIN_WIDTH)
         self.body_scroll.setMaximumWidth(_BODY_MAX_WIDTH)
         self.adjustSize()
+        hinted_body_height = min(
+            self.body_scroll.sizeHint().height(),
+            self.body_scroll.maximumHeight(),
+        )
+        initial_height = self.sizeHint().height() - hinted_body_height + initial_body_height
+        self.resize(self.sizeHint().width(), initial_height)
 
 
 def _show_message(parent: QWidget | None, text: str) -> None:

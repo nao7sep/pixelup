@@ -52,11 +52,15 @@ def test_startup_failure_fits_short_copy_without_a_severity_icon(
             "Choose a writable PixelUp storage folder and try again."
         )
         assert dialog.buttons.standardButtons() == QDialogButtonBox.StandardButton.Close
-        assert dialog.body_scroll.height() == dialog.body.sizeHint().height()
+        dialog.show()
+        qapp.processEvents()
+        assert dialog.body_scroll.height() <= dialog.body.sizeHint().height() + 20
+        assert not dialog.body_scroll.verticalScrollBar().isVisible()
         assert dialog.body_scroll.verticalScrollBarPolicy() == (
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
     finally:
+        dialog.close()
         dialog.deleteLater()
 
 
@@ -65,13 +69,24 @@ def test_startup_failure_caps_only_the_body_for_long_copy(
 ) -> None:
     dialog = StartupFailureDialog("A long explanation. " * 400, "Try again.")
     try:
+        dialog.show()
+        qapp.processEvents()
         assert dialog.body.sizeHint().height() > dialog.body_scroll.height()
         assert dialog.body_scroll.height() <= 420
         assert dialog.layout().indexOf(dialog.buttons) > dialog.layout().indexOf(
             dialog.body_scroll
         )
-        dialog.show()
+        assert dialog.buttons.isVisibleTo(dialog)
+
+        opening_body_height = dialog.body_scroll.height()
+        dialog.resize(dialog.width(), dialog.height() + 80)
         qapp.processEvents()
+        assert dialog.body_scroll.height() > opening_body_height
+        assert dialog.buttons.isVisibleTo(dialog)
+
+        dialog.resize(dialog.width(), dialog.height() - 140)
+        qapp.processEvents()
+        assert dialog.body_scroll.height() < opening_body_height
         assert dialog.buttons.isVisibleTo(dialog)
     finally:
         dialog.close()
