@@ -275,9 +275,12 @@ def test_external_drop_accepts_local_files_and_rejects_remote_urls(
     assert window.image_table.rowCount() == 1
     assert window.image_table.property("dropActive") is False
     assert window.open_result.isVisibleTo(window)
-    assert f"{tmp_path.name}: folders are not supported" in window.open_result_label.text()
-    assert "missing.png: the file is unavailable" in window.open_result_label.text()
-    assert "not-an-image.txt: not a readable supported image" in window.open_result_label.text()
+    message = window.open_result.message_label.text()
+    assert f"{tmp_path.name}: folders are not supported" in message
+    assert "missing.png: the file is unavailable" in message
+    assert "not-an-image.txt: not a readable supported image" in message
+    assert window.open_result.severity_label.text() == "Warning"
+    assert window.open_result.accessibleName().startswith("Warning:")
 
 
 def test_external_drag_leave_clears_receiver_presentation(make_window, tmp_path: Path) -> None:
@@ -305,13 +308,14 @@ def test_open_duplicate_is_information_and_unrelated_success_does_not_clear_it(
     assert window.open_result.isHidden()
 
     window.open_paths([first])
-    assert window.open_result_label.text() == "Already open: first.png."
+    assert window.open_result.message_label.text() == "Already open: first.png."
+    assert window.open_result.severity_label.text() == "Information"
     assert window.open_result.isVisibleTo(window)
 
     window.open_paths([second])
-    assert window.open_result_label.text() == "Already open: first.png."
+    assert window.open_result.message_label.text() == "Already open: first.png."
 
-    window.dismiss_open_result_button.click()
+    window.open_result.dismiss_button.click()
     assert window.open_result.isHidden()
 
 
@@ -323,7 +327,7 @@ def test_exact_corrected_open_clears_the_previous_rejection(
     broken.write_text("not an image", encoding="utf-8")
 
     window.open_paths([broken])
-    assert "not a readable supported image" in window.open_result_label.text()
+    assert "not a readable supported image" in window.open_result.message_label.text()
 
     _png(tmp_path, "repair.png")
     another = _png(tmp_path, "another.png")
@@ -345,8 +349,54 @@ def test_unexpected_open_failure_uses_error_presentation(
     monkeypatch.setattr("pixelup.gui.absolute_user_path", fail_path)
     window.open_paths([image])
 
-    assert "could not be read" in window.open_result_label.text()
-    assert "#c0392b" in window.open_result.styleSheet()
+    assert "could not be read" in window.open_result.message_label.text()
+    assert window.open_result.severity_label.text() == "Error"
+    assert window.open_result.accessibleName().startswith("Error:")
+
+
+def test_queue_preconditions_stay_with_the_queue_actions_and_clear_on_correction(
+    make_window, tmp_path: Path
+) -> None:
+    window = make_window()
+
+    window._enqueue_jobs([], ["realesr-general-x4v3"])
+
+    assert window.queue_action_result.isVisibleTo(window)
+    assert window.queue_action_result.severity_label.text() == "Warning"
+    assert "image" in window.queue_action_result.message_label.text()
+
+    image = _png(tmp_path, "queue.png")
+    window.open_paths([image])
+    assert window.queue_action_result.isHidden()
+
+    window._enqueue_jobs([image], [])
+    assert window.queue_action_result.isVisibleTo(window)
+    assert "model" in window.queue_action_result.message_label.text()
+
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    assert window.queue_action_result.isHidden()
+
+
+def test_image_in_use_failure_stays_with_remove_and_clears_when_work_finishes(
+    make_window, tmp_path: Path
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "busy.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    window._queue_selected_image()
+
+    window._remove_selected_image()
+
+    assert window.image_table.rowCount() == 1
+    assert window.remove_result.isVisibleTo(window)
+    assert window.remove_result.severity_label.text() == "Warning"
+    assert "cannot be removed" in window.remove_result.message_label.text()
+
+    job = window.jobs[0]
+    window._job_finished(job.id, True, "Done", {"ok": True}, [])
+
+    assert window.remove_result.isHidden()
 
 
 def test_shortcuts_help_chords_open_the_catalogue(
@@ -843,6 +893,9 @@ def test_reveal_log_file_survives_failure(
     # A False result (reveal could not be confirmed) must not raise.
     monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", lambda path: False)
     window._reveal_log_file()
+    assert window.log_action_result.isVisibleTo(window)
+    assert window.log_action_result.severity_label.text() == "Error"
+    assert "Try again" in window.log_action_result.message_label.text()
 
     # An OSError (e.g. the helper binary is missing) is caught and logged.
     def _raise(path: Path) -> bool:
@@ -856,6 +909,10 @@ def test_reveal_log_file_survives_failure(
 
     monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _timeout)
     window._reveal_log_file()
+
+    monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", lambda path: True)
+    window._reveal_log_file()
+    assert window.log_action_result.isHidden()
 
 
 def test_reveal_in_file_browser_darwin_reports_returncode(
@@ -997,7 +1054,6 @@ def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft
     original = window.config
     window.quality.setValue(10)
     attempts: list[AppConfig] = []
-    warnings: list[object] = []
 
     def _save(candidate: AppConfig) -> None:
         attempts.append(candidate)
@@ -1005,16 +1061,18 @@ def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft
             raise OSError("disk full")
 
     monkeypatch.setattr("pixelup.gui.save_app_config", _save)
-    monkeypatch.setattr("pixelup.gui.warn_config_save_failed", warnings.append)
 
     assert window._flush_parameters_save() is False
     assert window.config is original
     assert window.current_job_settings().quality == 10
-    assert warnings == [window]
+    assert window.parameters_result.isVisibleTo(window)
+    assert window.parameters_result.severity_label.text() == "Error"
+    assert "changes are still shown" in window.parameters_result.message_label.text()
 
     assert window._flush_parameters_save() is True
     assert window.config.parameters.quality == 10
     assert len(attempts) == 2
+    assert window.parameters_result.isHidden()
 
 
 def test_close_waits_for_worker_ownership_to_end(

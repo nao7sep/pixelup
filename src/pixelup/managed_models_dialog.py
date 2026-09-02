@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QAccessible, QAccessibleEvent, QDesktopServices, QFontMetrics, QPalette
+from PySide6.QtGui import QDesktopServices, QFontMetrics, QPalette
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -25,6 +25,7 @@ from pixelup.model_management import (
 from pixelup.model_manager import ModelManager, ModelOperation
 from pixelup.session_log import log
 from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing
+from pixelup.widgets import OperationResult
 
 _MODEL_ROW_SPACING = 12
 _MODEL_LIST_MAX_HEIGHT = 420
@@ -49,7 +50,6 @@ class ManagedModelsDialog(QDialog):
         self._manager = manager
         self._required_artifacts = tuple(dict.fromkeys(required_artifacts))
         self._pending_job_count = pending_job_count
-        self._announced_error = ""
 
         self.setWindowTitle("Managed models")
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -116,26 +116,8 @@ class ManagedModelsDialog(QDialog):
         )
         layout.addWidget(models_scroll, 1)
 
-        self.result_frame = QFrame()
-        self.result_frame.setObjectName("modelInstallResult")
-        self.result_frame.setStyleSheet(
-            "QFrame#modelInstallResult {"
-            " border: 1px solid #c0392b;"
-            " border-radius: 5px;"
-            " background: palette(base);"
-            "}"
-            "QLabel#modelInstallSeverity { color: #c0392b; font-weight: 600; }"
-        )
-        result_layout = QHBoxLayout(self.result_frame)
-        result_layout.setContentsMargins(10, 7, 10, 7)
-        result_layout.setSpacing(8)
-        severity = QLabel("Error")
-        severity.setObjectName("modelInstallSeverity")
-        self.result_label = QLabel()
-        self.result_label.setWordWrap(True)
-        result_layout.addWidget(severity, 0, Qt.AlignmentFlag.AlignTop)
-        result_layout.addWidget(self.result_label, 1)
-        layout.addWidget(self.result_frame)
+        self.result_view = OperationResult(object_name="modelInstallResult")
+        layout.addWidget(self.result_view)
 
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
@@ -226,9 +208,7 @@ class ManagedModelsDialog(QDialog):
         if errors:
             self._show_error(" ".join(errors))
         else:
-            self.result_frame.hide()
-            self.result_frame.setAccessibleName("")
-            self._announced_error = ""
+            self.result_view.clear_result()
 
     def _render_primary_action(self) -> None:
         if self._required_artifacts:
@@ -300,15 +280,7 @@ class ManagedModelsDialog(QDialog):
             self._show_error("Could not open the models folder.")
 
     def _show_error(self, message: str) -> None:
-        self.result_label.setText(message)
-        self.result_frame.setAccessibleName(f"Error: {message}")
-        self.result_frame.show()
-        if message == self._announced_error:
-            return
-        self._announced_error = message
-        QAccessible.updateAccessibility(
-            QAccessibleEvent(self.result_frame, QAccessible.Event.Alert)
-        )
+        self.result_view.show_result(message, severity="error")
 
 
 def _bundle_status(

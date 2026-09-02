@@ -80,11 +80,7 @@ from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.message_dialogs import (
     show_startup_failure,
     warn_config_reset,
-    warn_config_save_failed,
-    warn_image_in_use,
     warn_jobs_stopping,
-    warn_no_images,
-    warn_no_models,
 )
 from pixelup.model_management import (
     UPSCALE_MODELS,
@@ -120,6 +116,7 @@ from pixelup.widgets import (
     NoWheelComboBox,
     NoWheelDoubleSpinBox,
     NoWheelSpinBox,
+    OperationResult,
     device_combo,
     output_format_combo,
 )
@@ -539,7 +536,7 @@ class MainWindow(QMainWindow):
                 parts.append(f"Already open: {', '.join(path.name for path in duplicates)}")
             parts.extend(f"{path.name or path}: {reason}" for path, reason, _error in rejected)
             self._set_open_result(
-                "Needs attention — " + "; ".join(parts) + ".",
+                "; ".join(parts) + ".",
                 severity="error" if any(error for _path, _reason, error in rejected) else "warning",
                 issue_paths=[*duplicates, *(path for path, _reason, _error in rejected)],
             )
@@ -560,31 +557,11 @@ class MainWindow(QMainWindow):
         issue_paths: list[Path],
     ) -> None:
         self._open_result_issue_paths = frozenset(issue_paths)
-        self.open_result_label.setText(message)
-        self.open_result.setAccessibleName(message)
-        # Qt has no semantic danger palette role, so error red is explicit just
-        # like the app's destructive confirmation button.
-        border = (
-            "#c0392b"
-            if severity == "error"
-            else "palette(highlight)"
-            if severity == "warning"
-            else "palette(mid)"
-        )
-        self.open_result.setStyleSheet(
-            "QWidget#openResult {"
-            f" border: 1px solid {border};"
-            " border-radius: 5px;"
-            " background: palette(base);"
-            "}"
-        )
-        self.open_result.show()
+        self.open_result.show_result(message, severity=severity)
 
     def _dismiss_open_result(self) -> None:
         self._open_result_issue_paths = frozenset()
-        self.open_result.hide()
-        self.open_result_label.clear()
-        self.open_result.setAccessibleName("")
+        self.open_result.clear_result()
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -622,6 +599,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.settings_button, 0, 1)
         layout.addWidget(self.shortcuts_button, 1, 0)
         layout.addWidget(self.about_button, 1, 1)
+        self.log_action_result = OperationResult(
+            object_name="logActionResult",
+            dismissible=True,
+        )
+        layout.addWidget(self.log_action_result, 2, 0, 1, 2)
         return row
 
     def _bind_shortcuts(self) -> None:
@@ -667,19 +649,9 @@ class MainWindow(QMainWindow):
         self.image_table.setMinimumHeight(180)
         layout.addWidget(self.image_table, 1)
 
-        self.open_result = QWidget()
         self._open_result_issue_paths: frozenset[Path] = frozenset()
-        self.open_result.setObjectName("openResult")
-        result_layout = QHBoxLayout(self.open_result)
-        result_layout.setContentsMargins(10, 7, 7, 7)
-        result_layout.setSpacing(10)
-        self.open_result_label = QLabel()
-        self.open_result_label.setWordWrap(True)
-        self.dismiss_open_result_button = QPushButton("Dismiss")
-        self.dismiss_open_result_button.clicked.connect(self._dismiss_open_result)
-        result_layout.addWidget(self.open_result_label, 1)
-        result_layout.addWidget(self.dismiss_open_result_button)
-        self.open_result.hide()
+        self.open_result = OperationResult(object_name="openResult", dismissible=True)
+        self.open_result.dismiss_button.clicked.connect(self._dismiss_open_result)
         layout.addWidget(self.open_result)
 
         button_row = QWidget()
@@ -692,6 +664,12 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.open_images_button)
         button_layout.addWidget(self.remove_image_button)
         layout.addWidget(button_row)
+        self._remove_result_path: Path | None = None
+        self.remove_result = OperationResult(
+            object_name="removeImageResult",
+            dismissible=True,
+        )
+        layout.addWidget(self.remove_result)
         return group
 
     def _build_work_panel(self) -> QWidget:
@@ -818,6 +796,11 @@ class MainWindow(QMainWindow):
         # field in the form and re-widen the group the Help dialog exists to slim.
         form.addRow("", reset)
         form.addRow("", help_button)
+        self.parameters_result = OperationResult(
+            object_name="parametersSaveResult",
+            dismissible=True,
+        )
+        form.addRow(self.parameters_result)
 
         # Every control the panel persists, wired to the debounced save. Connected
         # after the panel is populated so building it (addItem, setChecked) does not
@@ -868,6 +851,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.queue_all_all_models_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.retry_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self._queue_action_issue: Literal["images", "models"] | None = None
+        self.queue_action_result = OperationResult(
+            object_name="queueActionResult",
+            dismissible=True,
+        )
+        layout.addWidget(self.queue_action_result)
         layout.addStretch()
         return group
 
@@ -1121,13 +1110,22 @@ class MainWindow(QMainWindow):
     def _reveal_log_file(self) -> None:
         try:
             revealed = _reveal_in_file_browser(self.log_file)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            log.warning("log.reveal_failed", log_file=str(self.log_file), reason=str(exc))
+        except (OSError, subprocess.TimeoutExpired):
+            log.exception("log.reveal_failed", log_file=str(self.log_file))
+            self.log_action_result.show_result(
+                "Could not reveal the log. Try again from this button.",
+                severity="error",
+            )
             return
         if revealed:
             log.info("log.revealed", log_file=str(self.log_file))
+            self.log_action_result.clear_result()
         else:
             log.warning("log.reveal_failed", log_file=str(self.log_file))
+            self.log_action_result.show_result(
+                "Could not reveal the log. Try again from this button.",
+                severity="error",
+            )
 
     def _add_image_row(self, entry: ImageEntry) -> None:
         row = self.image_table.rowCount()
@@ -1162,6 +1160,12 @@ class MainWindow(QMainWindow):
 
     def _update_selected_image(self) -> None:
         path = self._selected_path()
+        if self._remove_result_path is not None and (
+            path != self._remove_result_path
+            or not self._has_active_jobs(self._remove_result_path)
+        ):
+            self._remove_result_path = None
+            self.remove_result.clear_result()
         if path is None:
             self.preview.set_image(None)
             self.remove_image_button.setEnabled(False)
@@ -1176,8 +1180,15 @@ class MainWindow(QMainWindow):
         if path is None:
             return
         if self._has_active_jobs(path):
-            warn_image_in_use(self)
+            log.info("image.remove_blocked", input=str(path), reason="active_jobs")
+            self._remove_result_path = path
+            self.remove_result.show_result(
+                "This image cannot be removed while pending or running jobs still use it.",
+                severity="warning",
+            )
             return
+        self._remove_result_path = None
+        self.remove_result.clear_result()
         row = self._image_rows.pop(path)
         self.image_table.removeRow(row)
         self._images_by_path.pop(path, None)
@@ -1259,6 +1270,7 @@ class MainWindow(QMainWindow):
         """
         parameters = self.current_job_settings()
         if parameters == self.config.parameters:
+            self.parameters_result.clear_result()
             return True
         candidate = replace(self.config, parameters=parameters)
         if not self._save_config_candidate(candidate, surface_failure=surface_failure):
@@ -1268,6 +1280,7 @@ class MainWindow(QMainWindow):
             path=str(config_path()),
             values=job_settings_log_payload(parameters),
         )
+        self.parameters_result.clear_result()
         return True
 
     def _save_config_candidate(
@@ -1285,7 +1298,11 @@ class MainWindow(QMainWindow):
                 reason=str(exc),
             )
             if surface_failure:
-                warn_config_save_failed(self)
+                self.parameters_result.show_result(
+                    "PixelUp could not save these parameters. Your changes are still shown; "
+                    "try again.",
+                    severity="error",
+                )
             return False
         self.config = candidate
         return True
@@ -1317,11 +1334,23 @@ class MainWindow(QMainWindow):
 
     def _enqueue_jobs(self, input_paths: list[Path], models: list[str]) -> None:
         if not input_paths:
-            warn_no_images(self)
+            log.info("enqueue.rejected", reason="no_images")
+            self._queue_action_issue = "images"
+            self.queue_action_result.show_result(
+                "Open or select at least one image before queueing.",
+                severity="warning",
+            )
             return
         if not models:
-            warn_no_models(self)
+            log.info("enqueue.rejected", reason="no_models")
+            self._queue_action_issue = "models"
+            self.queue_action_result.show_result(
+                "Select at least one model before queueing.",
+                severity="warning",
+            )
             return
+        self._queue_action_issue = None
+        self.queue_action_result.clear_result()
         # The enqueue snapshot: the panel captured whole, scale included, at the moment
         # the user pressed the button. Later panel edits do not reach these jobs.
         settings = self.current_job_settings()
@@ -1533,6 +1562,12 @@ class MainWindow(QMainWindow):
         has_images = bool(self._image_order)
         has_selected_image = self._selected_path() is not None
         has_selected_models = bool(self._selected_models())
+        if (
+            (self._queue_action_issue == "images" and has_selected_image)
+            or (self._queue_action_issue == "models" and has_selected_models)
+        ):
+            self._queue_action_issue = None
+            self.queue_action_result.clear_result()
         has_failed = any(job.status == "failed" for job in self.jobs)
         has_cancellable = any(job.status in {"pending", "running"} for job in self.jobs)
         self.queue_selected_button.setEnabled(has_selected_image and has_selected_models)

@@ -13,30 +13,11 @@ def _info(parent: QWidget, text: str) -> None:
     QMessageBox.information(parent, _APP, text)
 
 
-def warn_no_images(parent: QWidget) -> None:
-    _info(parent, "Open or select at least one image.")
-
-
-def warn_no_models(parent: QWidget) -> None:
-    _info(parent, "Select at least one model.")
-
-
-def warn_image_in_use(parent: QWidget) -> None:
-    _info(parent, "Pending or running jobs still use this image.")
-
-
 def warn_config_reset(parent: QWidget, quarantined_name: str) -> None:
     _info(
         parent,
         "Your settings file was unreadable and has been reset to defaults.\n\n"
         f"The unreadable file was kept as {quarantined_name} in the PixelUp folder.",
-    )
-
-
-def warn_config_save_failed(parent: QWidget) -> None:
-    _info(
-        parent,
-        "PixelUp could not save your settings. Your changes are still shown so you can try again.",
     )
 
 

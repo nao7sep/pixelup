@@ -136,8 +136,10 @@ def test_install_failure_remains_visible_and_retryable(
         dialog._install_bundle(0)
         _finish_manager(manager, qapp)
         assert manager.failed_operations[0].kind == "failed"
-        assert dialog.result_frame.isVisibleTo(dialog)
-        assert dialog.result_label.text() == "Network unavailable."
+        assert dialog.result_view.isVisibleTo(dialog)
+        assert dialog.result_view.severity_label.text() == "Error"
+        assert dialog.result_view.message_label.text() == "Network unavailable."
+        assert dialog.result_view.accessibleName() == "Error: Network unavailable."
         assert dialog.row_action_buttons[0].isEnabled()
     finally:
         dialog.deleteLater()
@@ -383,5 +385,30 @@ def test_dialog_columns_are_content_derived_and_window_is_native_titled(
         assert dialog.sizeHint().width() >= sum(dialog.column_minimum_widths)
         assert dialog.windowType() == Qt.WindowType.Dialog
         assert dialog.windowModality() == Qt.WindowModality.ApplicationModal
+    finally:
+        dialog.deleteLater()
+
+
+def test_dynamic_result_grows_dialog_without_compressing_rows_or_footer(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    dialog = ManagedModelsDialog(ModelManager(tmp_path))
+    try:
+        dialog.show()
+        qapp.processEvents()
+        initial_height = dialog.height()
+        row_height = dialog.row_action_buttons[0].height()
+        close_height = dialog.dismiss_button.height()
+
+        dialog._show_error(
+            "Could not open the models folder. Check its permissions and try again."
+        )
+        qapp.processEvents()
+
+        assert dialog.height() > initial_height
+        assert dialog.row_action_buttons[0].height() >= row_height
+        assert dialog.dismiss_button.height() >= close_height
+        assert dialog.dismiss_button.isVisibleTo(dialog)
+        assert dialog.primary_button.isVisibleTo(dialog)
     finally:
         dialog.deleteLater()
