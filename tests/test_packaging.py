@@ -115,7 +115,10 @@ def test_windows_installer_supports_both_install_modes_without_an_admin_launch_b
     installer = Path("scripts/pixelup.iss").read_text(encoding="utf-8")
 
     assert "DefaultDirName={autopf}\\{#MyAppName}" in installer
+    assert "AppId={#MyAppName}" in installer
     assert "PrivilegesRequiredOverridesAllowed=dialog" in installer
     assert "PrivilegesRequired=lowest" not in installer
-    assert "runascurrentuser" in installer
+    assert "Uninstallable=yes" in installer
+    assert "runasoriginaluser" in installer
+    assert "runascurrentuser" not in installer
     assert "Check: not IsAdminInstallMode" in installer

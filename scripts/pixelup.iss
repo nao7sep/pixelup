@@ -14,11 +14,13 @@
 ; are at the repo root — so resolve all source/output paths one level up.
 SourceDir=..
 AppName={#MyAppName}
+AppId={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExe}
+Uninstallable=yes
 OutputDir=dist
 OutputBaseFilename=pixelup-{#MyAppVersion}-setup
 SetupIconFile=build\icon.ico
@@ -39,7 +41,6 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-; In per-user mode Setup and PixelUp already share the user's normal integrity
-; level, so no original-user spawn broker is needed. In per-system mode the
-; Start shortcut remains the safe non-elevated launch boundary after Setup.
-Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent runascurrentuser; Check: not IsAdminInstallMode
+; Inno cannot recover a non-elevated user token for every elevated setup path.
+; All-users installs launch later through their scoped shell shortcuts.
+Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: not IsAdminInstallMode
