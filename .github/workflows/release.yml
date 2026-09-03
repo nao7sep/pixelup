@@ -73,15 +73,13 @@ jobs:
         run: ./scripts/package.ps1
         shell: pwsh
 
-      - name: Upload private validation artifacts
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload private Windows validation artifacts
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         with:
-          name: pixelup-${{ runner.os }}-${{ github.sha }}
+          name: windows-${{ github.sha }}
           path: |
-            dist/*.dmg
             dist/*-setup.exe
-            dist/*-mac.zip
             dist/*-win.zip
           if-no-files-found: error
           retention-days: 1
