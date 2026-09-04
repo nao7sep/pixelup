@@ -44,6 +44,7 @@ jobs:
         run: uv run python scripts/check_release_tag.py "$PIXELUP_RELEASE_TAG"
       # Test gate: a red suite means no build. GUI tests run headless (offscreen Qt);
       # the real-inference smoke self-skips unless PIXELUP_RUN_REAL_INFERENCE=1.
+      - run: uv run ruff check .
       - run: uv run pytest
 
   build:

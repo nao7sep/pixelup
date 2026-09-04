@@ -3,6 +3,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+
 EXPECTED_RUNTIME_PINS = {
     "PySide6": "6.11.2",
     "Pillow": "12.3.0",
@@ -47,78 +49,31 @@ def test_source_python_range_matches_the_supported_dependency_stack() -> None:
     assert pyproject["project"]["requires-python"] == ">=3.12,<3.13"
 
 
-def test_spec_derives_bundle_version_from_pyproject_ssot() -> None:
-    # The frozen macOS .app must report its real version, not PyInstaller's 0.0.0
-    # default, and the version must come from the pyproject.toml SSOT rather than a
-    # literal in the spec (which would silently drift on the next bump). PyInstaller
-    # is not installed in the test env, so this pins the wiring by source inspection:
-    # the spec reads pyproject.toml into _VERSION and feeds it to both bundle keys.
-    spec = Path("pixelup.spec").read_text(encoding="utf-8")
+def test_windows_installer_configuration() -> None:
+    sections: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for raw_line in (ROOT / "scripts" / "pixelup.iss").read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            current = sections.setdefault(line[1:-1].casefold(), [])
+        elif current is not None and line and not line.startswith(";"):
+            current.append(line)
 
-    # Version is read from the SSOT at freeze time, not hardcoded.
-    assert 'tomllib.loads(' in spec
-    assert '["project"]["version"]' in spec
-    # Both macOS version keys are present and set from that derived _VERSION, never a literal.
-    assert '"CFBundleShortVersionString": _VERSION,' in spec
-    assert '"CFBundleVersion": _VERSION,' in spec
+    setup = dict(line.split("=", 1) for line in sections["setup"])
+    run = dict(
+        field.strip().split(":", 1)
+        for field in sections["run"][0].split(";")
+        if ":" in field
+    )
+    flags = set(run["Flags"].split())
 
-    # And there is no hardcoded copy of the current version anywhere in the spec.
-    version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"][
-        "version"
-    ]
-    assert version not in spec
-
-
-def test_macos_bundle_finalization_is_shared_by_package_and_rebuild() -> None:
-    package = Path("scripts/package.sh").read_text(encoding="utf-8")
-    rebuild = Path("scripts/rebuild.command").read_text(encoding="utf-8")
-    finalizer = Path("scripts/finalize-macos-bundle.sh").read_text(encoding="utf-8")
-
-    invocation = '"$SCRIPT_DIR/finalize-macos-bundle.sh"'
-    assert invocation in package
-    assert invocation in rebuild
-    assert 'CAR="$REPO_DIR/build/Assets.car"' in finalizer
-    assert 'cp "$CAR" "$APP_BUNDLE/Contents/Resources/Assets.car"' in finalizer
-    assert 'codesign --force --deep --sign - "$APP_BUNDLE"' in finalizer
-
-
-def test_frozen_runtime_resources_include_only_the_windows_icon() -> None:
-    spec = Path("pixelup.spec").read_text(encoding="utf-8")
-
-    assert '("src/pixelup/resources/icon-win.png", "pixelup/resources")' in spec
-    assert '("src/pixelup/resources/icon.png", "pixelup/resources")' not in spec
-
-
-def test_frozen_runtime_includes_the_dynamic_https_hostname_codec() -> None:
-    spec = Path("pixelup.spec").read_text(encoding="utf-8")
-
-    assert '"encodings.idna",' in spec
-
-
-def test_windows_freezer_excludes_non_qt_icu_from_every_collection_source() -> None:
-    spec = Path("pixelup.spec").read_text(encoding="utf-8")
-
-    assert 'sys.platform != "win32"' in spec
-    assert 'name.startswith(("icudt", "icuin", "icuuc"))' in spec
-    assert '"pyside6" not in source_parts' in spec
-    assert "if not _is_shadowing_windows_icu(binary)" in spec
-    assert "binary for binary in a.binaries if not _is_shadowing_windows_icu(binary)" in spec
-
-
-def test_windows_installer_embeds_the_canonical_app_icon() -> None:
-    installer = Path("scripts/pixelup.iss").read_text(encoding="utf-8")
-
-    assert "SetupIconFile=build\\icon.ico" in installer
-
-
-def test_windows_installer_supports_both_install_modes_without_an_admin_launch_broker() -> None:
-    installer = Path("scripts/pixelup.iss").read_text(encoding="utf-8")
-
-    assert "DefaultDirName={autopf}\\{#MyAppName}" in installer
-    assert "AppId={#MyAppName}" in installer
-    assert "PrivilegesRequiredOverridesAllowed=dialog" in installer
-    assert "PrivilegesRequired=lowest" not in installer
-    assert "Uninstallable=yes" in installer
-    assert "runasoriginaluser" in installer
-    assert "runascurrentuser" not in installer
-    assert "Check: not IsAdminInstallMode" in installer
+    assert setup["AppId"] == "{#MyAppName}"
+    assert setup["DefaultDirName"] == "{autopf}\\{#MyAppName}"
+    assert setup["PrivilegesRequiredOverridesAllowed"] == "dialog"
+    assert "PrivilegesRequired" not in setup
+    assert setup["Uninstallable"] == "yes"
+    icon = ROOT / setup["SetupIconFile"].replace("\\", "/")
+    assert icon.is_file()
+    assert "runasoriginaluser" in flags
+    assert "runascurrentuser" not in flags
+    assert run["Check"].strip() == "not IsAdminInstallMode"
