@@ -14,7 +14,7 @@ def test_about_dialog_includes_required_metadata(qapp: QApplication) -> None:
         assert dialog.windowTitle() in text
         assert "PixelUp" in text
         assert __version__ in text
-        assert "© 2026 Yoshinao Inoguchi · MIT License" in text
+        assert "© 2026 Yoshinao Inoguchi · GNU GPL v3 or later" in text
     finally:
         dialog.deleteLater()
 

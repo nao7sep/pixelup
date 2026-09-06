@@ -38,7 +38,7 @@ You can also pass image paths directly: `uv run pixelup image.png another.jpg`.
 
 ## License
 
-MIT © 2026 Yoshinao Inoguchi
+[GNU GPL v3 or later](LICENSE) © 2026 Yoshinao Inoguchi
 
 ## Contact
 

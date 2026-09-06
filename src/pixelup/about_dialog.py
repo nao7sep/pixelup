@@ -64,7 +64,7 @@ class AboutDialog(QDialog):
             dismissible=True,
         )
 
-        meta = secondary_label("© 2026 Yoshinao Inoguchi · MIT License")
+        meta = secondary_label("© 2026 Yoshinao Inoguchi · GNU GPL v3 or later")
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         # Close has RejectRole, so `rejected` covers both the button click and
