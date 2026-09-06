@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from pixelup.model_registry import known_model
-from pixelup.models import verify_model_file
+from pixelup.models import download_model_info, verify_model_file
 from pixelup.ncnn_backend import NcnnModelFiles, NcnnNetwork
 
 
@@ -33,6 +33,8 @@ CONVERSION_SPECS = (
     ConversionSpec("realesr-animevideov3", "srvgg", 4, 16),
     ConversionSpec("realesr-general-wdn-x4v3", "srvgg", 4, 32),
 )
+SOURCE_DOWNLOAD_TIMEOUT_SECONDS = 600
+SOURCE_LOCK_TIMEOUT_SECONDS = 600
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -54,6 +56,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         nargs="*",
         choices=tuple(spec.name for spec in CONVERSION_SPECS),
         help="Optional subset of model names; the default converts every model.",
+    )
+    parser.add_argument(
+        "--download-sources",
+        action="store_true",
+        help="Install missing pinned upstream .pth files into source_dir before conversion.",
     )
     return parser.parse_args(argv)
 
@@ -150,6 +157,20 @@ def _source_path(source_dir: Path, spec: ConversionSpec) -> Path:
     path = source_dir / info.filename
     verify_model_file(path, info)
     return path
+
+
+def _download_missing_sources(source_dir: Path, specs: Sequence[ConversionSpec]) -> None:
+    source_dir.mkdir(parents=True, exist_ok=True)
+    for spec in specs:
+        info = known_model(spec.name)
+        if info is None:
+            raise ValueError(f"No pinned source model is registered for {spec.name}")
+        download_model_info(
+            source_dir,
+            info,
+            download_timeout=SOURCE_DOWNLOAD_TIMEOUT_SECONDS,
+            lock_timeout=SOURCE_LOCK_TIMEOUT_SECONDS,
+        )
 
 
 def _convert_one(
@@ -279,6 +300,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     selected = set(args.models)
     specs = tuple(spec for spec in CONVERSION_SPECS if not selected or spec.name in selected)
+    if args.download_sources:
+        _download_missing_sources(args.source_dir, specs)
     convert_models(args.source_dir, args.output_dir, specs)
     return 0
 

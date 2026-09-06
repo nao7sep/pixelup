@@ -64,3 +64,15 @@ def test_conversion_equivalence_rejects_shape_and_value_regressions() -> None:
         expected,
         np.full((3, 8, 8), 0.01, dtype=np.float32),
     )
+
+
+def test_download_sources_is_explicit() -> None:
+    module = _load_script()
+
+    ordinary = module._parse_args(("sources", "output", "RealESRGAN_x4plus"))
+    downloading = module._parse_args(
+        ("sources", "output", "RealESRGAN_x4plus", "--download-sources")
+    )
+
+    assert ordinary.download_sources is False
+    assert downloading.download_sources is True
