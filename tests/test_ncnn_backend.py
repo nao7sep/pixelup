@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from pixelup.errors import PixelupError
-from pixelup.ncnn_backend import NcnnModelFiles, NcnnNetwork, upscale_bgr
+from pixelup.ncnn_backend import (
+    NcnnModelFiles,
+    NcnnNetwork,
+    interpolate_ncnn_weights,
+    upscale_bgr,
+)
 
 
 def _nearest(scale: int):
@@ -153,3 +158,86 @@ def test_network_refuses_unavailable_gpu(monkeypatch: pytest.MonkeyPatch) -> Non
         )
 
     assert excinfo.value.code == "invalid_argument"
+
+
+def test_interpolate_ncnn_weights_preserves_tags_and_blends_tensors(tmp_path: Path) -> None:
+    param = tmp_path / "model.param"
+    primary = tmp_path / "primary.bin"
+    companion = tmp_path / "companion.bin"
+    destination = tmp_path / "blended.bin"
+    tag = bytes.fromhex("476b3001")
+    param.write_text(
+        "7767517\n"
+        "4 4\n"
+        "Input in0 0 1 in0\n"
+        "Convolution conv 1 1 in0 hidden 0=2 5=1 6=3\n"
+        "PReLU prelu 1 1 hidden activated 0=2\n"
+        "BinaryOp add 2 1 activated in0 out0 0=0\n",
+        encoding="utf-8",
+    )
+
+    def encoded(weight: float) -> bytes:
+        return b"".join(
+            (
+                tag,
+                np.full(3, weight, dtype="<f2").tobytes(),
+                np.full(2, weight + 1, dtype="<f4").tobytes(),
+                np.full(2, weight + 2, dtype="<f4").tobytes(),
+            )
+        )
+
+    primary.write_bytes(encoded(1.0))
+    companion.write_bytes(encoded(0.0))
+    interpolate_ncnn_weights(
+        param,
+        primary,
+        companion,
+        destination,
+        primary_weight=0.25,
+    )
+
+    output = destination.read_bytes()
+    assert output[:4] == tag
+    assert np.array_equal(np.frombuffer(output, dtype="<f2", count=3, offset=4), [0.25] * 3)
+    assert np.array_equal(np.frombuffer(output, dtype="<f4", count=2, offset=10), [1.25] * 2)
+    assert np.array_equal(np.frombuffer(output, dtype="<f4", count=2, offset=18), [2.25] * 2)
+
+
+@pytest.mark.parametrize("strength", (-0.01, 1.01))
+def test_interpolate_ncnn_weights_rejects_invalid_strength(
+    tmp_path: Path, strength: float
+) -> None:
+    with pytest.raises(PixelupError) as excinfo:
+        interpolate_ncnn_weights(
+            tmp_path / "model.param",
+            tmp_path / "primary.bin",
+            tmp_path / "companion.bin",
+            tmp_path / "output.bin",
+            primary_weight=strength,
+        )
+
+    assert excinfo.value.code == "invalid_argument"
+
+
+def test_interpolate_ncnn_weights_rejects_an_incompatible_companion(tmp_path: Path) -> None:
+    param = tmp_path / "model.param"
+    primary = tmp_path / "primary.bin"
+    companion = tmp_path / "companion.bin"
+    param.write_text(
+        "7767517\n2 2\nInput in0 0 1 in0\nPReLU prelu 1 1 in0 out0 0=1\n",
+        encoding="utf-8",
+    )
+    primary.write_bytes(np.array([1.0], dtype="<f4").tobytes())
+    companion.write_bytes(b"")
+
+    with pytest.raises(PixelupError) as excinfo:
+        interpolate_ncnn_weights(
+            param,
+            primary,
+            companion,
+            tmp_path / "output.bin",
+            primary_weight=0.5,
+        )
+
+    assert excinfo.value.code == "model_corrupt"
+    assert not (tmp_path / "output.bin").exists()

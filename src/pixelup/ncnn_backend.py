@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,6 +96,118 @@ class NcnnNetwork:
 
     def __exit__(self, *_args: object) -> None:
         self.close()
+
+
+def interpolate_ncnn_weights(
+    param: Path,
+    primary_weights: Path,
+    companion_weights: Path,
+    destination: Path,
+    *,
+    primary_weight: float,
+) -> None:
+    """Create an ncnn weight file using Real-ESRGAN's weight-space DNI rule."""
+    if not 0.0 <= primary_weight <= 1.0:
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT,
+            "Denoise strength must be between 0 and 1.",
+            details={"denoise_strength": primary_weight},
+        )
+
+    try:
+        primary = primary_weights.read_bytes()
+        companion = companion_weights.read_bytes()
+        segments = _ncnn_weight_segments(param.read_text(encoding="utf-8"))
+        blended = _blend_ncnn_segments(primary, companion, segments, primary_weight)
+    except PixelupError:
+        raise
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise _model_load_error(param, reason=str(exc)) from exc
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_name = temporary.name
+            temporary.write(blended)
+        os.replace(temporary_name, destination)
+    except OSError as exc:
+        if temporary_name is not None:
+            Path(temporary_name).unlink(missing_ok=True)
+        raise PixelupError(
+            ErrorCode.INTERNAL_ERROR,
+            "PixelUp could not prepare the selected denoise strength.",
+            details={"path": str(destination), "reason": str(exc)},
+        ) from exc
+
+
+def _ncnn_weight_segments(param_text: str) -> tuple[tuple[str, int], ...]:
+    lines = param_text.splitlines()
+    if len(lines) < 2 or lines[0].strip() != "7767517":
+        raise ValueError("unsupported ncnn parameter header")
+
+    segments: list[tuple[str, int]] = []
+    for line in lines[2:]:
+        tokens = line.split()
+        if not tokens:
+            continue
+        layer_type = tokens[0]
+        attributes = {
+            int(key): value
+            for token in tokens
+            if "=" in token
+            for key, value in (token.split("=", 1),)
+            if not key.startswith("-")
+        }
+        if layer_type == "Convolution":
+            segments.append(("tag", 4))
+            segments.append(("float16", int(attributes[6])))
+            if int(attributes.get(5, "0")):
+                segments.append(("float32", int(attributes[0])))
+        elif layer_type == "PReLU":
+            segments.append(("float32", int(attributes[0])))
+    return tuple(segments)
+
+
+def _blend_ncnn_segments(
+    primary: bytes,
+    companion: bytes,
+    segments: tuple[tuple[str, int], ...],
+    primary_weight: float,
+) -> bytes:
+    if len(primary) != len(companion):
+        raise ValueError("ncnn weight files have different lengths")
+
+    output = bytearray()
+    offset = 0
+    for data_type, count in segments:
+        item_size = {"tag": 1, "float16": 2, "float32": 4}[data_type]
+        size = count * item_size
+        end = offset + size
+        if end > len(primary):
+            raise ValueError("ncnn weight file ended before its parameter graph")
+        if data_type == "tag":
+            primary_tag = primary[offset:end]
+            companion_tag = companion[offset:end]
+            if primary_tag != companion_tag or primary_tag != bytes.fromhex("476b3001"):
+                raise ValueError("ncnn weight encoding tags do not match")
+            output.extend(primary_tag)
+        else:
+            dtype = "<f2" if data_type == "float16" else "<f4"
+            primary_values = np.frombuffer(primary, dtype=dtype, count=count, offset=offset)
+            companion_values = np.frombuffer(companion, dtype=dtype, count=count, offset=offset)
+            values = primary_weight * primary_values + (1.0 - primary_weight) * companion_values
+            output.extend(values.astype(dtype).tobytes())
+        offset = end
+
+    if offset != len(primary):
+        raise ValueError("ncnn weight file contains data not described by its parameter graph")
+    return bytes(output)
 
 
 def upscale_bgr(
@@ -261,12 +375,15 @@ def _resize_bgr(value: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     return resized[:, :, ::-1].copy()
 
 
-def _model_load_error(path: Path) -> PixelupError:
+def _model_load_error(path: Path, *, reason: str | None = None) -> PixelupError:
+    details = {"path": str(path)}
+    if reason is not None:
+        details["reason"] = reason
     return PixelupError(
         ErrorCode.MODEL_CORRUPT,
         "The ncnn model could not be loaded.",
         user_hint="Reinstall the model from Managed models.",
-        details={"path": str(path)},
+        details=details,
     )
 
 
