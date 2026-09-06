@@ -17,6 +17,7 @@ dependencies = [
   "Pillow==12.3.0",
   "pillow-heif==1.5.0",
   "filelock==3.32.3",
+  "ncnn==1.0.20260526",
   # UNBLOCKED 2026-08-20 and bumped. This was held at 2.4.6 because the transitive
   # chain realesrgan -> facexlib -> numba capped numpy at <2.5, and numba is a hard
   # (non-optional) dep of facexlib so it could not be dropped. numba 0.67.0 lifted

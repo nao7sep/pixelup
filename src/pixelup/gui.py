@@ -1755,6 +1755,7 @@ def _selftest() -> int:
         "PIL",
         "pillow_heif",
         "filelock",
+        "ncnn",
         "realesrgan",
         "realesrgan.archs.srvgg_arch",
         "basicsr",
@@ -1764,6 +1765,10 @@ def _selftest() -> int:
         "PySide6.QtWidgets",
     ):
         importlib.import_module(module)
+    # Importing the binding alone does not load its Vulkan/MoltenVK edge. The
+    # count may legitimately be zero, but calling it proves the frozen native
+    # runtime can initialize before a user's first GPU job.
+    importlib.import_module("ncnn").get_gpu_count()
     # urllib resolves this codec dynamically at the first HTTPS hostname. The
     # packaged smoke must exercise the registry lookup, not merely import urllib.
     codecs.lookup("idna")

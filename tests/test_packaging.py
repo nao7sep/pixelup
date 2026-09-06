@@ -10,6 +10,7 @@ EXPECTED_RUNTIME_PINS = {
     "Pillow": "12.3.0",
     "pillow-heif": "1.5.0",
     "filelock": "3.32.3",
+    "ncnn": "1.0.20260526",
     "numpy": "2.5.2",
     "torch": "2.13.0",
     "torchvision": "0.28.0",

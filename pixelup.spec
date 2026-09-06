@@ -50,6 +50,7 @@ hiddenimports = [
     # encoded. There is no import edge for PyInstaller to discover, so a frozen
     # downloader otherwise fails before connecting with "unknown encoding: idna".
     "encodings.idna",
+    "ncnn",
     "realesrgan.archs.srvgg_arch",
 ]
 
