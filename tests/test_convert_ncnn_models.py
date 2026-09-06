@@ -4,6 +4,9 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "convert_ncnn_models.py"
 
@@ -37,3 +40,27 @@ def test_artifact_record_uses_file_bytes(tmp_path: Path) -> None:
         "size": 12,
         "sha256": "9307e02a1ec617d0ddb909b2cdcd613b45b53b91bb2814b42e7bbf0a215a2a72",
     }
+
+
+def test_conversion_equivalence_rejects_shape_and_value_regressions() -> None:
+    module = _load_script()
+    expected = np.zeros((3, 8, 8), dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match="converted shape"):
+        module._assert_equivalent(
+            "model",
+            expected,
+            np.zeros((3, 4, 4), dtype=np.float32),
+        )
+    with pytest.raises(RuntimeError, match="exceeds FP16 tolerance"):
+        module._assert_equivalent(
+            "model",
+            expected,
+            np.ones((3, 8, 8), dtype=np.float32),
+        )
+
+    module._assert_equivalent(
+        "model",
+        expected,
+        np.full((3, 8, 8), 0.01, dtype=np.float32),
+    )

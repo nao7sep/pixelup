@@ -13,6 +13,7 @@ from typing import Any
 
 from pixelup.model_registry import known_model
 from pixelup.models import verify_model_file
+from pixelup.ncnn_backend import NcnnModelFiles, NcnnNetwork
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +152,11 @@ def _source_path(source_dir: Path, spec: ConversionSpec) -> Path:
     return path
 
 
-def _convert_one(spec: ConversionSpec, source: Path, staging_dir: Path) -> tuple[Path, Path]:
+def _convert_one(
+    spec: ConversionSpec,
+    source: Path,
+    staging_dir: Path,
+) -> tuple[Path, Path, Any]:
     import pnnx
     import torch
 
@@ -182,7 +187,46 @@ def _convert_one(spec: ConversionSpec, source: Path, staging_dir: Path) -> tuple
         ncnnbin=str(prefix.with_suffix(".ncnn.bin")),
         ncnnpy=str(staging_dir / f"{build_stem}_ncnn.py"),
     )
-    return prefix.with_suffix(".ncnn.param"), prefix.with_suffix(".ncnn.bin")
+    return prefix.with_suffix(".ncnn.param"), prefix.with_suffix(".ncnn.bin"), model
+
+
+def _validate_conversion(
+    spec: ConversionSpec,
+    model: Any,
+    param: Path,
+    weights: Path,
+) -> None:
+    import torch
+
+    torch.manual_seed(7)
+    sample = torch.rand(1, 3, 8, 10)
+    with torch.inference_mode():
+        expected = model(sample).numpy()[0]
+    with NcnnNetwork(
+        NcnnModelFiles(param, weights, spec.scale),
+        use_gpu=False,
+        gpu_id=None,
+        fp32=True,
+    ) as network:
+        actual = network(sample.numpy()[0])
+    _assert_equivalent(spec.name, expected, actual)
+
+
+def _assert_equivalent(name: str, expected: Any, actual: Any) -> None:
+    import numpy as np
+
+    if expected.shape != actual.shape:
+        raise RuntimeError(
+            f"{name}: converted shape {actual.shape!r} does not match {expected.shape!r}"
+        )
+    difference = np.abs(expected - actual)
+    mean_error = float(difference.mean())
+    max_error = float(difference.max())
+    if mean_error > 0.05 or max_error > 0.5:
+        raise RuntimeError(
+            f"{name}: converted output exceeds FP16 tolerance "
+            f"(mean={mean_error:.6f}, max={max_error:.6f})"
+        )
 
 
 def convert_models(
@@ -201,7 +245,8 @@ def convert_models(
         staging_dir = Path(temp)
         for spec in specs:
             source = _source_path(source_dir, spec)
-            staged_param, staged_bin = _convert_one(spec, source, staging_dir)
+            staged_param, staged_bin, model = _convert_one(spec, source, staging_dir)
+            _validate_conversion(spec, model, staged_param, staged_bin)
             final_param = output_dir / f"{spec.name}.ncnn.param"
             final_bin = output_dir / f"{spec.name}.ncnn.bin"
             os.replace(staged_param, final_param)
