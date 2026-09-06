@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 from pixelup.errors import ErrorCode, PixelupError
 
@@ -361,12 +360,9 @@ def upscale_bgr(
                 + output_alpha_rgb[2] * 0.114
             )
         else:
-            output_alpha = np.asarray(
-                Image.fromarray(alpha).resize(
-                    (width * native_scale, height * native_scale),
-                    Image.Resampling.BICUBIC,
-                ),
-                dtype=np.float32,
+            output_alpha = _resize_linear_plane(
+                alpha,
+                (width * native_scale, height * native_scale),
             ) / 255.0
         output_bgr = np.dstack((output_bgr, output_alpha))
 
@@ -463,13 +459,76 @@ def _pad_bottom_right(value: np.ndarray, bottom: int, right: int) -> np.ndarray:
 
 
 def _resize_bgr(value: np.ndarray, size: tuple[int, int]) -> np.ndarray:
-    if value.shape[2] == 4:
-        rgba = value[:, :, [2, 1, 0, 3]]
-        resized = np.asarray(Image.fromarray(rgba).resize(size, Image.Resampling.LANCZOS))
-        return resized[:, :, [2, 1, 0, 3]].copy()
-    rgb = value[:, :, ::-1]
-    resized = np.asarray(Image.fromarray(rgb).resize(size, Image.Resampling.LANCZOS))
-    return resized[:, :, ::-1].copy()
+    target_width, target_height = size
+    x_indices, x_weights = _lanczos4_axis(value.shape[1], target_width)
+    y_indices, y_weights = _lanczos4_axis(value.shape[0], target_height)
+
+    horizontal = np.zeros(
+        (value.shape[0], target_width, value.shape[2]),
+        dtype=np.float32,
+    )
+    for tap in range(8):
+        horizontal += (
+            value[:, x_indices[:, tap], :]
+            * x_weights[None, :, tap, None]
+        )
+
+    output = np.zeros((target_height, target_width, value.shape[2]), dtype=np.float32)
+    for tap in range(8):
+        output += horizontal[y_indices[:, tap], :, :] * y_weights[:, tap, None, None]
+    return np.clip(output, 0.0, 255.0).round().astype(np.uint8)
+
+
+def _lanczos4_axis(source_size: int, target_size: int) -> tuple[np.ndarray, np.ndarray]:
+    if source_size <= 0 or target_size <= 0:
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT,
+            "Image dimensions must be greater than zero.",
+        )
+    coordinates = (np.arange(target_size, dtype=np.float64) + 0.5) * (
+        source_size / target_size
+    ) - 0.5
+    bases = np.floor(coordinates).astype(np.int64)
+    indices = bases[:, None] + np.arange(-3, 5, dtype=np.int64)
+    distances = coordinates[:, None] - indices
+    weights = np.sinc(distances) * np.sinc(distances / 4.0)
+    weights[np.abs(distances) >= 4.0] = 0.0
+    weights /= weights.sum(axis=1, keepdims=True)
+    return np.clip(indices, 0, source_size - 1), weights.astype(np.float32)
+
+
+def _resize_linear_plane(value: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    target_width, target_height = size
+    source_height, source_width = value.shape
+    if min(source_width, source_height, target_width, target_height) <= 0:
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT,
+            "Image dimensions must be greater than zero.",
+        )
+
+    x = (np.arange(target_width, dtype=np.float64) + 0.5) * (
+        source_width / target_width
+    ) - 0.5
+    y = (np.arange(target_height, dtype=np.float64) + 0.5) * (
+        source_height / target_height
+    ) - 0.5
+    x_base = np.floor(x).astype(np.int64)
+    y_base = np.floor(y).astype(np.int64)
+    x_weight = (x - x_base).astype(np.float32)
+    y_weight = (y - y_base).astype(np.float32)
+    x_low = np.clip(x_base, 0, source_width - 1)
+    x_high = np.clip(x_base + 1, 0, source_width - 1)
+    y_low = np.clip(y_base, 0, source_height - 1)
+    y_high = np.clip(y_base + 1, 0, source_height - 1)
+
+    horizontal = (
+        value[:, x_low] * (1.0 - x_weight)[None, :]
+        + value[:, x_high] * x_weight[None, :]
+    )
+    return (
+        horizontal[y_low, :] * (1.0 - y_weight)[:, None]
+        + horizontal[y_high, :] * y_weight[:, None]
+    ).astype(np.float32)
 
 
 def _model_load_error(path: Path, *, reason: str | None = None) -> PixelupError:

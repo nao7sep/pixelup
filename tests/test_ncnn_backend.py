@@ -12,6 +12,8 @@ from pixelup.ncnn_backend import (
     NcnnModelFiles,
     NcnnNetwork,
     NcnnUpscaleConfig,
+    _resize_bgr,
+    _resize_linear_plane,
     interpolate_ncnn_weights,
     run_ncnn_upscale,
     upscale_bgr,
@@ -90,6 +92,26 @@ def test_alpha_can_use_model_or_bicubic_without_changing_output_size() -> None:
     assert model_alpha.shape == (4, 6, 4)
     assert bicubic_alpha.shape == (4, 6, 4)
     assert calls == [(3, 2, 3), (3, 2, 3), (3, 2, 3)]
+
+
+def test_output_scale_uses_the_existing_lanczos4_resampling_contract() -> None:
+    image = np.arange(3 * 4 * 3, dtype=np.uint8).reshape(3, 4, 3)
+
+    output = _resize_bgr(image, (2, 2))
+
+    assert output.tolist() == [
+        [[3, 4, 5], [10, 11, 12]],
+        [[23, 24, 25], [30, 31, 32]],
+    ]
+
+
+def test_non_model_alpha_uses_the_existing_linear_resampling_contract() -> None:
+    alpha = np.arange(12, dtype=np.uint8).reshape(3, 4)
+
+    output = np.clip(_resize_linear_plane(alpha, (2, 2)), 0, 255).round().astype(np.uint8)
+
+    existing = np.array([[1, 3], [7, 9]], dtype=np.uint8)
+    assert np.abs(output.astype(np.int16) - existing).max() <= 1
 
 
 def test_cancellation_is_checked_between_tiles() -> None:
