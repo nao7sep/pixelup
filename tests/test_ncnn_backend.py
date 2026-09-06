@@ -11,7 +11,9 @@ from pixelup.errors import PixelupError
 from pixelup.ncnn_backend import (
     NcnnModelFiles,
     NcnnNetwork,
+    NcnnUpscaleConfig,
     interpolate_ncnn_weights,
+    run_ncnn_upscale,
     upscale_bgr,
 )
 
@@ -241,3 +243,89 @@ def test_interpolate_ncnn_weights_rejects_an_incompatible_companion(tmp_path: Pa
 
     assert excinfo.value.code == "model_corrupt"
     assert not (tmp_path / "output.bin").exists()
+
+
+def test_run_ncnn_upscale_owns_denoise_temp_and_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pixelup.ncnn_backend as backend
+
+    tag = bytes.fromhex("476b3001")
+    param_text = (
+        "7767517\n2 2\nInput in0 0 1 in0\n"
+        "Convolution conv 1 1 in0 out0 0=1 5=0 6=1\n"
+    )
+
+    def model_files(name: str, value: float) -> NcnnModelFiles:
+        param = tmp_path / f"{name}.param"
+        weights = tmp_path / f"{name}.bin"
+        param.write_text(param_text, encoding="utf-8")
+        weights.write_bytes(tag + np.array([value], dtype="<f2").tobytes())
+        return NcnnModelFiles(param, weights, 2)
+
+    captured_weights: list[bytes] = []
+
+    class FakeNetwork:
+        def __init__(self, files: NcnnModelFiles, **_kwargs: object) -> None:
+            captured_weights.append(files.weights.read_bytes())
+
+        def __call__(self, value: np.ndarray) -> np.ndarray:
+            return _nearest(2)(value)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+    monkeypatch.setattr(backend, "NcnnNetwork", FakeNetwork)
+    temp_dir = tmp_path / "temp"
+    progress: list[str] = []
+    output = run_ncnn_upscale(
+        np.zeros((2, 3, 3), dtype=np.uint8),
+        NcnnUpscaleConfig(
+            model=model_files("primary", 1.0),
+            denoise_companion=model_files("companion", 0.0),
+            denoise_strength=0.25,
+            output_scale=2,
+            tile=0,
+            tile_pad=0,
+            pre_pad=0,
+            alpha_mode="bicubic",
+            use_gpu=False,
+            gpu_id=None,
+            fp32=True,
+        ),
+        temp_dir=temp_dir,
+        on_progress=progress.append,
+    )
+
+    assert output.shape == (4, 6, 3)
+    assert progress == ["load_model", "upscale"]
+    assert np.frombuffer(captured_weights[0], dtype="<f2", count=1, offset=4)[0] == 0.25
+    assert list(temp_dir.iterdir()) == []
+
+
+def test_run_ncnn_upscale_rejects_denoise_without_companion(tmp_path: Path) -> None:
+    files = NcnnModelFiles(tmp_path / "model.param", tmp_path / "model.bin", 4)
+
+    with pytest.raises(PixelupError) as excinfo:
+        run_ncnn_upscale(
+            np.zeros((2, 2, 3), dtype=np.uint8),
+            NcnnUpscaleConfig(
+                model=files,
+                denoise_companion=None,
+                denoise_strength=0.5,
+                output_scale=4,
+                tile=0,
+                tile_pad=0,
+                pre_pad=0,
+                alpha_mode="bicubic",
+                use_gpu=False,
+                gpu_id=None,
+                fp32=True,
+            ),
+            temp_dir=tmp_path / "temp",
+        )
+
+    assert excinfo.value.code == "invalid_argument"

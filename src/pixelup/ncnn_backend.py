@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,21 @@ class NcnnModelFiles:
     param: Path
     weights: Path
     native_scale: int
+
+
+@dataclass(frozen=True, slots=True)
+class NcnnUpscaleConfig:
+    model: NcnnModelFiles
+    denoise_companion: NcnnModelFiles | None
+    denoise_strength: float
+    output_scale: int
+    tile: int
+    tile_pad: int
+    pre_pad: int
+    alpha_mode: str
+    use_gpu: bool
+    gpu_id: int | None
+    fp32: bool
 
 
 class NcnnNetwork:
@@ -96,6 +112,87 @@ class NcnnNetwork:
 
     def __exit__(self, *_args: object) -> None:
         self.close()
+
+
+def run_ncnn_upscale(
+    image: np.ndarray,
+    config: NcnnUpscaleConfig,
+    *,
+    temp_dir: Path,
+    on_progress: Callable[[str], None] | None = None,
+    on_tile: TileCallback | None = None,
+    should_cancel: CancelCheck | None = None,
+) -> np.ndarray:
+    """Run one complete ncnn upscale while keeping temporary DNI weights job-owned."""
+    _check_cancelled(should_cancel)
+    _emit_progress(on_progress, "load_model")
+    with _prepared_ncnn_model(config, temp_dir=temp_dir) as files:
+        with NcnnNetwork(
+            files,
+            use_gpu=config.use_gpu,
+            gpu_id=config.gpu_id,
+            fp32=config.fp32,
+        ) as network:
+            _check_cancelled(should_cancel)
+            _emit_progress(on_progress, "upscale")
+            return upscale_bgr(
+                image,
+                native_scale=files.native_scale,
+                output_scale=config.output_scale,
+                tile=config.tile,
+                tile_pad=config.tile_pad,
+                pre_pad=config.pre_pad,
+                alpha_mode=config.alpha_mode,
+                infer_tile=network,
+                on_tile=on_tile,
+                should_cancel=should_cancel,
+            )
+
+
+@contextmanager
+def _prepared_ncnn_model(
+    config: NcnnUpscaleConfig,
+    *,
+    temp_dir: Path,
+) -> Iterator[NcnnModelFiles]:
+    if config.denoise_strength == 1.0:
+        yield config.model
+        return
+    companion = config.denoise_companion
+    if companion is None:
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT,
+            "The selected model does not support denoise strength.",
+        )
+    if companion.native_scale != config.model.native_scale:
+        raise PixelupError(
+            ErrorCode.MODEL_CORRUPT,
+            "The ncnn denoise model is incompatible with the selected model.",
+        )
+    try:
+        if config.model.param.read_bytes() != companion.param.read_bytes():
+            raise PixelupError(
+                ErrorCode.MODEL_CORRUPT,
+                "The ncnn denoise model graph does not match the selected model.",
+            )
+    except OSError as exc:
+        raise _model_load_error(config.model.param, reason=str(exc)) from exc
+
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="pixelup-ncnn-dni-", dir=temp_dir) as directory:
+        blended_weights = Path(directory) / "denoise.ncnn.bin"
+        interpolate_ncnn_weights(
+            config.model.param,
+            config.model.weights,
+            companion.weights,
+            blended_weights,
+            primary_weight=config.denoise_strength,
+        )
+        yield NcnnModelFiles(
+            config.model.param,
+            blended_weights,
+            config.model.native_scale,
+        )
 
 
 def interpolate_ncnn_weights(
@@ -390,3 +487,8 @@ def _model_load_error(path: Path, *, reason: str | None = None) -> PixelupError:
 def _check_cancelled(should_cancel: CancelCheck | None) -> None:
     if should_cancel is not None and should_cancel():
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+
+
+def _emit_progress(callback: Callable[[str], None] | None, stage: str) -> None:
+    if callback is not None:
+        callback(stage)
