@@ -859,6 +859,9 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+model-build = [
+    { name = "pnnx" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -869,6 +872,7 @@ requires-dist = [
     { name = "opencv-python", specifier = "==5.0.0.93" },
     { name = "pillow", specifier = "==12.3.0" },
     { name = "pillow-heif", specifier = "==1.5.0" },
+    { name = "pnnx", marker = "extra == 'model-build'", specifier = "==20260526" },
     { name = "pyinstaller", marker = "extra == 'build'", specifier = "==6.22.2" },
     { name = "pyside6", specifier = "==6.11.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
@@ -878,7 +882,7 @@ requires-dist = [
     { name = "torch", specifier = "==2.13.0" },
     { name = "torchvision", specifier = "==0.28.0" },
 ]
-provides-extras = ["dev", "build"]
+provides-extras = ["dev", "build", "model-build"]
 
 [[package]]
 name = "platformdirs"
@@ -896,6 +900,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "pnnx"
+version = "20260526"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "torch" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c5/bd/a23a277c94c1704400c5bb796d4fff1279f8bce34ee0d1f2869c280554d6/pnnx-20260526-py3-none-macosx_10_9_universal2.macosx_10_9_x86_64.macosx_11_0_arm64.whl", hash = "sha256:5d82973ab66afed9f2b5059e18494298c936ea209ab2fc9edccc0f8de59e0f35", size = 54448535, upload-time = "2026-05-26T08:12:11.186Z" },
+    { url = "https://files.pythonhosted.org/packages/27/97/bd531bae3118af06c189676c39e649f5aa4afe7e0cf103bda6d561f0f36d/pnnx-20260526-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:5c5c72b9973752d175d2d9b3fb388a5f21eaa4fc4cafec36547b8f506c776446", size = 24413671, upload-time = "2026-05-26T08:12:14.268Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/f6/2d79465686a0a6978dc4497b95bd8fcb5afa29a055ffdf8239cf2c38d6fa/pnnx-20260526-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:9990d88b77c4fab8fa120fda40ba371c6237a4c5b1134a81e6f1162aa65177bf", size = 28802476, upload-time = "2026-05-26T08:12:16.929Z" },
+    { url = "https://files.pythonhosted.org/packages/72/0a/4ec21b47b048150920ec5ebb06bb6a4d50fc32a7519a51f22cdeec43f9cc/pnnx-20260526-py3-none-win_amd64.whl", hash = "sha256:66f49d67305528c8d7a0c8df41c64a0b9de8fc5254c87200199f481d9caf5695", size = 18388174, upload-time = "2026-05-26T08:12:19.77Z" },
 ]
 
 [[package]]

@@ -45,6 +45,12 @@ dev = [
 build = [
   "pyinstaller==6.22.2",
 ]
+# Development-only model conversion. This produces the small ncnn graph plus
+# weight pairs that are published as pinned managed assets; it is not shipped in
+# PixelUp and never runs on an end user's machine.
+model-build = [
+  "pnnx==20260526",
+]
 
 [project.gui-scripts]
 pixelup = "pixelup.gui:main"
