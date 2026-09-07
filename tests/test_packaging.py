@@ -77,3 +77,16 @@ def test_windows_installer_configuration() -> None:
     assert "runasoriginaluser" in flags
     assert "runascurrentuser" not in flags
     assert run["Check"].strip() == "not IsAdminInstallMode"
+
+
+def test_application_license_is_packaged_on_both_platforms() -> None:
+    mac_finalizer = (ROOT / "scripts" / "finalize-macos-bundle.sh").read_text(
+        encoding="utf-8"
+    )
+    windows_packager = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
+
+    assert 'cp "$LICENSE" "$APP_BUNDLE/Contents/Resources/LICENSE.txt"' in mac_finalizer
+    assert (
+        "Copy-Item -LiteralPath LICENSE -Destination dist\\PixelUp\\LICENSE.txt"
+        in windows_packager
+    )

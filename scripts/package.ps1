@@ -21,6 +21,7 @@ $env:PIXELUP_SELFTEST = "1"
 $proc = Start-Process -FilePath "dist\PixelUp\PixelUp.exe" -Wait -PassThru
 Remove-Item Env:PIXELUP_SELFTEST
 if ($proc.ExitCode -ne 0) { throw "Frozen self-test failed (exit $($proc.ExitCode))" }
+Copy-Item -LiteralPath LICENSE -Destination dist\PixelUp\LICENSE.txt
 
 # Portable: zip the onedir as-is.
 Compress-Archive -Path dist\PixelUp\* -DestinationPath "dist\pixelup-$Version-win.zip" -Force
