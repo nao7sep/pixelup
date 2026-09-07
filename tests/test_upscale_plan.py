@@ -17,7 +17,6 @@ def options(
     tile: int = 0,
     scale: int = 4,
     output_format: OutputFormat | None = OutputFormat.PNG,
-    face_enhance: bool = False,
 ) -> UpscaleOptions:
     return UpscaleOptions(
         input_path=input_path,
@@ -28,7 +27,6 @@ def options(
         tile_pad=10,
         pre_pad=0,
         fp32=False,
-        face_enhance=face_enhance,
         denoise_strength=1.0,
         alpha_mode="realesrgan",
         gpu_id=None,
@@ -199,26 +197,6 @@ def test_run_upscale_errors_on_missing_model(tmp_path: Path) -> None:
         )
 
     assert excinfo.value.code == "model_not_found"
-
-
-def test_face_enhance_requires_gfpgan_and_facexlib_helper_models(tmp_path: Path) -> None:
-    from pixelup.upscale import required_model_names
-
-    input_path = tmp_path / "input.png"
-
-    assert required_model_names(
-        options(
-            input_path,
-            str(tmp_path / "output.png"),
-            model="realesr-general-x4v3",
-            face_enhance=True,
-        )
-    ) == [
-        "realesr-general-x4v3",
-        "GFPGANv1.4",
-        "facexlib-detection-retinaface-resnet50",
-        "facexlib-parsing-parsenet",
-    ]
 
 
 def test_run_upscale_warns_for_forced_format_extension_mismatch(

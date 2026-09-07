@@ -680,7 +680,7 @@ def test_settings_only_options_have_no_main_window_control(make_window) -> None:
 
     assert set(window.model_checks) == set(gui.UPSCALE_MODELS)
     checkbox_labels = {box.text() for box in window.findChildren(QCheckBox)}
-    assert checkbox_labels == set(gui.UPSCALE_MODELS) | {"Face enhancement", "Strip metadata"}
+    assert checkbox_labels == set(gui.UPSCALE_MODELS) | {"Strip metadata"}
     # The window reads both from config and never offers a widget onto them.
     assert not hasattr(window, "auto_download")
     assert not hasattr(window, "concurrent")
@@ -979,7 +979,6 @@ def _reset_button(window: MainWindow) -> QPushButton:
 
 def _wander_from_defaults(window: MainWindow) -> None:
     window.scale_buttons[2].setChecked(True)
-    window.face_enhance.setChecked(True)
     window.denoise_strength.setValue(0.75)
     window.quality.setValue(10)
     window.tile.setCurrentIndex(window.tile.findData(1024))
@@ -1058,7 +1057,6 @@ def test_parameter_edits_persist_to_config_json(make_window) -> None:
     assert persisted == window.current_job_settings()
     assert persisted.quality == 10
     assert persisted.tile == 1024
-    assert persisted.face_enhance is True
     assert persisted.device == "cpu"
     assert persisted.scale == 2
     assert persisted != JobSettings()

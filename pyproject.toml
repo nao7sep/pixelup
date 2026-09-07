@@ -17,20 +17,9 @@ dependencies = [
   "Pillow==12.3.0",
   "pillow-heif==1.5.0",
   "filelock==3.32.3",
-  # UNBLOCKED 2026-08-20 and bumped. This was held at 2.4.6 because the transitive
-  # chain realesrgan -> facexlib -> numba capped numpy at <2.5, and numba is a hard
-  # (non-optional) dep of facexlib so it could not be dropped. numba 0.67.0 lifted
-  # the cap to numpy<2.6, which admits 2.5.x — the exact release the old note said
-  # to wait for. Re-measured against numba's published requires_dist rather than
-  # assumed, which is the only reason it was noticed at all: a hold with no expiry
-  # date outlives its cause silently.
   "numpy==2.5.2",
   "torch==2.13.0",
-  "torchvision==0.28.0",
   "opencv-python==5.0.0.93",
-  "realesrgan==0.3.0",
-  "basicsr-fixed==1.4.2",
-  "gfpgan==1.3.8",
 ]
 
 [project.optional-dependencies]
@@ -48,16 +37,6 @@ build = [
 
 [project.gui-scripts]
 pixelup = "pixelup.gui:main"
-
-[tool.uv]
-# realesrgan hard-depends on the original `basicsr`, but pixelup pins `basicsr-fixed`
-# — a patched fork that installs under the same `basicsr` import name and fixes its
-# `from torchvision.transforms.functional_tensor import ...` (that module was removed
-# in modern torchvision). Installing both is a same-directory file collision whose
-# winner depends on install order: fine locally (fixed fork won), but on CI the
-# original won and the frozen macOS build crashed on first import. Drop the original
-# from the graph via a never-true marker so only the fixed fork provides `basicsr`.
-override-dependencies = ["basicsr ; sys_platform == 'nonexistent'"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

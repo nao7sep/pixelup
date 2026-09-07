@@ -54,7 +54,6 @@ def write_sidecar(
             "tile_pad": options.tile_pad,
             "pre_pad": options.pre_pad,
             "fp32": options.fp32,
-            "face_enhance": options.face_enhance,
             "denoise_strength": options.denoise_strength,
             "alpha_mode": options.alpha_mode,
             "device": options.device,

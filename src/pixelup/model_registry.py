@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 REAL_ESRGAN_RELEASES = "https://github.com/xinntao/Real-ESRGAN/releases/download"
-GFPGAN_RELEASES = "https://github.com/TencentARC/GFPGAN/releases/download"
-FACEXLIB_RELEASES = "https://github.com/xinntao/facexlib/releases/download"
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +17,7 @@ class ModelInfo:
 
 # Each model is pinned to an immutable upstream release artifact (the URL's tag)
 # and to a SHA-256 of that artifact's bytes. The hashes were computed from the
-# official releases (xinntao/Real-ESRGAN, TencentARC/GFPGAN, xinntao/facexlib) and
+# official xinntao/Real-ESRGAN releases and
 # confirmed byte-identical to what those pinned URLs serve; that is the trust
 # anchor, since these old releases publish no upstream checksum of their own. A
 # download is verified against its hash before it is cached (see verify_model_file
@@ -75,29 +73,6 @@ ALL_MODELS: tuple[ModelInfo, ...] = (
         f"{REAL_ESRGAN_RELEASES}/v0.2.5.0/realesr-general-wdn-x4v3.pth",
         4885111,
         checksum_sha256="1641f8c4464b9f097c9fdda5589273713f67cf59f3d909e0bd688f0cee269dca",
-        listed=False,
-    ),
-    ModelInfo(
-        "GFPGANv1.4",
-        "GFPGANv1.4.pth",
-        f"{GFPGAN_RELEASES}/v1.3.4/GFPGANv1.4.pth",
-        348632874,
-        checksum_sha256="e2cd4703ab14f4d01fd1383a8a8b266f9a5833dacee8e6a79d3bf21a1b6be5ad",
-    ),
-    ModelInfo(
-        "facexlib-detection-retinaface-resnet50",
-        "detection_Resnet50_Final.pth",
-        f"{FACEXLIB_RELEASES}/v0.1.0/detection_Resnet50_Final.pth",
-        109497761,
-        checksum_sha256="6d1de9c2944f2ccddca5f5e010ea5ae64a39845a86311af6fdf30841b0a5a16d",
-        listed=False,
-    ),
-    ModelInfo(
-        "facexlib-parsing-parsenet",
-        "parsing_parsenet.pth",
-        f"{FACEXLIB_RELEASES}/v0.2.2/parsing_parsenet.pth",
-        85331193,
-        checksum_sha256="3d558d8d0e42c20224f13cf5a29c79eba2d59913419f945545d8cf7b72920de2",
         listed=False,
     ),
 )

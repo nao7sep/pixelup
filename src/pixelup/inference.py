@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import math
 import re
-import threading
-import warnings
 from collections.abc import Callable, Mapping
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -17,19 +15,12 @@ from pixelup.devices import resolve_device, to_torch_device
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import register_image_plugins
 from pixelup.models import model_file
+from pixelup.realesrgan_models import RRDBNet, SRVGGNetCompact
+from pixelup.realesrgan_runtime import RealESRGANer
 
 ProgressCallback = Callable[[str], None]
 TileCallback = Callable[[int, int], None]
 CancelCheck = Callable[[], bool]
-
-# GFPGANer hardcodes the facexlib model directory when it builds its
-# FaceRestoreHelper, so the only way to point face-detection and parsing
-# weights at the PixelUp models directory is to substitute the
-# FaceRestoreHelper symbol GFPGANer reads during construction. That
-# substitution mutates a module global, so it is held only for the duration
-# of construction and serialized across worker threads.
-_GFPGAN_HELPER_LOCK = threading.Lock()
-
 
 @dataclass(frozen=True, slots=True)
 class InferenceConfig:
@@ -41,7 +32,6 @@ class InferenceConfig:
     tile_pad: int
     pre_pad: int
     fp32: bool
-    face_enhance: bool
     denoise_strength: float
     alpha_mode: str
     gpu_id: int | None
@@ -130,9 +120,6 @@ def _run_inference(
 
     _check_cancelled(should_cancel)
     _emit(on_progress, "upscale")
-    if config.face_enhance:
-        _emit(on_progress, "face_enhance")
-        return _run_face_enhance(config, upsampler, image, torch_device=torch_device)
     output, _ = upsampler.enhance(image, outscale=config.scale, alpha_upsampler=config.alpha_mode)
     return output
 
@@ -175,11 +162,6 @@ def _create_upsampler(
     on_tile: TileCallback | None = None,
     should_cancel: CancelCheck | None = None,
 ) -> Any:
-    try:
-        from realesrgan import RealESRGANer
-    except ImportError as exc:
-        raise _missing_inference_dependency("realesrgan", exc) from exc
-
     model_paths: str | list[str] = str(model_file(config.models_dir, config.model))
     dni_weight = None
     if config.model == "realesr-general-x4v3" and config.denoise_strength != 1.0:
@@ -211,10 +193,8 @@ def _create_upsampler(
 
 
 def _tile_reporting_upsampler_class(base: type) -> type:
-    # Subclass of realesrgan.RealESRGANer that emits a per-tile callback.
-    #
-    # Pinned against realesrgan==0.3.0. The override delegates to the upstream
-    # tile_process and only assumes:
+    # Subclass of PixelUp's RealESRGANer subset that emits a per-tile callback.
+    # The override delegates to the adapted implementation and only assumes:
     #   - self.img.shape is (batch, channel, height, width)
     #   - self.tile_size is the tile edge length
     #   - the upstream loop calls self.model(input_tile) exactly once per tile
@@ -263,105 +243,14 @@ def _tile_reporting_upsampler_class(base: type) -> type:
 
 def _build_network(spec: ModelArchitectureSpec) -> Any:
     if spec.kind == "rrdb":
-        try:
-            from basicsr.archs.rrdbnet_arch import RRDBNet
-        except ImportError as exc:
-            raise _missing_inference_dependency("basicsr-fixed", exc) from exc
         return RRDBNet(**spec.params)
     if spec.kind == "srvgg":
-        try:
-            from realesrgan.archs.srvgg_arch import SRVGGNetCompact
-        except ImportError as exc:
-            raise _missing_inference_dependency("realesrgan", exc) from exc
         return SRVGGNetCompact(**spec.params)
     raise PixelupError(
         ErrorCode.INTERNAL_ERROR,
         "Unsupported Real-ESRGAN model architecture.",
         details={"kind": spec.kind},
     )
-
-
-def _run_face_enhance(
-    config: InferenceConfig,
-    upsampler: Any,
-    image: Any,
-    *,
-    torch_device: Any,
-) -> Any:
-    try:
-        import gfpgan.utils as gfpgan_utils
-        from facexlib.utils.face_restoration_helper import FaceRestoreHelper
-        from gfpgan import GFPGANer
-    except ImportError as exc:
-        raise PixelupError(
-            ErrorCode.FACE_ENHANCE_UNAVAILABLE,
-            "GFPGAN is not installed.",
-        ) from exc
-
-    class _PixelupFaceRestoreHelper(FaceRestoreHelper):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs["model_rootpath"] = str(config.models_dir)
-            super().__init__(*args, **kwargs)
-
-    face_enhancer = _build_face_enhancer(
-        gfpgan_utils,
-        GFPGANer,
-        _PixelupFaceRestoreHelper,
-        config,
-        upsampler,
-        torch_device,
-    )
-    # enhance() is NOT wrapped in redirect_stdout/redirect_stderr. This runs on
-    # a worker thread that can execute concurrently with other jobs, and
-    # redirecting the process-global streams here would race with them and leave
-    # sys.stdout/sys.stderr pointing at a dead buffer. The plain upscale path
-    # likewise does not suppress enhance() output, and surfacing it lets GFPGAN's
-    # own inference-failure message through.
-    _, _, output = face_enhancer.enhance(
-        image,
-        has_aligned=False,
-        only_center_face=False,
-        paste_back=True,
-    )
-    return output
-
-
-def _build_face_enhancer(
-    gfpgan_utils: Any,
-    gfpganer_cls: Any,
-    helper_cls: type,
-    config: InferenceConfig,
-    upsampler: Any,
-    torch_device: Any,
-) -> Any:
-    # The helper substitution and its matching restore must happen as one atomic
-    # step: GFPGANer reads gfpgan.utils.FaceRestoreHelper while it builds its own
-    # face helper, so the lock keeps a concurrent face-enhance job from
-    # constructing against a half-applied or already-restored global. This
-    # serialized window is also the only place it is safe to silence the noisy
-    # model-loading output, since redirecting the process-global stdout/stderr is
-    # only race-free while the lock is held.
-    with _GFPGAN_HELPER_LOCK:
-        original_helper = gfpgan_utils.FaceRestoreHelper
-        gfpgan_utils.FaceRestoreHelper = helper_cls
-        try:
-            with (
-                redirect_stdout(StringIO()),
-                redirect_stderr(StringIO()),
-                warnings.catch_warnings(),
-            ):
-                warnings.simplefilter("ignore")
-                return gfpganer_cls(
-                    model_path=str(model_file(config.models_dir, "GFPGANv1.4")),
-                    upscale=config.scale,
-                    arch="clean",
-                    channel_multiplier=2,
-                    bg_upsampler=upsampler,
-                    device=torch_device,
-                )
-        finally:
-            gfpgan_utils.FaceRestoreHelper = original_helper
-
 
 def _read_input_image(path: Path) -> Any:
     np = _import_numpy()
@@ -402,8 +291,8 @@ def _read_input_image(path: Path) -> Any:
     )
 
 
-# pixelup never calls torch.load itself — the third-party loaders (RealESRGANer,
-# GFPGANer, facexlib) own that call and pass no weights_only argument. Model-load
+# PixelUp's adapted RealESRGANer calls torch.load without a weights_only argument.
+# Model-load
 # safety therefore rests on torch.load's default weights_only=True (the code-execution
 # gate, holding from torch 2.6 onward); a model that pixelup downloaded is additionally
 # verified against its pinned SHA-256 at download (models.verify_model_file), while a

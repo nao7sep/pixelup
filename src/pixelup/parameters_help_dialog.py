@@ -23,11 +23,6 @@ _ENTRIES: tuple[tuple[str, str], ...] = (
         "mismatch is surfaced as a queue warning, not an error.",
     ),
     (
-        "Face enhancement",
-        "Restores faces with GFPGAN on top of the upscale. Its model weights are "
-        "installed through Managed models, like the upscaler weights.",
-    ),
-    (
         "Denoise",
         "Denoising strength from 0.0 (strongest denoise) to 1.0 (none). Only "
         "realesr-general-x4v3 supports it; every other model ignores the value.",

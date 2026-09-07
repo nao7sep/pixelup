@@ -30,7 +30,6 @@ def make_options(**overrides: object) -> UpscaleOptions:
         tile_pad=10,
         pre_pad=0,
         fp32=False,
-        face_enhance=False,
         denoise_strength=1.0,
         alpha_mode="realesrgan",
         gpu_id=None,

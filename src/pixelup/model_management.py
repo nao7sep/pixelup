@@ -37,16 +37,6 @@ MANAGED_MODEL_BUNDLES = (
         "Denoise support",
         (GENERAL_DENOISE_MODEL,),
     ),
-    ManagedModelBundle(
-        "face-enhancement",
-        "Face enhancement",
-        "Face restoration support",
-        (
-            "GFPGANv1.4",
-            "facexlib-detection-retinaface-resnet50",
-            "facexlib-parsing-parsenet",
-        ),
-    ),
 )
 
 MANAGED_ARTIFACT_NAMES = tuple(
@@ -65,7 +55,6 @@ def effective_denoise_strength(model: str, denoise_strength: float) -> float:
 def required_artifact_names(
     models: Iterable[str],
     *,
-    face_enhance: bool,
     denoise_strength: float,
 ) -> tuple[str, ...]:
     required: list[str] = []
@@ -73,14 +62,6 @@ def required_artifact_names(
         required.append(model)
         if model_supports_denoise(model) and denoise_strength != DENOISE_NEUTRAL:
             required.append(GENERAL_DENOISE_MODEL)
-    if face_enhance:
-        required.extend(
-            (
-                "GFPGANv1.4",
-                "facexlib-detection-retinaface-resnet50",
-                "facexlib-parsing-parsenet",
-            )
-        )
     return tuple(dict.fromkeys(required))
 
 

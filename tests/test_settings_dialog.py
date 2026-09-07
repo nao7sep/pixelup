@@ -136,7 +136,7 @@ def test_accepting_the_dialog_leaves_the_parameters_panel_untouched(qapp: QAppli
     # The dialog must carry the settings it does not show straight through. Building a
     # fresh AppConfig here instead would silently reset the user's whole Parameters
     # panel to the built-ins every time they changed their font.
-    parameters = JobSettings(quality=10, tile=1024, device="cpu", face_enhance=True)
+    parameters = JobSettings(quality=10, tile=1024, device="cpu")
     dialog = SettingsDialog(AppConfig(parameters=parameters))
     try:
         dialog.font_family.setText("Menlo")

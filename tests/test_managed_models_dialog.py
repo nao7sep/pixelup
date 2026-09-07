@@ -86,7 +86,7 @@ def test_reinstall_forces_atomic_reacquisition(
 def test_queue_install_only_changes_manager_state(
     qapp: QApplication, tmp_path: Path, monkeypatch
 ) -> None:
-    required = ("RealESRGAN_x4plus", "GFPGANv1.4")
+    required = ("RealESRGAN_x4plus", "RealESRNet_x4plus")
 
     def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
         target = model_file(models_dir, name)
@@ -170,7 +170,7 @@ def test_unexpected_install_failure_uses_safe_copy(
 def test_failure_refreshes_partial_application_owned_readiness(
     qapp: QApplication, tmp_path: Path, monkeypatch
 ) -> None:
-    required = ("RealESRGAN_x4plus", "GFPGANv1.4")
+    required = ("RealESRGAN_x4plus", "RealESRNet_x4plus")
 
     def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
         if name == required[1]:

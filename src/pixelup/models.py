@@ -18,8 +18,6 @@ from filelock import FileLock, Timeout
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.model_registry import (  # noqa: F401 - preserve the existing public imports
     ALL_MODELS,
-    FACEXLIB_RELEASES,
-    GFPGAN_RELEASES,
     KNOWN_MODELS,
     REAL_ESRGAN_RELEASES,
     ModelInfo,

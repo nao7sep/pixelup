@@ -41,7 +41,6 @@ def test_real_esrgan_small_image_smoke(tmp_path: Path) -> None:
             tile_pad=10,
             pre_pad=0,
             fp32=True,
-            face_enhance=False,
             denoise_strength=1.0,
             alpha_mode="realesrgan",
             gpu_id=None,

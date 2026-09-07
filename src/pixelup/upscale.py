@@ -56,7 +56,6 @@ class UpscaleOptions:
     tile_pad: int
     pre_pad: int
     fp32: bool
-    face_enhance: bool
     denoise_strength: float
     alpha_mode: str
     gpu_id: int | None
@@ -181,7 +180,6 @@ def run_upscale(
             tile_pad=options.tile_pad,
             pre_pad=options.pre_pad,
             fp32=options.fp32,
-            face_enhance=options.face_enhance,
             denoise_strength=options.denoise_strength,
             alpha_mode=options.alpha_mode,
             gpu_id=options.gpu_id,
@@ -195,7 +193,6 @@ def run_upscale(
         "upscale.inference_done",
         model=options.model,
         device=plan.device,
-        face_enhance=options.face_enhance,
         duration_ms=round((time.perf_counter() - inference_started) * 1000),
     )
     if should_cancel and should_cancel():
@@ -274,7 +271,6 @@ def required_model_names(options: UpscaleOptions) -> list[str]:
     return list(
         required_artifact_names(
             (options.model,),
-            face_enhance=options.face_enhance,
             denoise_strength=options.denoise_strength,
         )
     )

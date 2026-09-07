@@ -746,7 +746,6 @@ class MainWindow(QMainWindow):
             scale_layout.addWidget(button)
         scale_layout.addStretch()
 
-        self.face_enhance = QCheckBox("Face enhancement")
         self.denoise_strength = NoWheelDoubleSpinBox()
         self.denoise_strength.setRange(MIN_DENOISE_STRENGTH, MAX_DENOISE_STRENGTH)
         self.denoise_strength.setSingleStep(DENOISE_STRENGTH_STEP)
@@ -783,7 +782,6 @@ class MainWindow(QMainWindow):
         help_button.clicked.connect(self._parameters_help_dialog)
 
         form.addRow("Scale", scale_row)
-        form.addRow("", self.face_enhance)
         form.addRow("Denoise", self.denoise_strength)
         form.addRow("Alpha mode", self.alpha_mode)
         form.addRow("Output format", self.output_format)
@@ -807,7 +805,6 @@ class MainWindow(QMainWindow):
         # schedule a save of values nobody edited.
         for changed in (
             self.scale_group.buttonToggled,
-            self.face_enhance.toggled,
             self.denoise_strength.valueChanged,
             self.alpha_mode.currentIndexChanged,
             self.output_format.currentIndexChanged,
@@ -1220,7 +1217,6 @@ class MainWindow(QMainWindow):
         profile = self.target_profile.currentData()
         return JobSettings(
             scale=self._current_scale(),
-            face_enhance=self.face_enhance.isChecked(),
             denoise_strength=self.denoise_strength.value(),
             alpha_mode=self.alpha_mode.currentData(),
             device=self.device.currentData(),
@@ -1237,7 +1233,6 @@ class MainWindow(QMainWindow):
         # rather than raising: the loader already coerces against SCALE_VALUES, so this
         # only guards a programmatic caller.
         self.scale_buttons.get(settings.scale, self.scale_buttons[DEFAULT_SCALE]).setChecked(True)
-        self.face_enhance.setChecked(settings.face_enhance)
         self.denoise_strength.setValue(settings.denoise_strength)
         self.alpha_mode.setCurrentIndex(self.alpha_mode.findData(settings.alpha_mode))
         self.output_format.setCurrentIndex(
@@ -1360,7 +1355,6 @@ class MainWindow(QMainWindow):
         settings = self.current_job_settings()
         required = required_artifact_names(
             models,
-            face_enhance=settings.face_enhance,
             denoise_strength=settings.denoise_strength,
         )
         self.model_manager.refresh_readiness()
@@ -1457,7 +1451,6 @@ class MainWindow(QMainWindow):
                 for job in failed_jobs
                 for artifact in required_artifact_names(
                     (job.model,),
-                    face_enhance=job.settings.face_enhance,
                     denoise_strength=job.settings.denoise_strength,
                 )
             )
@@ -1737,30 +1730,22 @@ def _selftest() -> int:
     """Import the full runtime stack and exit — proof that a build resolved every
     dependency, without downloading models or running inference.
 
-    The inference libraries (torch, realesrgan, basicsr, gfpgan, facexlib, cv2) are
-    imported lazily deep inside functions, so a frozen PyInstaller bundle can build
-    and even launch while silently missing one of them — the gap only surfaces when a
-    user first upscales. Running the packaged binary with PIXELUP_SELFTEST=1 forces
-    every such import up front, so CI/packaging catches a missing hidden-import here
-    rather than in the user's hands. Import-only: no window, no network, no weights.
+    Running the packaged binary with PIXELUP_SELFTEST=1 forces every inference
+    import up front, so packaging catches a missing component before release.
+    Import-only: no window, no network, no weights.
     """
     import codecs
     import importlib
 
     for module in (
         "torch",
-        "torchvision",
         "cv2",
         "numpy",
         "PIL",
         "pillow_heif",
         "filelock",
-        "realesrgan",
-        "realesrgan.archs.srvgg_arch",
-        "basicsr",
-        "basicsr.archs.rrdbnet_arch",
-        "gfpgan",
-        "facexlib",
+        "pixelup.realesrgan_models",
+        "pixelup.realesrgan_runtime",
         "PySide6.QtWidgets",
     ):
         importlib.import_module(module)

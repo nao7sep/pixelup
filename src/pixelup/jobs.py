@@ -24,7 +24,6 @@ class JobSettings:
     """
 
     scale: int = DEFAULT_SCALE
-    face_enhance: bool = False
     denoise_strength: float = 0.5
     alpha_mode: str = "realesrgan"
     device: str = DEFAULT_DEVICE
@@ -161,7 +160,6 @@ def options_for_job(job: Job) -> UpscaleOptions:
         # Full precision by default: half precision on MPS can produce black/NaN
         # Real-ESRGAN output, and tiling already bounds the extra memory cost.
         fp32=True,
-        face_enhance=job.settings.face_enhance,
         denoise_strength=job.settings.denoise_strength,
         alpha_mode=job.settings.alpha_mode,
         gpu_id=None,
@@ -187,7 +185,6 @@ def coerce_output_format(value: OutputFormat | str | object) -> OutputFormat:
 def job_settings_log_payload(settings: JobSettings) -> dict[str, object]:
     return {
         "scale": settings.scale,
-        "face_enhance": settings.face_enhance,
         "denoise_strength": settings.denoise_strength,
         "alpha_mode": settings.alpha_mode,
         "device": settings.device,

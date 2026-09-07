@@ -60,7 +60,6 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
         output_path=tmp_path / "out.jpg",
         settings=JobSettings(
             scale=2,
-            face_enhance=True,
             denoise_strength=0.5,
             alpha_mode="bicubic",
             device="cpu",
@@ -81,7 +80,6 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
     assert options.tile == 128
     assert options.quality == 80
     assert options.output_format == OutputFormat.JPG
-    assert options.face_enhance is True
     assert options.alpha_mode == "bicubic"
     assert options.target_profile == "srgb"
     # Fixed, non-configurable defaults the GUI never exposes.
@@ -109,7 +107,6 @@ def test_bare_job_settings_are_the_built_in_defaults() -> None:
     defaults = JobSettings()
 
     assert defaults.scale == DEFAULT_SCALE
-    assert defaults.face_enhance is False
     assert defaults.denoise_strength == 0.5
     assert defaults.alpha_mode == "realesrgan"
     assert defaults.device == DEFAULT_DEVICE

@@ -34,7 +34,6 @@ def test_app_config_round_trips_the_parameters_panel(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     parameters = JobSettings(
         scale=2,
-        face_enhance=True,
         denoise_strength=0.25,
         alpha_mode="bicubic",
         device="cpu",
@@ -304,7 +303,6 @@ def test_config_read_oserror_propagates_without_touching_the_store(
         {"max_concurrent_jobs": "4"},
         {"max_concurrent_jobs": True},
         {"parameters": "nope"},
-        {"parameters": {"face_enhance": "false"}},
         {"parameters": {"strip_metadata": "false"}},
         {"parameters": {"quality": 250}},
         {"parameters": {"quality": "80"}},
@@ -354,7 +352,7 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
     assert result.config.parameters.quality == JobSettings().quality
 
 
-def test_exact_boolean_values_are_preserved(tmp_path: Path) -> None:
+def test_obsolete_face_enhance_field_is_ignored(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(
         json.dumps(
@@ -367,8 +365,8 @@ def test_exact_boolean_values_are_preserved(tmp_path: Path) -> None:
 
     config = load_app_config(path)
 
-    assert config.parameters.face_enhance is True
     assert config.parameters.strip_metadata is False
+    assert not hasattr(config.parameters, "face_enhance")
 
 
 def test_valid_parameter_boundaries_and_choices_are_preserved(tmp_path: Path) -> None:

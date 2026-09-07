@@ -14,7 +14,6 @@ def test_parameters_help_dialog_covers_every_parameter(qapp: QApplication) -> No
         # One entry per Parameters-panel control.
         for name in (
             "Scale",
-            "Face enhancement",
             "Denoise",
             "Alpha mode",
             "Output format",

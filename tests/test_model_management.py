@@ -32,7 +32,6 @@ def test_managed_bundles_cover_every_runtime_artifact_once() -> None:
 def test_required_artifacts_are_ordered_and_deduplicated() -> None:
     required = required_artifact_names(
         ("realesr-general-x4v3", "RealESRGAN_x4plus", "realesr-general-x4v3"),
-        face_enhance=True,
         denoise_strength=0.5,
     )
 
@@ -40,16 +39,12 @@ def test_required_artifacts_are_ordered_and_deduplicated() -> None:
         "realesr-general-x4v3",
         GENERAL_DENOISE_MODEL,
         "RealESRGAN_x4plus",
-        "GFPGANv1.4",
-        "facexlib-detection-retinaface-resnet50",
-        "facexlib-parsing-parsenet",
     )
 
 
 def test_neutral_denoise_omits_the_general_companion() -> None:
     required = required_artifact_names(
         ("realesr-general-x4v3", "RealESRGAN_x4plus"),
-        face_enhance=False,
         denoise_strength=1.0,
     )
 
@@ -64,7 +59,7 @@ def test_readiness_is_derived_from_artifact_files(tmp_path: Path) -> None:
 
     assert bundle_ready_count(tmp_path, first) == 1
     assert missing_artifact_names(tmp_path, first.artifact_names) == ()
-    assert ready_artifact_count(tmp_path) == (1, 10)
+    assert ready_artifact_count(tmp_path) == (1, 7)
 
     first_path.write_bytes(b"")
     assert bundle_ready_count(tmp_path, first) == 0
@@ -72,6 +67,6 @@ def test_readiness_is_derived_from_artifact_files(tmp_path: Path) -> None:
 
 
 def test_bundle_size_is_the_sum_of_its_pinned_artifacts() -> None:
-    face = next(bundle for bundle in MANAGED_MODEL_BUNDLES if bundle.key == "face-enhancement")
+    first = MANAGED_MODEL_BUNDLES[0]
 
-    assert bundle_size_bytes(face) == 543_461_828
+    assert bundle_size_bytes(first) == artifact_info(first.artifact_names[0]).expected_size

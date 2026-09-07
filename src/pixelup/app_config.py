@@ -188,7 +188,6 @@ def _decode_parameters(value: Any) -> JobSettings:
     )
     return JobSettings(
         scale=_optional_int_choice(data, "scale", defaults.scale, SCALE_VALUES),
-        face_enhance=_optional_bool(data, "face_enhance", defaults.face_enhance),
         denoise_strength=_optional_float_range(
             data,
             "denoise_strength",
@@ -308,7 +307,6 @@ def _parameters_to_json(parameters: JobSettings) -> dict[str, Any]:
         "alpha_mode": parameters.alpha_mode,
         "denoise_strength": parameters.denoise_strength,
         "device": parameters.device,
-        "face_enhance": parameters.face_enhance,
         "output_format": parameters.output_format.value,
         "quality": parameters.quality,
         "scale": parameters.scale,

@@ -12,11 +12,7 @@ EXPECTED_RUNTIME_PINS = {
     "filelock": "3.32.3",
     "numpy": "2.5.2",
     "torch": "2.13.0",
-    "torchvision": "0.28.0",
     "opencv-python": "5.0.0.93",
-    "realesrgan": "0.3.0",
-    "basicsr-fixed": "1.4.2",
-    "gfpgan": "1.3.8",
 }
 
 

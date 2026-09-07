@@ -9,20 +9,20 @@ Prebuilt builds for **macOS (Apple Silicon)** and **Windows (x64)** are on the [
 - **macOS** — right-click the app and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/PixelUp.app`).
 - **Windows** — on the SmartScreen prompt, click **More info → Run anyway**.
 
-Managed models shows which pinned model files are ready and installs or repairs only what you choose; every download is verified against its pinned SHA-256 before it replaces the cache. A queue action that needs missing files discloses the exact download first and creates no jobs until installation succeeds. Allow roughly 3–67 MB of network and disk use for an upscaler model, with a small additional denoise companion for the general model. Face enhancement requires about 543 MB more. You can also place the `.pth` files in the models directory yourself.
+Managed models shows which pinned model files are ready and installs or repairs only what you choose; every download is verified against its pinned SHA-256 before it replaces the cache. A queue action that needs missing files discloses the exact download first and creates no jobs until installation succeeds. Allow roughly 3–67 MB of network and disk use for an upscaler model, with a small additional denoise companion for the general model. You can also place the `.pth` files in the models directory yourself.
 
 ## Features
 
 - Drag-and-drop image list with a global queue and configurable concurrency
 - Multiple Real-ESRGAN models; queue one image or all, against one model or all
-- Optional face enhancement (GFPGAN), denoise, alpha handling, tiling, and output format/quality
+- Optional denoise, alpha handling, tiling, and output format/quality
 - Per-image job summaries, a selected-image preview, and retry/cancel of jobs
 
 ## Requirements
 
 - **macOS (Apple Silicon)** or **Windows (x64)** to run a prebuilt download — self-contained, nothing to install.
 - **Python 3.12 with [uv](https://docs.astral.sh/uv/)** only if you run or build from source. Python 3.13 and newer are not supported because a required Real-ESRGAN dependency does not build on them.
-- Model weights (Real-ESRGAN, plus GFPGAN and its facexlib detection/parsing weights for face enhancement) — installed explicitly from their official GitHub releases and verified against a pinned SHA-256.
+- Real-ESRGAN model weights — installed explicitly from their official GitHub releases and verified against a pinned SHA-256.
 - Optional: a GPU/MPS/CUDA backend for faster inference (CPU is the fallback).
 
 ## Run from source
