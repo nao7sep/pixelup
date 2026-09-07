@@ -42,6 +42,7 @@ log_step "Removing stale build output"
 rm -rf "$REPO_DIR/dist" "$REPO_DIR/build-pyinstaller"
 
 log_step "Freezing PixelUp.app (uv installs the build deps, then PyInstaller runs)"
+uv run python scripts/build-third-party-notices.py build/THIRD_PARTY_NOTICES.txt
 uv run --extra build pyinstaller pixelup.spec --workpath build-pyinstaller --distpath dist --noconfirm
 
 log_step "Finalizing the macOS bundle"

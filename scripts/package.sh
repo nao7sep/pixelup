@@ -17,6 +17,7 @@ VERSION="$(uv run python -c "import tomllib, pathlib; print(tomllib.loads(pathli
 
 rm -rf "$DIST" build-pyinstaller
 # uv run --extra build auto-syncs the runtime + build (PyInstaller) deps first.
+uv run python scripts/build-third-party-notices.py build/THIRD_PARTY_NOTICES.txt
 uv run --extra build pyinstaller pixelup.spec --workpath build-pyinstaller --distpath "$DIST" --noconfirm
 
 # The spec sets the classic and Liquid Glass keys. Complete the bundle with the

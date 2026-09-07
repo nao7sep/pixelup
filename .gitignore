@@ -13,6 +13,7 @@ __pycache__/
 # scripts/package.* (the tracked build/ dir holds the app icons and is NOT ignored).
 build-pyinstaller/
 dist/
+build/THIRD_PARTY_NOTICES.txt
 
 # Coverage reports (generated)
 coverage/

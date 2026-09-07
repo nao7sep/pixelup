@@ -88,6 +88,24 @@ def test_application_license_is_packaged_on_both_platforms() -> None:
     )
 
 
+def test_consolidated_third_party_notices_are_built_and_packaged() -> None:
+    source_notices = (ROOT / "THIRD_PARTY_NOTICES").read_text(encoding="utf-8")
+    mac_packager = (ROOT / "scripts" / "package.sh").read_text(encoding="utf-8")
+    mac_finalizer = (ROOT / "scripts" / "finalize-macos-bundle.sh").read_text(
+        encoding="utf-8"
+    )
+    windows_packager = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
+
+    assert "Copyright 2018-2022 BasicSR Authors" in source_notices
+    assert "Copyright (c) 2021, Xintao Wang" in source_notices
+    assert "build-third-party-notices.py" in mac_packager
+    assert 'cp "$NOTICES" "$APP_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"' in (
+        mac_finalizer
+    )
+    assert "build-third-party-notices.py" in windows_packager
+    assert "dist\\PixelUp\\THIRD_PARTY_NOTICES.txt" in windows_packager
+
+
 def test_package_scripts_reject_editable_install_metadata() -> None:
     mac_packager = (ROOT / "scripts" / "package.sh").read_text(encoding="utf-8")
     windows_packager = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")

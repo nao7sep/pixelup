@@ -11,6 +11,7 @@ $Version = ([regex]::Match((Get-Content pyproject.toml -Raw), '(?m)^version = "(
 Remove-Item -Recurse -Force dist, build-pyinstaller -ErrorAction SilentlyContinue
 
 # Freeze -> dist\PixelUp\PixelUp.exe (+ runtime). uv run --extra build auto-syncs deps.
+uv run python scripts\build-third-party-notices.py build\THIRD_PARTY_NOTICES.txt
 uv run --extra build pyinstaller pixelup.spec --workpath build-pyinstaller --distpath dist --noconfirm
 
 if (Get-ChildItem -LiteralPath dist\PixelUp -Recurse -File -Filter direct_url.json) {
@@ -26,6 +27,7 @@ $proc = Start-Process -FilePath "dist\PixelUp\PixelUp.exe" -Wait -PassThru
 Remove-Item Env:PIXELUP_SELFTEST
 if ($proc.ExitCode -ne 0) { throw "Frozen self-test failed (exit $($proc.ExitCode))" }
 Copy-Item -LiteralPath LICENSE -Destination dist\PixelUp\LICENSE.txt
+Copy-Item -LiteralPath build\THIRD_PARTY_NOTICES.txt -Destination dist\PixelUp\THIRD_PARTY_NOTICES.txt
 
 # Portable: zip the onedir as-is.
 Compress-Archive -Path dist\PixelUp\* -DestinationPath "dist\pixelup-$Version-win.zip" -Force
