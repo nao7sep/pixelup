@@ -67,6 +67,14 @@ def _is_shadowing_windows_icu(binary):
         and "pyside6" not in source_parts
     )
 
+
+def _is_editable_install_metadata(data):
+    """True for local editable-install metadata that exposes the build checkout."""
+    destination = Path(data[0])
+    return destination.name == "direct_url.json" and any(
+        part.endswith(".dist-info") for part in destination.parts
+    )
+
 for pkg in ("realesrgan", "basicsr", "gfpgan", "facexlib"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     # Some inference wheels carry their own ICU DLLs. In a Windows onedir build those
@@ -97,6 +105,10 @@ a = Analysis(
     excludes=["tkinter", "pytest", "_pytest"],
     noarchive=False,
 )
+# An editable project install records its absolute checkout URL in
+# ``pixelup-*.dist-info/direct_url.json``. It is useful to the development
+# environment but is neither runtime input nor safe release metadata.
+a.datas = [data for data in a.datas if not _is_editable_install_metadata(data)]
 # Analysis can discover DLLs outside the explicit inference collections through
 # another hook or the host PATH. Windows searches the app root before Qt's own
 # directory, so reject every non-PySide6 ICU copy at this final owning boundary

@@ -24,6 +24,11 @@ uv run --extra build pyinstaller pixelup.spec --workpath build-pyinstaller --dis
 # production launcher uses.
 "$SCRIPT_DIR/finalize-macos-bundle.sh" "$DIST/$APP.app"
 
+if find "$DIST/$APP.app" -type f -name direct_url.json -print -quit | grep -q .; then
+  echo "editable-install direct_url.json leaked into the frozen app" >&2
+  exit 1
+fi
+
 # Fail fast if freezing dropped a lazily-imported dependency (see gui._selftest).
 PIXELUP_SELFTEST=1 "$DIST/$APP.app/Contents/MacOS/$APP"
 

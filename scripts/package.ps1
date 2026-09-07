@@ -13,6 +13,10 @@ Remove-Item -Recurse -Force dist, build-pyinstaller -ErrorAction SilentlyContinu
 # Freeze -> dist\PixelUp\PixelUp.exe (+ runtime). uv run --extra build auto-syncs deps.
 uv run --extra build pyinstaller pixelup.spec --workpath build-pyinstaller --distpath dist --noconfirm
 
+if (Get-ChildItem -LiteralPath dist\PixelUp -Recurse -File -Filter direct_url.json) {
+    throw "Editable-install direct_url.json leaked into the frozen app."
+}
+
 # Fail fast if freezing dropped a lazily-imported dependency (see gui._selftest).
 # The exe is a windowed (GUI-subsystem) binary, so wait on it explicitly to get the
 # exit code — PIXELUP_SELFTEST=1 makes it import the full stack and exit before any

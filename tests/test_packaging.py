@@ -90,3 +90,11 @@ def test_application_license_is_packaged_on_both_platforms() -> None:
         "Copy-Item -LiteralPath LICENSE -Destination dist\\PixelUp\\LICENSE.txt"
         in windows_packager
     )
+
+
+def test_package_scripts_reject_editable_install_metadata() -> None:
+    mac_packager = (ROOT / "scripts" / "package.sh").read_text(encoding="utf-8")
+    windows_packager = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
+
+    assert '-name direct_url.json' in mac_packager
+    assert '-Filter direct_url.json' in windows_packager
