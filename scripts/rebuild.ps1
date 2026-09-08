@@ -50,12 +50,20 @@ $repoDir = Split-Path -Parent $scriptDir
 $distDir = Join-Path $repoDir "dist"
 $workDir = Join-Path $repoDir "build-pyinstaller"
 $exePath = Join-Path $repoDir "dist/PixelUp/PixelUp.exe"
+$runtimeToken = [guid]::NewGuid().ToString("N")
 
 try {
     Set-Utf8Console
+    Import-Module (Join-Path $scriptDir "launcher-runtime.psm1") -Force
     Require-Command uv
 
     Set-Location $repoDir
+
+    # Windows locks the frozen executable while it runs, so replacement must
+    # happen before removing the distribution directory.
+    Write-Step "Replacing any existing PixelUp runtime"
+    Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
+    Stop-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $exePath
 
     Write-Step "Removing stale build output"
     # Clear output first so a build that fails to emit a file cannot be masked by a
@@ -87,7 +95,8 @@ try {
     Write-Step "Launching PixelUp"
     # GUI app: launch non-blocking via Start-Process (the Windows counterpart to
     # macOS `open`), so the console does not wait on the app's lifetime.
-    Start-Process -FilePath $exePath
+    Start-Process -FilePath $exePath | Out-Null
+    Wait-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $exePath -TimeoutSeconds 30
 }
 catch {
     Write-Host ""

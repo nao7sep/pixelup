@@ -45,19 +45,32 @@ function Invoke-Native {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir = Split-Path -Parent $scriptDir
+$builtExecutable = Join-Path $repoDir "dist/PixelUp/PixelUp.exe"
+$runtimeToken = [guid]::NewGuid().ToString("N")
 
 try {
     Set-Utf8Console
+    Import-Module (Join-Path $scriptDir "launcher-runtime.psm1") -Force
     Require-Command uv
 
     Set-Location $repoDir
+
+    Write-Step "Replacing any existing PixelUp runtime"
+    Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
+    Stop-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $builtExecutable
 
     Write-Step "Installing dependencies required for launch"
     Invoke-Native -FilePath "uv" -ArgumentList @("sync", "--extra", "dev")
 
     Write-Step "Starting PixelUp"
     # Forward any script arguments to the app, matching run-dev.command's `"$@"`.
-    Invoke-Native -FilePath "uv" -ArgumentList (@("run", "pixelup") + $args) -AllowedExitCodes @(0, 130, -1073741510)
+    $devProcess = Start-Process -FilePath (Get-Command "uv.exe").Source -ArgumentList (@("run", "--project", $repoDir, "pixelup") + $args) -NoNewWindow -PassThru
+    Wait-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $builtExecutable -TimeoutSeconds 120
+    Write-Step "PixelUp is ready"
+    $devProcess.WaitForExit()
+    if ($devProcess.ExitCode -notin @(0, 130, -1073741510)) {
+        throw "PixelUp development runtime failed with exit code $($devProcess.ExitCode)."
+    }
 }
 catch {
     Write-Host ""
@@ -65,7 +78,11 @@ catch {
     $scriptExitCode = 1
 }
 finally {
-    Read-Host "Press Enter to close" | Out-Null
+    if (Test-LauncherRuntimeOwner -Token $runtimeToken -RepoDir $repoDir) {
+        Stop-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $builtExecutable
+        Release-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
+        Read-Host "Press Enter to close" | Out-Null
+    }
 }
 
 exit $scriptExitCode

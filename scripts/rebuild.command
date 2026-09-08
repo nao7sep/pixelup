@@ -9,6 +9,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_BUNDLE="$REPO_DIR/dist/PixelUp.app"
+APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/PixelUp"
+RUNTIME_TOKEN="rebuild-$$-$(date +%s)-$RANDOM"
+source "$SCRIPT_DIR/launcher-runtime.sh"
 
 log_step() {
   printf '\n==> %s\n' "$1"
@@ -23,7 +26,7 @@ require_command() {
 
 pause_on_failure() {
   local status="$1"
-  if [[ "$status" -ne 0 && "$status" -ne 130 ]]; then
+  if [[ "$status" -ne 0 && ( "$status" -lt 128 || "$status" -gt 143 ) ]]; then
     echo
     echo "pixelup rebuild failed with exit code $status."
     read -r -p "Press Enter to close..."
@@ -54,4 +57,7 @@ log_step "Self-testing the frozen bundle"
 PIXELUP_SELFTEST=1 "$APP_BUNDLE/Contents/MacOS/PixelUp"
 
 log_step "Launching PixelUp"
-open "$APP_BUNDLE"
+claim_launcher_runtime "$RUNTIME_TOKEN" "$REPO_DIR"
+stop_owned_runtime python PixelUp "$REPO_DIR" "" pixelup "$APP_EXECUTABLE"
+open -n "$APP_BUNDLE"
+wait_for_owned_runtime python PixelUp "$REPO_DIR" "" pixelup "$APP_EXECUTABLE" 30
