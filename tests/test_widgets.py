@@ -3,16 +3,88 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAccessible
-from PySide6.QtWidgets import QApplication, QDialog, QTableWidgetItem, QVBoxLayout
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QPushButton,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from pixelup.devices import DEVICE_CHOICES
 from pixelup.paths import OutputFormat
 from pixelup.widgets import (
     EmptyStateTableWidget,
     OperationResult,
+    PassiveScrollArea,
     device_combo,
     output_format_combo,
 )
+
+
+def test_passive_scroll_area_owns_the_complete_document_keyboard_contract(
+    qapp: QApplication,
+) -> None:
+    scroll = PassiveScrollArea(accessible_name="Reference content")
+    content = QWidget()
+    content.setMinimumHeight(1_000)
+    scroll.setWidget(content)
+    scroll.resize(240, 120)
+    scroll.show()
+    scroll.setFocus()
+    qapp.processEvents()
+
+    try:
+        bar = scroll.verticalScrollBar()
+        assert scroll.focusPolicy() == Qt.FocusPolicy.StrongFocus
+        assert scroll.accessibleName() == "Reference content"
+        assert bar.maximum() > 0
+
+        QTest.keyClick(scroll, Qt.Key.Key_End)
+        assert bar.value() == bar.maximum()
+
+        QTest.keyClick(scroll, Qt.Key.Key_Home)
+        assert bar.value() == bar.minimum()
+
+        QTest.keyClick(scroll, Qt.Key.Key_Space)
+        assert bar.value() == bar.pageStep()
+
+        QTest.keyClick(scroll, Qt.Key.Key_Space, Qt.KeyboardModifier.ShiftModifier)
+        assert bar.value() == bar.minimum()
+
+        QTest.keyClick(scroll, Qt.Key.Key_Down)
+        assert bar.value() > bar.minimum()
+    finally:
+        scroll.deleteLater()
+
+
+def test_passive_scroll_area_leaves_space_with_a_child_button(qapp: QApplication) -> None:
+    scroll = PassiveScrollArea(accessible_name="Actions")
+    content = QWidget()
+    content.setMinimumHeight(1_000)
+    layout = QVBoxLayout(content)
+    button = QPushButton("Run")
+    layout.addWidget(button)
+    layout.addStretch()
+    scroll.setWidget(content)
+    scroll.resize(240, 120)
+    scroll.show()
+    button.setFocus()
+    qapp.processEvents()
+    clicks: list[bool] = []
+    button.clicked.connect(lambda: clicks.append(True))
+
+    try:
+        bar = scroll.verticalScrollBar()
+        bar.setValue(bar.minimum())
+        QTest.keyClick(button, Qt.Key.Key_Space)
+
+        assert clicks == [True]
+        assert bar.value() == bar.minimum()
+    finally:
+        scroll.deleteLater()
 
 
 def test_operation_result_uses_severity_for_behavior_without_repeating_it_in_copy(

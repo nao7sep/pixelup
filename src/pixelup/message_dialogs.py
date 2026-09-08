@@ -6,12 +6,12 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLabel,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from pixelup.ui_common import use_dialog_spacing, use_regular_spacing
+from pixelup.widgets import PassiveScrollArea
 
 _APP = "PixelUp"
 _BODY_MIN_WIDTH = 340
@@ -54,13 +54,8 @@ class MessageDialog(QDialog):
         self.hint_label.setVisible(bool(user_hint))
         body_layout.addWidget(self.hint_label)
 
-        self.body_scroll = QScrollArea()
+        self.body_scroll = PassiveScrollArea(accessible_name="Message details")
         self.body_scroll.setObjectName("messageBodyScroll")
-        self.body_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.body_scroll.setWidgetResizable(True)
-        self.body_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
         self.body_scroll.setWidget(self.body)
         layout.addWidget(self.body_scroll)
 

@@ -3,19 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QStyle, QStyleFactory
 
 from pixelup.app_config import AppConfig, ConfigLoadResult
 from pixelup.fonts import DEFAULT_UI_FONT_SIZE
 from pixelup.gui import ImagePreview, MainWindow
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
-from pixelup.ui_common import apply_scrollbar_style, title_label
+from pixelup.ui_common import title_label
 
-# Window-chrome conformance per the window-chrome-conventions: a thin rounded
-# palette-themed scroll bar (Fusion's default is thick and square), and a window
-# minimum derived from the panes' content-based minimums rather than a hand-typed
-# constant, so no pane can be crushed below its useful size.
+# Window-chrome conformance per the window-chrome-conventions: a window minimum
+# derived from the panes' content-based minimums rather than a hand-typed constant,
+# so no pane can be crushed below its useful size. Scrollbars remain toolkit-owned.
 
 
 @pytest.fixture
@@ -86,36 +85,14 @@ def test_window_minimum_covers_both_panes_so_neither_is_crushed(make_window) -> 
     assert window.minimumWidth() >= panes_min_width
 
 
-def test_apply_scrollbar_style_installs_thin_rounded_qss(qapp: QApplication) -> None:
-    """apply_scrollbar_style installs a thin, rounded scroll-bar stylesheet."""
-    saved = qapp.styleSheet()
+def test_fusion_scrollbars_are_non_transient(qapp: QApplication) -> None:
+    """The app's selected toolkit style keeps needed scrollbars discoverable."""
+    style = QStyleFactory.create("Fusion")
+    assert style is not None
     try:
-        qapp.setStyleSheet("")
-        apply_scrollbar_style(qapp)
-        qss = QApplication.instance().styleSheet()
-
-        assert "QScrollBar" in qss
-        assert "border-radius" in qss  # rounded pill handle
-        assert "12px" in qss  # slim gutter
-        assert "palette(mid)" in qss  # palette-themed, not hard-coded hex
+        assert style.styleHint(QStyle.StyleHint.SH_ScrollBar_Transient) == 0
     finally:
-        qapp.setStyleSheet(saved)
-
-
-def test_apply_scrollbar_style_merges_with_existing_stylesheet(
-    qapp: QApplication,
-) -> None:
-    """Existing application QSS is preserved, not clobbered, when merging."""
-    saved = qapp.styleSheet()
-    try:
-        qapp.setStyleSheet("QLabel { color: red; }")
-        apply_scrollbar_style(qapp)
-        qss = QApplication.instance().styleSheet()
-
-        assert "QLabel { color: red; }" in qss
-        assert "QScrollBar" in qss
-    finally:
-        qapp.setStyleSheet(saved)
+        style.deleteLater()
 
 
 def test_title_label_derives_a_logical_pixel_size(qapp: QApplication) -> None:

@@ -108,7 +108,6 @@ from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.ui_common import (
     apply_palette_fixes,
-    apply_scrollbar_style,
     use_regular_spacing,
 )
 from pixelup.widgets import (
@@ -1694,9 +1693,6 @@ def build_app(
     # removed: Qt re-derives the palette after the signal and silently undid the
     # ButtonText fix, so it only looked like it worked.
     apply_palette_fixes(app)
-    # The scroll-bar QSS is palette-based so it stays consistent with whatever
-    # theme the OS resolves, while replacing Fusion's thick square bar.
-    apply_scrollbar_style(app)
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
     # On macOS, Qt maps the application icon to NSApp.applicationIconImage and

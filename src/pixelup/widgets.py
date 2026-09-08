@@ -6,6 +6,7 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
+    QKeyEvent,
     QPainter,
     QPaintEvent,
     QPalette,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QTableWidget,
@@ -30,6 +32,60 @@ from pixelup.devices import DEVICE_CHOICES
 from pixelup.paths import OutputFormat
 
 ResultSeverity = Literal["information", "warning", "error"]
+
+
+class PassiveScrollArea(QScrollArea):
+    """A read-only scroll owner with the fleet keyboard contract.
+
+    Qt already gives QScrollArea a single reachable focus target and native
+    Up/Down/PageUp/PageDown behavior. This shared owner adds the missing document
+    boundary and page-by-space commands while leaving child controls and the
+    platform scrollbar implementation untouched.
+    """
+
+    def __init__(
+        self,
+        *,
+        accessible_name: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setAccessibleName(accessible_name)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # The no-frame reading surface would otherwise have no visible focus cue.
+        # A transparent resting border reserves the same geometry as the focused
+        # highlight, so keyboard focus never makes the content jump.
+        self.setStyleSheet(
+            "PassiveScrollArea { border: 2px solid transparent; border-radius: 4px; }"
+            "PassiveScrollArea:focus { border-color: palette(highlight); }"
+        )
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt override name
+        modifiers = event.modifiers()
+        key = event.key()
+        bar = self.verticalScrollBar()
+
+        if modifiers == Qt.KeyboardModifier.NoModifier and key == Qt.Key.Key_Home:
+            bar.setValue(bar.minimum())
+            event.accept()
+            return
+        if modifiers == Qt.KeyboardModifier.NoModifier and key == Qt.Key.Key_End:
+            bar.setValue(bar.maximum())
+            event.accept()
+            return
+        if key == Qt.Key.Key_Space and modifiers in (
+            Qt.KeyboardModifier.NoModifier,
+            Qt.KeyboardModifier.ShiftModifier,
+        ):
+            direction = -1 if modifiers == Qt.KeyboardModifier.ShiftModifier else 1
+            bar.setValue(bar.value() + direction * bar.pageStep())
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
 
 
 class ResultCloseButton(QToolButton):

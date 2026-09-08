@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLabel,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing, use_regular_spacing
+from pixelup.widgets import PassiveScrollArea
 
 # One entry per Parameters-panel control, in the panel's own order. This dialog is
 # the single home for parameter explanations — the panel itself carries none, so
@@ -97,10 +96,7 @@ class ParametersHelpDialog(QDialog):
             body_layout.addWidget(description)
         body_layout.addStretch()
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll = PassiveScrollArea(accessible_name="Parameter help")
         scroll.setWidget(body)
         layout.addWidget(scroll, 1)
 

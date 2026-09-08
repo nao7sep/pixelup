@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -25,7 +24,7 @@ from pixelup.model_management import (
 from pixelup.model_manager import ModelManager, ModelOperation
 from pixelup.session_log import log
 from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing
-from pixelup.widgets import OperationResult
+from pixelup.widgets import OperationResult, PassiveScrollArea
 
 _MODEL_ROW_SPACING = 12
 _MODEL_LIST_MAX_HEIGHT = 420
@@ -105,10 +104,7 @@ class ManagedModelsDialog(QDialog):
         for column, width in enumerate(self.column_minimum_widths):
             models_layout.setColumnMinimumWidth(column, width)
 
-        models_scroll = QScrollArea()
-        models_scroll.setWidgetResizable(True)
-        models_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        models_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        models_scroll = PassiveScrollArea(accessible_name="Managed models")
         models_scroll.setWidget(self.models_panel)
         models_scroll.setMinimumWidth(models_layout.sizeHint().width() + 4)
         models_scroll.setMinimumHeight(
