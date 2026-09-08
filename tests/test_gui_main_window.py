@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import QEvent, QUrl
+from PySide6.QtCore import QEvent, QRect, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
@@ -136,6 +136,39 @@ def test_close_flush_accepts_the_latest_settled_normal_candidate(
     assert window._placement_normal_bounds == candidate
     assert window._placement_candidate_bounds is None
     assert saved == [(candidate, "normal")]
+
+
+def test_native_unzoom_accepts_normal_frame_when_qt_maximized_flag_is_stale(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    window._placement_capture_enabled = True
+    window._placement_mode = "maximized"
+    normal = QRect(80, 90, 1300, 850)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
+    monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
+    monkeypatch.setattr(MainWindow, "isMaximized", lambda _self: True)
+    monkeypatch.setattr(MainWindow, "frameGeometry", lambda _self: normal)
+    monkeypatch.setattr(MainWindow, "geometry", lambda _self: normal)
+    monkeypatch.setattr(
+        MainWindow,
+        "screen",
+        lambda _self: SimpleNamespace(availableGeometry=lambda: QRect(0, 0, 1920, 1080)),
+    )
+    saved: list[tuple[WindowBounds, str]] = []
+    monkeypatch.setattr(
+        window,
+        "_save_window_placement",
+        lambda: saved.append((window._placement_normal_bounds, window._placement_mode)),
+    )
+
+    window._capture_normal_window_placement()
+    window._persist_window_placement()
+
+    assert window._placement_candidate_bounds is None
+    assert window._placement_normal_bounds == WindowBounds(80, 90, 1300, 850)
+    assert saved == [(WindowBounds(80, 90, 1300, 850), "normal")]
 
 
 def test_open_picker_failure_is_authored_and_retained_by_images_group(

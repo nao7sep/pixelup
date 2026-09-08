@@ -511,7 +511,7 @@ class MainWindow(QMainWindow):
             or self._placement_transient
             or self.isMinimized()
             or self.isFullScreen()
-            or self.isMaximized()
+            or self._is_effectively_maximized()
         ):
             return
         geometry = self.geometry()
@@ -524,6 +524,19 @@ class MainWindow(QMainWindow):
         self._placement_transient = False
         self._capture_normal_window_placement()
 
+    def _is_effectively_maximized(self) -> bool:
+        if not self.isMaximized():
+            return False
+        if sys.platform != "darwin":
+            return True
+        screen = self.screen()
+        if screen is None:
+            return True
+        # Cocoa can complete a native AXZoomWindow unzoom while Qt's
+        # WindowMaximized flag remains set. The actual outer frame is the
+        # authoritative user-visible state on macOS.
+        return self.frameGeometry() == screen.availableGeometry()
+
     def _persist_window_placement(self) -> None:
         if not self._placement_capture_enabled:
             return
@@ -532,7 +545,7 @@ class MainWindow(QMainWindow):
             and not self._placement_transient
             and not self.isMinimized()
             and not self.isFullScreen()
-            and not self.isMaximized()
+            and not self._is_effectively_maximized()
         ):
             self._placement_normal_bounds = self._placement_candidate_bounds
             self._placement_candidate_bounds = None
