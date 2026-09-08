@@ -376,6 +376,7 @@ class MainWindow(QMainWindow):
         self._session_shutdown = False
         self._placement_capture_enabled = False
         self._placement_transient = False
+        self._placement_candidate_bounds: WindowBounds | None = None
         self._placement_timer = QTimer(self)
         self._placement_timer.setSingleShot(True)
         self._placement_timer.setInterval(400)
@@ -490,15 +491,18 @@ class MainWindow(QMainWindow):
         if self.isMinimized() or self.isFullScreen():
             self._placement_transient = True
             self._placement_timer.stop()
+            self._placement_candidate_bounds = None
             return
         if self.isMaximized():
             self._placement_transient = False
             self._placement_timer.stop()
+            self._placement_candidate_bounds = None
             self._placement_mode = "maximized"
             self._save_window_placement()
             return
         self._placement_transient = True
         self._placement_timer.stop()
+        self._placement_candidate_bounds = None
         QTimer.singleShot(400, self._settle_normal_window_placement)
 
     def _capture_normal_window_placement(self) -> None:
@@ -511,10 +515,9 @@ class MainWindow(QMainWindow):
         ):
             return
         geometry = self.geometry()
-        self._placement_normal_bounds = WindowBounds(
+        self._placement_candidate_bounds = WindowBounds(
             geometry.x(), geometry.y(), geometry.width(), geometry.height()
         )
-        self._placement_mode = "normal"
         self._placement_timer.start()
 
     def _settle_normal_window_placement(self) -> None:
@@ -524,6 +527,16 @@ class MainWindow(QMainWindow):
     def _persist_window_placement(self) -> None:
         if not self._placement_capture_enabled:
             return
+        if (
+            self._placement_candidate_bounds is not None
+            and not self._placement_transient
+            and not self.isMinimized()
+            and not self.isFullScreen()
+            and not self.isMaximized()
+        ):
+            self._placement_normal_bounds = self._placement_candidate_bounds
+            self._placement_candidate_bounds = None
+            self._placement_mode = "normal"
         self._save_window_placement()
 
     def _save_window_placement(self) -> None:
@@ -542,7 +555,7 @@ class MainWindow(QMainWindow):
     def _flush_window_placement(self) -> None:
         self._placement_timer.stop()
         if self._placement_capture_enabled:
-            self._save_window_placement()
+            self._persist_window_placement()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         app = QGuiApplication.instance()

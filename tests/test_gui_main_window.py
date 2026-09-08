@@ -10,12 +10,13 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QEvent, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
 from pixelup import gui
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
+from pixelup.app_state import WindowBounds
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
 from pixelup.jobs import JobSettings
@@ -86,6 +87,55 @@ def make_window(
 def _summary(window: MainWindow, path: Path) -> str:
     row = window._image_rows[absolute_user_path(path)]
     return window.image_table.item(row, 2).text()
+
+
+def test_maximize_transition_discards_pending_maximized_geometry(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    accepted = WindowBounds(10, 20, 1200, 800)
+    window._placement_capture_enabled = True
+    window._placement_normal_bounds = accepted
+    window._placement_candidate_bounds = WindowBounds(0, 0, 1920, 1080)
+    monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
+    monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
+    monkeypatch.setattr(MainWindow, "isMaximized", lambda _self: True)
+    saved: list[tuple[WindowBounds, str]] = []
+    monkeypatch.setattr(
+        window,
+        "_save_window_placement",
+        lambda: saved.append((window._placement_normal_bounds, window._placement_mode)),
+    )
+
+    window.changeEvent(QEvent(QEvent.Type.WindowStateChange))
+
+    assert window._placement_normal_bounds == accepted
+    assert window._placement_candidate_bounds is None
+    assert saved == [(accepted, "maximized")]
+
+
+def test_close_flush_accepts_the_latest_settled_normal_candidate(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    candidate = WindowBounds(50, 60, 1300, 850)
+    window._placement_capture_enabled = True
+    window._placement_candidate_bounds = candidate
+    monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
+    monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
+    monkeypatch.setattr(MainWindow, "isMaximized", lambda _self: False)
+    saved: list[tuple[WindowBounds, str]] = []
+    monkeypatch.setattr(
+        window,
+        "_save_window_placement",
+        lambda: saved.append((window._placement_normal_bounds, window._placement_mode)),
+    )
+
+    window._flush_window_placement()
+
+    assert window._placement_normal_bounds == candidate
+    assert window._placement_candidate_bounds is None
+    assert saved == [(candidate, "normal")]
 
 
 def test_open_picker_failure_is_authored_and_retained_by_images_group(
