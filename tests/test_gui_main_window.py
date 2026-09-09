@@ -10,13 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import QEvent, QMargins, QRect, QSize, QUrl
+from PySide6.QtCore import QMargins, QRect, QSize, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
 from pixelup import gui
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
-from pixelup.app_state import AppState, WindowBounds
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
 from pixelup.jobs import JobSettings
@@ -89,65 +88,21 @@ def _summary(window: MainWindow, path: Path) -> str:
     return window.image_table.item(row, 2).text()
 
 
-def test_maximize_transition_keeps_qt_normal_geometry(
-    make_window, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    window = make_window()
-    accepted = WindowBounds(10, 20, 1200, 800)
-    window._placement_capture_enabled = True
-    monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
-    monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
-    monkeypatch.setattr(MainWindow, "isMaximized", lambda _self: True)
-    monkeypatch.setattr(MainWindow, "normalGeometry", lambda _self: QRect(10, 20, 1200, 800))
-    saved: list[AppState] = []
-    monkeypatch.setattr(gui, "save_app_state", saved.append)
-
-    window.changeEvent(QEvent(QEvent.Type.WindowStateChange))
-    window._flush_window_placement()
-
-    assert saved[-1].main_window.normal_bounds == accepted
-    assert saved[-1].main_window.mode == "maximized"
-
-
-def test_close_flush_reads_latest_geometry_before_debounce(
-    make_window, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    window = make_window()
-    candidate = WindowBounds(50, 60, 1300, 850)
-    window._placement_capture_enabled = True
-    monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
-    monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
-    monkeypatch.setattr(MainWindow, "isMaximized", lambda _self: False)
-    monkeypatch.setattr(MainWindow, "normalGeometry", lambda _self: QRect(50, 60, 1300, 850))
-    saved: list[AppState] = []
-    monkeypatch.setattr(gui, "save_app_state", saved.append)
-    window._capture_normal_window_placement()
-
-    window._flush_window_placement()
-
-    assert not window._placement_timer.isActive()
-    assert saved[-1].main_window.normal_bounds == candidate
-    assert saved[-1].main_window.mode == "normal"
-
-
 @pytest.mark.parametrize("transient", ["isMinimized", "isFullScreen"])
-@pytest.mark.parametrize("mode", ["normal", "maximized"])
-def test_close_while_transient_preserves_stable_mode(
-    make_window, monkeypatch: pytest.MonkeyPatch, transient, mode
+def test_transient_window_state_is_not_saved(
+    make_window, monkeypatch: pytest.MonkeyPatch, transient: str
 ) -> None:
     window = make_window()
-    window._placement_capture_enabled = True
-    window._placement_mode = mode
+    window._placement_ready = True
     monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
     monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
     monkeypatch.setattr(MainWindow, transient, lambda _self: True)
-    saved: list[AppState] = []
+    saved: list[object] = []
     monkeypatch.setattr(gui, "save_app_state", saved.append)
 
-    window._capture_normal_window_placement()
-    window._flush_window_placement()
+    window._persist_window_placement()
 
-    assert saved[-1].main_window.mode == mode
+    assert saved == []
 
 
 def test_open_picker_failure_is_authored_and_retained_by_images_group(
