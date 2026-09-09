@@ -10,7 +10,7 @@ from itertools import count
 from pathlib import Path
 from typing import Literal
 
-from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QStyleFactory,
     QTableWidgetItem,
     QVBoxLayout,
@@ -63,8 +64,6 @@ from pixelup.app_config import (
 )
 from pixelup.app_state import (
     AppState,
-    WindowBounds,
-    WindowPlacement,
     load_app_state,
     save_app_state,
 )
@@ -126,7 +125,10 @@ from pixelup.widgets import (
     device_combo,
     output_format_combo,
 )
-from pixelup.window_placement import resolve_window_restoration
+from pixelup.window_placement import (
+    capture_window_placement,
+    restore_window_placement,
+)
 
 # Horizontal slack added to a measured string so cell text never touches the
 # column edges (covers Qt's default cell margins plus a little breathing room).
@@ -205,9 +207,8 @@ _WINDOW_TARGET_EXTRA_HEIGHT = 120
 def bounded_initial_window_size(minimum: QSize, work_area: QSize) -> QSize:
     """Roomy launch target capped to the current desktop work area.
 
-    The content-derived minimum remains authoritative: on a work area smaller
-    than that floor Qt/OS policy decides placement, but this function never
-    weakens the floor merely to make a preferred startup target fit.
+    The layout owner supplies the native minimum, already capped to the work
+    area while the inner scroll viewport retains the complete content floor.
     """
     return QSize(
         max(minimum.width(), min(minimum.width() + _WINDOW_TARGET_EXTRA_WIDTH, work_area.width())),
@@ -375,8 +376,6 @@ class MainWindow(QMainWindow):
         self._quit_when_workers_idle = False
         self._session_shutdown = False
         self._placement_capture_enabled = False
-        self._placement_transient = False
-        self._placement_candidate_bounds: WindowBounds | None = None
         self._placement_timer = QTimer(self)
         self._placement_timer.setSingleShot(True)
         self._placement_timer.setInterval(400)
@@ -400,35 +399,21 @@ class MainWindow(QMainWindow):
         # widths plus a filename floor (see _fit_columns). Open a little roomier than
         # that floor so the stretch (filename) columns have slack on first launch.
         # The old fixed resize(1260, …) sat below this minimum, so it was dead.
+        # Create the native frame while hidden so work-area sizing includes its
+        # actual margins even on the first normal landing after unmaximizing.
+        self.winId()
         hint = self._refresh_layout_metrics()
-        screen = self.screen() or QApplication.primaryScreen()
-        work_area = screen.availableGeometry().size() if screen is not None else QSize(
+        work_area = self._available_client_size() or QSize(
             hint.width() + _WINDOW_TARGET_EXTRA_WIDTH,
             hint.height() + _WINDOW_TARGET_EXTRA_HEIGHT,
         )
-        self.resize(bounded_initial_window_size(hint, work_area))
-        screens = QApplication.screens()
-        restored = resolve_window_restoration(
-            load_app_state().main_window,
-            hint,
-            [item.availableGeometry() for item in screens],
-        )
-        if restored.normal_bounds is not None:
-            opening = self.geometry()
-            bounds = restored.normal_bounds
-            requested = QRect(bounds.x, bounds.y, bounds.width, bounds.height)
-            try:
-                self.setGeometry(requested)
-                if self.geometry() != requested:
-                    raise RuntimeError("Qt adjusted the restored window bounds")
-            except Exception:  # noqa: BLE001 - placement failure falls back and never blocks startup.
-                self.setGeometry(opening)
-                log.warning("window.restore_rejected", exc_info=True)
-        geometry = self.geometry()
-        self._placement_normal_bounds = WindowBounds(
-            geometry.x(), geometry.y(), geometry.width(), geometry.height()
-        )
-        self._placement_mode = restored.mode
+        self.resize(bounded_initial_window_size(self.minimumSize(), work_area))
+        try:
+            saved_placement = load_app_state().main_window
+        except Exception:  # noqa: BLE001 - disposable placement must not prevent startup.
+            log.warning("window.placement_load_failed", exc_info=True)
+            saved_placement = None
+        self._placement_mode = restore_window_placement(self, saved_placement)
         # The panel opens on what the user last left it at, not on a defaults layer:
         # config.parameters is the persisted panel, and on a fresh install the loader
         # has already filled it with JobSettings() — the built-ins.
@@ -470,11 +455,14 @@ class MainWindow(QMainWindow):
             self.showMaximized()
         else:
             self.show()
-        QTimer.singleShot(500, self._enable_window_placement_capture)
-
-    def _enable_window_placement_capture(self) -> None:
         self._placement_capture_enabled = True
-        self._placement_transient = self.isMinimized() or self.isFullScreen()
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.screenChanged.connect(self._update_native_minimum)
+        for screen in QApplication.screens():
+            self._watch_layout_screen(screen)
+        QApplication.instance().screenAdded.connect(self._watch_layout_screen)
+        self._update_native_minimum()
 
     def moveEvent(self, event) -> None:  # noqa: N802 - Qt virtual name
         super().moveEvent(event)
@@ -488,80 +476,21 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() != QEvent.Type.WindowStateChange or not self._placement_capture_enabled:
             return
-        if self.isMinimized() or self.isFullScreen():
-            self._placement_transient = True
-            self._placement_timer.stop()
-            self._placement_candidate_bounds = None
-            return
-        if self.isMaximized():
-            self._placement_transient = False
-            self._placement_timer.stop()
-            self._placement_candidate_bounds = None
-            self._placement_mode = "maximized"
-            self._save_window_placement()
-            return
-        self._placement_transient = True
-        self._placement_timer.stop()
-        self._placement_candidate_bounds = None
-        QTimer.singleShot(400, self._settle_normal_window_placement)
-
-    def _capture_normal_window_placement(self) -> None:
-        if (
-            not self._placement_capture_enabled
-            or self._placement_transient
-            or self.isMinimized()
-            or self.isFullScreen()
-            or self._is_effectively_maximized()
-        ):
-            return
-        geometry = self.geometry()
-        self._placement_candidate_bounds = WindowBounds(
-            geometry.x(), geometry.y(), geometry.width(), geometry.height()
-        )
-        self._placement_timer.start()
-
-    def _settle_normal_window_placement(self) -> None:
-        self._placement_transient = False
+        if not self.isMinimized() and not self.isFullScreen():
+            self._placement_mode = "maximized" if self.isMaximized() else "normal"
         self._capture_normal_window_placement()
 
-    def _is_effectively_maximized(self) -> bool:
-        if not self.isMaximized():
-            return False
-        if sys.platform != "darwin":
-            return True
-        screen = self.screen()
-        if screen is None:
-            return True
-        # Cocoa can complete a native AXZoomWindow unzoom while Qt's
-        # WindowMaximized flag remains set. The actual outer frame is the
-        # authoritative user-visible state on macOS.
-        return self.frameGeometry() == screen.availableGeometry()
+    def _capture_normal_window_placement(self) -> None:
+        if self._placement_capture_enabled:
+            self._placement_timer.start()
 
     def _persist_window_placement(self) -> None:
         if not self._placement_capture_enabled:
             return
-        if (
-            self._placement_candidate_bounds is not None
-            and not self._placement_transient
-            and not self.isMinimized()
-            and not self.isFullScreen()
-            and not self._is_effectively_maximized()
-        ):
-            self._placement_normal_bounds = self._placement_candidate_bounds
-            self._placement_candidate_bounds = None
-            self._placement_mode = "normal"
-        self._save_window_placement()
-
-    def _save_window_placement(self) -> None:
         try:
-            save_app_state(
-                AppState(
-                    main_window=WindowPlacement(
-                        normal_bounds=self._placement_normal_bounds,
-                        mode=self._placement_mode,
-                    )
-                )
-            )
+            placement = capture_window_placement(self, self._placement_mode)
+            self._placement_mode = placement.mode
+            save_app_state(AppState(main_window=placement))
         except Exception:  # noqa: BLE001 - placement is disposable and must not block UI.
             log.warning("window.placement_save_failed", exc_info=True)
 
@@ -717,7 +646,12 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self._build_image_panel(), 1)
         content_layout.addWidget(self._build_work_panel(), 1)
         root_layout.addWidget(content, 1)
-        self.setCentralWidget(root)
+        self._content_root = root
+        viewport = QScrollArea()
+        viewport.setFrameShape(QFrame.Shape.NoFrame)
+        viewport.setWidgetResizable(True)
+        viewport.setWidget(root)
+        self.setCentralWidget(viewport)
 
     def _build_window_actions(self) -> QWidget:
         row = QWidget()
@@ -1066,14 +1000,39 @@ class MainWindow(QMainWindow):
         """Re-measure font-dependent chrome and publish the resulting floor."""
         self._fit_image_table_columns()
         self._fit_queue_table_columns()
-        central = self.centralWidget()
+        central = self._content_root
         central.updateGeometry()
         if central.layout() is not None:
             central.layout().invalidate()
             central.layout().activate()
         hint = central.sizeHint()
-        self.setMinimumSize(hint)
+        central.setMinimumSize(hint)
+        self._update_native_minimum()
         return hint
+
+    def _watch_layout_screen(self, screen) -> None:
+        screen.availableGeometryChanged.connect(self._update_native_minimum)
+        screen.logicalDotsPerInchChanged.connect(self._update_native_minimum)
+
+    def _update_native_minimum(self, *_args) -> None:
+        minimum = self._content_root.minimumSize()
+        available = self._available_client_size()
+        if available is not None:
+            minimum = minimum.boundedTo(available)
+        self.setMinimumSize(minimum)
+
+    def _available_client_size(self) -> QSize | None:
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return None
+        available = screen.availableGeometry().size()
+        handle = self.windowHandle()
+        if handle is not None:
+            margins = handle.frameMargins()
+            available -= QSize(
+                margins.left() + margins.right(), margins.top() + margins.bottom()
+            )
+        return available.expandedTo(QSize(1, 1))
 
     def _open_dialog(self) -> None:
         try:

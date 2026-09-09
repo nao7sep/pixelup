@@ -23,6 +23,7 @@ class WindowBounds:
 class WindowPlacement:
     normal_bounds: WindowBounds | None
     mode: WindowMode
+    qt_geometry: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,7 @@ def save_app_state(state: AppState, path: Path | None = None) -> None:
                     None if placement.normal_bounds is None else asdict(placement.normal_bounds)
                 ),
                 "mode": placement.mode,
+                "qt_geometry": placement.qt_geometry,
             }
         }
     }
@@ -82,7 +84,12 @@ def _decode_placement(value: object) -> WindowPlacement | None:
     if not isinstance(value, dict):
         return None
     mode: WindowMode = "maximized" if value.get("mode") == "maximized" else "normal"
-    return WindowPlacement(normal_bounds=_decode_bounds(value.get("normal_bounds")), mode=mode)
+    geometry = value.get("qt_geometry")
+    return WindowPlacement(
+        normal_bounds=_decode_bounds(value.get("normal_bounds")),
+        mode=mode,
+        qt_geometry=geometry if isinstance(geometry, str) else None,
+    )
 
 
 def _decode_bounds(value: object) -> WindowBounds | None:
@@ -90,5 +97,9 @@ def _decode_bounds(value: object) -> WindowBounds | None:
         return None
     fields = [value.get(name) for name in ("x", "y", "width", "height")]
     if not all(isinstance(item, int) and not isinstance(item, bool) for item in fields):
+        return None
+    if not all(-(2**31) <= item < 2**31 for item in fields):
+        return None
+    if fields[2] <= 0 or fields[3] <= 0:
         return None
     return WindowBounds(*fields)

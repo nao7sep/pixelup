@@ -10,13 +10,13 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import QEvent, QRect, QUrl
+from PySide6.QtCore import QEvent, QMargins, QRect, QSize, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
 from pixelup import gui
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
-from pixelup.app_state import WindowBounds
+from pixelup.app_state import AppState, WindowBounds
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
 from pixelup.jobs import JobSettings
@@ -89,86 +89,65 @@ def _summary(window: MainWindow, path: Path) -> str:
     return window.image_table.item(row, 2).text()
 
 
-def test_maximize_transition_discards_pending_maximized_geometry(
+def test_maximize_transition_keeps_qt_normal_geometry(
     make_window, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window = make_window()
     accepted = WindowBounds(10, 20, 1200, 800)
     window._placement_capture_enabled = True
-    window._placement_normal_bounds = accepted
-    window._placement_candidate_bounds = WindowBounds(0, 0, 1920, 1080)
     monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
     monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
     monkeypatch.setattr(MainWindow, "isMaximized", lambda _self: True)
-    saved: list[tuple[WindowBounds, str]] = []
-    monkeypatch.setattr(
-        window,
-        "_save_window_placement",
-        lambda: saved.append((window._placement_normal_bounds, window._placement_mode)),
-    )
+    monkeypatch.setattr(MainWindow, "normalGeometry", lambda _self: QRect(10, 20, 1200, 800))
+    saved: list[AppState] = []
+    monkeypatch.setattr(gui, "save_app_state", saved.append)
 
     window.changeEvent(QEvent(QEvent.Type.WindowStateChange))
+    window._flush_window_placement()
 
-    assert window._placement_normal_bounds == accepted
-    assert window._placement_candidate_bounds is None
-    assert saved == [(accepted, "maximized")]
+    assert saved[-1].main_window.normal_bounds == accepted
+    assert saved[-1].main_window.mode == "maximized"
 
 
-def test_close_flush_accepts_the_latest_settled_normal_candidate(
+def test_close_flush_reads_latest_geometry_before_debounce(
     make_window, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window = make_window()
     candidate = WindowBounds(50, 60, 1300, 850)
     window._placement_capture_enabled = True
-    window._placement_candidate_bounds = candidate
     monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
     monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
     monkeypatch.setattr(MainWindow, "isMaximized", lambda _self: False)
-    saved: list[tuple[WindowBounds, str]] = []
-    monkeypatch.setattr(
-        window,
-        "_save_window_placement",
-        lambda: saved.append((window._placement_normal_bounds, window._placement_mode)),
-    )
+    monkeypatch.setattr(MainWindow, "normalGeometry", lambda _self: QRect(50, 60, 1300, 850))
+    saved: list[AppState] = []
+    monkeypatch.setattr(gui, "save_app_state", saved.append)
+    window._capture_normal_window_placement()
 
     window._flush_window_placement()
 
-    assert window._placement_normal_bounds == candidate
-    assert window._placement_candidate_bounds is None
-    assert saved == [(candidate, "normal")]
+    assert not window._placement_timer.isActive()
+    assert saved[-1].main_window.normal_bounds == candidate
+    assert saved[-1].main_window.mode == "normal"
 
 
-def test_native_unzoom_accepts_normal_frame_when_qt_maximized_flag_is_stale(
-    make_window, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("transient", ["isMinimized", "isFullScreen"])
+@pytest.mark.parametrize("mode", ["normal", "maximized"])
+def test_close_while_transient_preserves_stable_mode(
+    make_window, monkeypatch: pytest.MonkeyPatch, transient, mode
 ) -> None:
     window = make_window()
     window._placement_capture_enabled = True
-    window._placement_mode = "maximized"
-    normal = QRect(80, 90, 1300, 850)
-    monkeypatch.setattr(sys, "platform", "darwin")
+    window._placement_mode = mode
     monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
     monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
-    monkeypatch.setattr(MainWindow, "isMaximized", lambda _self: True)
-    monkeypatch.setattr(MainWindow, "frameGeometry", lambda _self: normal)
-    monkeypatch.setattr(MainWindow, "geometry", lambda _self: normal)
-    monkeypatch.setattr(
-        MainWindow,
-        "screen",
-        lambda _self: SimpleNamespace(availableGeometry=lambda: QRect(0, 0, 1920, 1080)),
-    )
-    saved: list[tuple[WindowBounds, str]] = []
-    monkeypatch.setattr(
-        window,
-        "_save_window_placement",
-        lambda: saved.append((window._placement_normal_bounds, window._placement_mode)),
-    )
+    monkeypatch.setattr(MainWindow, transient, lambda _self: True)
+    saved: list[AppState] = []
+    monkeypatch.setattr(gui, "save_app_state", saved.append)
 
     window._capture_normal_window_placement()
-    window._persist_window_placement()
+    window._flush_window_placement()
 
-    assert window._placement_candidate_bounds is None
-    assert window._placement_normal_bounds == WindowBounds(80, 90, 1300, 850)
-    assert saved == [(WindowBounds(80, 90, 1300, 850), "normal")]
+    assert saved[-1].main_window.mode == mode
 
 
 def test_open_picker_failure_is_authored_and_retained_by_images_group(
@@ -646,7 +625,39 @@ def test_font_metric_refresh_remeasures_tables_and_window_floor(
     assert window.queue_table.horizontalHeader().sectionSize(2) == 144
     assert window.queue_table.horizontalHeader().sectionSize(4) == 155
     assert window.queue_table.minimumWidth() == 180 + 133 + 144 + 180 + 155
-    assert window.minimumSize() == hint
+    assert window._content_root.minimumSize() == hint
+    assert window.minimumWidth() <= hint.width()
+    assert window.minimumHeight() <= hint.height()
+
+
+def test_small_screen_caps_native_floor_without_clipping_content(make_window, monkeypatch) -> None:
+    window = make_window()
+    monkeypatch.setattr(MainWindow, "screen", lambda _self: SimpleNamespace(
+        availableGeometry=lambda: QRect(50, 70, 600, 400),
+    ))
+    window._update_native_minimum()
+    assert window.minimumWidth() <= 600
+    assert window.minimumHeight() <= 400
+    assert window._content_root.minimumWidth() > window.minimumWidth()
+    window.resize(600, 400)
+    window.show()
+    QApplication.processEvents()
+    viewport = window.centralWidget()
+    assert viewport.widget() is window._content_root
+    assert viewport.horizontalScrollBar().maximum() > 0
+
+
+def test_first_normal_target_leaves_room_for_native_frame(make_window, monkeypatch) -> None:
+    monkeypatch.setattr(MainWindow, "screen", lambda _self: SimpleNamespace(
+        availableGeometry=lambda: QRect(50, 70, 600, 400),
+    ))
+    monkeypatch.setattr(MainWindow, "windowHandle", lambda _self: SimpleNamespace(
+        frameMargins=lambda: QMargins(8, 30, 8, 8),
+    ))
+    window = make_window()
+    assert window.size() == QSize(584, 362)
+    assert window.minimumSize() == QSize(584, 362)
+    assert window._content_root.minimumWidth() > window.width()
 
 
 def test_saved_font_change_refreshes_live_layout_metrics(

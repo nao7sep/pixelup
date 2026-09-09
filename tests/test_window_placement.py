@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
-from PySide6.QtCore import QRect, QSize
+import pytest
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtWidgets import QWidget
 
+from pixelup import window_placement
 from pixelup.app_state import (
     AppState,
     WindowBounds,
@@ -11,7 +15,7 @@ from pixelup.app_state import (
     load_app_state,
     save_app_state,
 )
-from pixelup.window_placement import resolve_window_restoration, usable_window_bounds
+from pixelup.window_placement import capture_window_placement, restore_window_placement
 
 
 def test_missing_and_malformed_placement_self_heal_without_corrupting_state(tmp_path) -> None:
@@ -28,23 +32,92 @@ def test_missing_and_malformed_placement_self_heal_without_corrupting_state(tmp_
 
 def test_state_round_trip_is_atomic_managed_text(tmp_path) -> None:
     path = tmp_path / "state.json"
-    state = AppState(WindowPlacement(WindowBounds(10, 20, 1200, 800), "maximized"))
+    state = AppState(WindowPlacement(
+        WindowBounds(10, 20, 1200, 800), "maximized", "encoded-native-geometry"
+    ))
     save_app_state(state, path)
     assert load_app_state(path) == state
 
 
-def test_bounds_must_meet_minimum_and_fit_wholly_in_one_work_area() -> None:
-    areas = [QRect(0, 0, 1920, 1080), QRect(-1280, 0, 1280, 1024)]
-    minimum = QSize(900, 600)
-    valid = WindowBounds(-1200, 20, 1000, 700)
-    assert usable_window_bounds(valid, minimum, areas)
-    assert not usable_window_bounds(WindowBounds(10, 10, 899, 700), minimum, areas)
-    assert not usable_window_bounds(WindowBounds(1200, 10, 900, 700), minimum, areas)
+@pytest.mark.parametrize("bounds", [
+    WindowBounds(9000, 9000, 200, 150),
+    WindowBounds(10, 10, 1, 1),
+    WindowBounds(10, 10, 10000, 10000),
+])
+def test_qt_adjusts_legacy_bounds_to_minimum_and_available_screen(qapp, bounds) -> None:
+    window = QWidget()
+    window.setMinimumSize(200, 150)
+    try:
+        assert restore_window_placement(window, WindowPlacement(bounds, "normal")) == "normal"
+        assert window.width() >= 200
+        assert window.height() >= 150
+        assert qapp.primaryScreen().availableGeometry().contains(window.geometry())
+    finally:
+        window.close()
 
 
-def test_restoration_keeps_mode_when_bounds_fall_back_and_defaults_maximized() -> None:
-    minimum = QSize(900, 600)
-    areas = [QRect(0, 0, 1920, 1080)]
-    assert resolve_window_restoration(None, minimum, areas) == WindowPlacement(None, "maximized")
-    saved = WindowPlacement(WindowBounds(9000, 9000, 1200, 800), "normal")
-    assert resolve_window_restoration(saved, minimum, areas) == WindowPlacement(None, "normal")
+@pytest.mark.parametrize("mode", ["normal", "maximized"])
+def test_bad_qt_geometry_keeps_mode_and_designed_defaults(qapp, mode) -> None:
+    window = QWidget()
+    window.setGeometry(20, 30, 300, 250)
+    try:
+        assert restore_window_placement(window, None) == "maximized"
+        assert restore_window_placement(window, WindowPlacement(None, mode, "bad!")) == mode
+        assert window.geometry() == QRect(20, 30, 300, 250)
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("mode", ["normal", "maximized"])
+@pytest.mark.parametrize("transient", ["showMinimized", "showFullScreen"])
+def test_qt_blob_restores_normal_landing_bounds_without_transient_mode(qapp, mode, transient):
+    original = QWidget()
+    restored = QWidget()
+    original.setGeometry(40, 50, 300, 250)
+    original.show()
+    try:
+        if mode == "maximized":
+            original.showMaximized()
+        getattr(original, transient)()
+        placement = capture_window_placement(original, mode)
+        assert placement.mode == mode
+        assert restore_window_placement(restored, placement) == mode
+        assert restored.windowState() == Qt.WindowState.WindowNoState
+        assert restored.geometry() == QRect(40, 50, 300, 250)
+    finally:
+        original.close()
+        restored.close()
+
+
+def test_qt_geometry_round_trip_does_not_drift(qapp) -> None:
+    window = QWidget()
+    window.setGeometry(40, 50, 300, 250)
+    window.show()
+    placement = capture_window_placement(window, "normal")
+    window.close()
+    for _ in range(3):
+        window = QWidget()
+        restore_window_placement(window, placement)
+        window.show()
+        placement = capture_window_placement(window, "normal")
+        window.close()
+        assert placement.normal_bounds == WindowBounds(40, 50, 300, 250)
+
+
+def test_native_unzoom_uses_cocoa_state_instead_of_dimensions(monkeypatch) -> None:
+    monkeypatch.setattr(window_placement.sys, "platform", "darwin")
+    monkeypatch.setattr(window_placement, "_cocoa_messages", lambda: (
+        lambda view, selector: 456 if (view, selector) == (123, b"window") else None,
+        lambda window, selector: False if (window, selector) == (456, b"isZoomed") else None,
+        lambda name: name,
+    ))
+    window = SimpleNamespace(
+        isMaximized=lambda: True,
+        isMinimized=lambda: False,
+        isFullScreen=lambda: False,
+        winId=lambda: 123,
+        geometry=lambda: QRect(80, 90, 300, 250),
+    )
+    assert capture_window_placement(window, "maximized") == WindowPlacement(
+        WindowBounds(80, 90, 300, 250), "normal"
+    )

@@ -70,19 +70,19 @@ def test_window_minimum_is_derived_not_the_old_constant(make_window) -> None:
     assert window.minimumHeight() >= hint.height()
 
 
-def test_window_minimum_covers_both_panes_so_neither_is_crushed(make_window) -> None:
-    """The minimum width is at least the sum of the two side-by-side panes.
+def test_content_minimum_covers_both_panes_so_neither_is_crushed(make_window) -> None:
+    """The inner floor is at least the sum of the two side-by-side panes.
 
     The image table (left) and the queue table (right) sit in a horizontal
-    layout; the window minimum must cover both their minimum widths so widening
-    one can never squeeze the other out of view.
+    layout; when the screen cannot fit their floor, the outer viewport scrolls
+    without squeezing either pane below its useful width.
     """
     window = make_window()
     panes_min_width = (
         window.image_table.minimumWidth() + window.queue_table.minimumWidth()
     )
 
-    assert window.minimumWidth() >= panes_min_width
+    assert window.centralWidget().widget().minimumWidth() >= panes_min_width
 
 
 def test_fusion_scrollbars_are_non_transient(qapp: QApplication) -> None:
