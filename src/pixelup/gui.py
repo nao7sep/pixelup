@@ -10,7 +10,7 @@ from itertools import count
 from pathlib import Path
 from typing import Literal
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
@@ -62,7 +62,7 @@ from pixelup.app_config import (
     load_app_config_result,
     save_app_config,
 )
-from pixelup.config import RuntimeDirs, resolve_runtime_dirs
+from pixelup.config import RuntimeDirs, resolve_runtime_dirs, window_settings_path
 from pixelup.errors import PixelupError
 from pixelup.fonts import apply_ui_font
 from pixelup.imaging import read_image_size, register_image_plugins
@@ -329,6 +329,8 @@ class ImagePreview(QLabel):
 
 
 class MainWindow(QMainWindow):
+    _GEOMETRY_KEY = "mainWindow/geometry"
+
     def __init__(self, *, log_file: Path, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
         # Create config.json from the built-in defaults on first run so the settings file exists
@@ -394,6 +396,10 @@ class MainWindow(QMainWindow):
             hint.height() + _WINDOW_TARGET_EXTRA_HEIGHT,
         )
         self.resize(bounded_initial_window_size(self.minimumSize(), work_area))
+        self._window_settings = QSettings(
+            str(window_settings_path()), QSettings.Format.IniFormat
+        )
+        self._restore_window_geometry()
         # The panel opens on what the user last left it at, not on a defaults layer:
         # config.parameters is the persisted panel, and on a fresh install the loader
         # has already filled it with JobSettings() — the built-ins.
@@ -430,6 +436,31 @@ class MainWindow(QMainWindow):
     def _on_commit_data_request(self, _manager: object) -> None:
         self._session_shutdown = True
 
+    def _restore_window_geometry(self) -> None:
+        geometry = self._window_settings.value(self._GEOMETRY_KEY)
+        if self._window_settings.status() != QSettings.Status.NoError:
+            log.warning("window.geometry_load_failed")
+            return
+        if isinstance(geometry, QByteArray) and not geometry.isEmpty():
+            if not self.restoreGeometry(geometry):
+                log.warning("window.geometry_restore_failed")
+
+    def _accept_close(self, event: QCloseEvent) -> None:
+        # A non-normal frame is not stable placement data. Qt retains the last
+        # normal geometry while maximized, minimized, or full-screen, so leave the
+        # most recent normal save untouched until the user closes from normal mode.
+        display_modes = (
+            Qt.WindowState.WindowMinimized
+            | Qt.WindowState.WindowMaximized
+            | Qt.WindowState.WindowFullScreen
+        )
+        if not self.windowState() & display_modes:
+            self._window_settings.setValue(self._GEOMETRY_KEY, self.saveGeometry())
+            self._window_settings.sync()
+            if self._window_settings.status() != QSettings.Status.NoError:
+                log.warning("window.geometry_save_failed")
+        event.accept()
+
     def show_prepared(self) -> None:
         self.show()
         handle = self.windowHandle()
@@ -446,7 +477,7 @@ class MainWindow(QMainWindow):
         session_shutdown = self._session_shutdown or is_saving_session
         if self._quit_when_workers_idle:
             if self._workers_clean_for_quit():
-                event.accept()
+                self._accept_close(event)
             else:
                 event.ignore()
             return
@@ -477,7 +508,7 @@ class MainWindow(QMainWindow):
         self.runner.begin_shutdown()
         self.model_manager.begin_shutdown()
         if self._workers_clean_for_quit():
-            event.accept()
+            self._accept_close(event)
             return
         self._quit_when_workers_idle = True
         event.ignore()

@@ -53,6 +53,11 @@ def resolve_state_dir(override: Path | None = None) -> Path:
     return _default_state_dir().resolve()
 
 
+def window_settings_path() -> Path:
+    """Return the native Qt settings file used for disposable window geometry."""
+    return resolve_state_dir() / "window.ini"
+
+
 def ensure_models_dir(path: Path) -> Path:
     return _ensure_dir(path, ErrorCode.MODEL_NOT_FOUND, "Could not create the models directory.")
 

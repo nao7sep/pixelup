@@ -17,6 +17,7 @@ Managed models shows which pinned model files are ready and installs or repairs 
 - Multiple Real-ESRGAN models; queue one image or all, against one model or all
 - Optional denoise, alpha handling, tiling, and output format/quality
 - Per-image job summaries, a selected-image preview, and retry/cancel of jobs
+- Remembers the main window position and size between launches
 
 ## Requirements
 

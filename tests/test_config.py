@@ -14,6 +14,7 @@ from pixelup.config import (
     resolve_runtime_dirs,
     resolve_state_dir,
     resolve_temp_dir,
+    window_settings_path,
 )
 from pixelup.errors import ErrorCode, PixelupError
 
@@ -65,6 +66,14 @@ def test_pixelup_home_relocates_root(
     assert (root / "logs").is_dir()
     assert (root / "models").is_dir()
     assert (root / "temp").is_dir()
+
+
+def test_pixelup_home_relocates_window_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "relocated"
+    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    assert window_settings_path() == (root / "window.ini").resolve()
 
 
 def test_default_root_is_dot_pixelup_when_home_unset(

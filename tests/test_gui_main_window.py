@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import QMargins, QRect, QSize, QUrl
+from PySide6.QtCore import QMargins, QRect, QSettings, QSize, Qt, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
@@ -1141,6 +1141,7 @@ def test_close_waits_for_worker_ownership_to_end(
     window.closeEvent(first)
 
     assert first.isAccepted() is False
+    assert window._window_settings.contains(window._GEOMETRY_KEY) is False
     assert window._quit_when_workers_idle is True
     assert shutdown_calls == [True]
     assert warnings == [window]
@@ -1148,6 +1149,50 @@ def test_close_waits_for_worker_ownership_to_end(
     second = QCloseEvent()
     window.closeEvent(second)
     assert second.isAccepted() is True
+    assert window._window_settings.contains(window._GEOMETRY_KEY) is True
+
+
+def test_main_window_restores_geometry_saved_on_normal_close(make_window) -> None:
+    first = make_window()
+    # The offscreen Qt test screen is only 800 px wide and the content-derived
+    # minimum is nearly that wide, so keep the fixture geometry wholly on-screen.
+    first.setGeometry(1, 40, first.minimumWidth(), 650)
+    first._session_shutdown = True
+    assert first.close()
+
+    second = make_window()
+    assert second.geometry() == first.geometry()
+
+
+@pytest.mark.parametrize(
+    "window_state",
+    [
+        Qt.WindowState.WindowMinimized,
+        Qt.WindowState.WindowMaximized,
+        Qt.WindowState.WindowFullScreen,
+    ],
+)
+def test_main_window_only_saves_geometry_in_normal_mode(make_window, window_state) -> None:
+    window = make_window()
+    saved_geometry = window.saveGeometry()
+    window._window_settings.setValue(window._GEOMETRY_KEY, saved_geometry)
+    window._window_settings.sync()
+    window.setWindowState(window_state)
+    window._session_shutdown = True
+
+    assert window.close()
+
+    settings = QSettings(window._window_settings.fileName(), QSettings.Format.IniFormat)
+    assert settings.value(window._GEOMETRY_KEY) == saved_geometry
+
+
+def test_main_window_active_flag_is_still_normal_mode(make_window) -> None:
+    window = make_window()
+    window.setWindowState(Qt.WindowState.WindowActive)
+    window._session_shutdown = True
+
+    assert window.close()
+    assert window._window_settings.contains(window._GEOMETRY_KEY)
 
 
 def test_main_surfaces_startup_storage_failure(
