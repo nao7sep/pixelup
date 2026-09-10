@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 import subprocess
 import sys
@@ -11,7 +10,7 @@ from itertools import count
 from pathlib import Path
 from typing import Literal
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
@@ -62,11 +61,6 @@ from pixelup.app_config import (
     ensure_app_config,
     load_app_config_result,
     save_app_config,
-)
-from pixelup.app_state import (
-    AppState,
-    load_app_state,
-    save_app_state,
 )
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.errors import PixelupError
@@ -372,11 +366,6 @@ class MainWindow(QMainWindow):
         self.runner.idle.connect(self._close_when_workers_stop)
         self._quit_when_workers_idle = False
         self._session_shutdown = False
-        self._placement_ready = False
-        self._placement_timer = QTimer(self)
-        self._placement_timer.setSingleShot(True)
-        self._placement_timer.setInterval(500)
-        self._placement_timer.timeout.connect(self._persist_window_placement)
         # Coalesces the Parameters panel's edits into one save (see
         # _PARAMETERS_SAVE_DELAY_MS). Built before the UI, because building the panel
         # connects the widget-change signals that start it.
@@ -405,22 +394,6 @@ class MainWindow(QMainWindow):
             hint.height() + _WINDOW_TARGET_EXTRA_HEIGHT,
         )
         self.resize(bounded_initial_window_size(self.minimumSize(), work_area))
-        try:
-            saved_geometry = load_app_state().main_window_geometry
-        except Exception:  # noqa: BLE001 - disposable placement must not prevent startup.
-            log.warning("window.placement_load_failed", exc_info=True)
-            saved_geometry = None
-        self._placement_starts_maximized = True
-        if saved_geometry is not None:
-            try:
-                geometry = base64.b64decode(saved_geometry, validate=True)
-                if self.restoreGeometry(geometry):
-                    self._placement_starts_maximized = (
-                        self.isMaximized() and not self.isFullScreen()
-                    )
-                    self.setWindowState(Qt.WindowState.WindowNoState)
-            except Exception:  # noqa: BLE001 - disposable placement must not prevent startup.
-                log.warning("window.placement_restore_failed", exc_info=True)
         # The panel opens on what the user last left it at, not on a defaults layer:
         # config.parameters is the persisted panel, and on a fresh install the loader
         # has already filled it with JobSettings() — the built-ins.
@@ -458,11 +431,7 @@ class MainWindow(QMainWindow):
         self._session_shutdown = True
 
     def show_prepared(self) -> None:
-        if self._placement_starts_maximized:
-            self.showMaximized()
-        else:
-            self.show()
-        self._placement_ready = True
+        self.show()
         handle = self.windowHandle()
         if handle is not None:
             handle.screenChanged.connect(self._update_native_minimum)
@@ -471,43 +440,12 @@ class MainWindow(QMainWindow):
         QApplication.instance().screenAdded.connect(self._watch_layout_screen)
         self._update_native_minimum()
 
-    def moveEvent(self, event) -> None:  # noqa: N802 - Qt virtual name
-        super().moveEvent(event)
-        self._schedule_window_placement_save()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt virtual name
-        super().resizeEvent(event)
-        self._schedule_window_placement_save()
-
-    def changeEvent(self, event) -> None:  # noqa: N802 - Qt virtual name
-        super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange:
-            self._schedule_window_placement_save()
-
-    def _schedule_window_placement_save(self) -> None:
-        if self._placement_ready:
-            self._placement_timer.start()
-
-    def _persist_window_placement(self) -> None:
-        if not self._placement_ready or self.isMinimized() or self.isFullScreen():
-            return
-        try:
-            geometry = base64.b64encode(bytes(self.saveGeometry())).decode("ascii")
-            save_app_state(AppState(main_window_geometry=geometry))
-        except Exception:  # noqa: BLE001 - placement is disposable and must not block UI.
-            log.warning("window.placement_save_failed", exc_info=True)
-
-    def _flush_window_placement(self) -> None:
-        self._placement_timer.stop()
-        self._persist_window_placement()
-
     def closeEvent(self, event: QCloseEvent) -> None:
         app = QGuiApplication.instance()
         is_saving_session = app.isSavingSession() if app is not None else False
         session_shutdown = self._session_shutdown or is_saving_session
         if self._quit_when_workers_idle:
             if self._workers_clean_for_quit():
-                self._flush_window_placement()
                 event.accept()
             else:
                 event.ignore()
@@ -539,7 +477,6 @@ class MainWindow(QMainWindow):
         self.runner.begin_shutdown()
         self.model_manager.begin_shutdown()
         if self._workers_clean_for_quit():
-            self._flush_window_placement()
             event.accept()
             return
         self._quit_when_workers_idle = True

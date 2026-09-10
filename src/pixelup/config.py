@@ -193,10 +193,9 @@ def quarantine_corrupt_file(path: Path) -> Path:
 def write_managed_text(path: Path, text: str) -> None:
     """The single managed-text atomic-write choke point for PixelUp.
 
-    Every durable text file the app owns is written through here — ``config.json``
-    and the disposable-view ``state.json``. A managed-text write that bypasses this helper is a
-    silent backup gap; there is deliberately no second atomic-write path for managed
-    text in the app.
+    Every durable text file the app owns, including ``config.json``, is written
+    through here. A managed-text write that bypasses this helper is a silent backup
+    gap; there is deliberately no second atomic-write path for managed text in the app.
 
     Writes ``text`` (UTF-8) to a same-directory temp named ``<stem>-<nanoid>.tmp``
     (the storage-path conventions' derived-filename grammar — the nanoid guarantees

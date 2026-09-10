@@ -88,23 +88,6 @@ def _summary(window: MainWindow, path: Path) -> str:
     return window.image_table.item(row, 2).text()
 
 
-@pytest.mark.parametrize("transient", ["isMinimized", "isFullScreen"])
-def test_transient_window_state_is_not_saved(
-    make_window, monkeypatch: pytest.MonkeyPatch, transient: str
-) -> None:
-    window = make_window()
-    window._placement_ready = True
-    monkeypatch.setattr(MainWindow, "isMinimized", lambda _self: False)
-    monkeypatch.setattr(MainWindow, "isFullScreen", lambda _self: False)
-    monkeypatch.setattr(MainWindow, transient, lambda _self: True)
-    saved: list[object] = []
-    monkeypatch.setattr(gui, "save_app_state", saved.append)
-
-    window._persist_window_placement()
-
-    assert saved == []
-
-
 def test_open_picker_failure_is_authored_and_retained_by_images_group(
     make_window, monkeypatch: pytest.MonkeyPatch
 ) -> None:
