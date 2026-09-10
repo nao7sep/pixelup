@@ -1167,32 +1167,28 @@ def test_main_window_restores_geometry_saved_on_normal_close(make_window) -> Non
 @pytest.mark.parametrize(
     "window_state",
     [
+        Qt.WindowState.WindowNoState,
         Qt.WindowState.WindowMinimized,
         Qt.WindowState.WindowMaximized,
         Qt.WindowState.WindowFullScreen,
     ],
 )
-def test_main_window_only_saves_geometry_in_normal_mode(make_window, window_state) -> None:
-    window = make_window()
-    saved_geometry = window.saveGeometry()
-    window._window_settings.setValue(window._GEOMETRY_KEY, saved_geometry)
-    window._window_settings.sync()
-    window.setWindowState(window_state)
-    window._session_shutdown = True
+def test_main_window_saves_and_restores_geometry_in_native_state(
+    make_window, window_state
+) -> None:
+    first = make_window()
+    first.setGeometry(1, 40, first.minimumWidth(), 650)
+    first.setWindowState(window_state)
+    expected = first.saveGeometry()
+    first._session_shutdown = True
 
-    assert window.close()
+    assert first.close()
 
-    settings = QSettings(window._window_settings.fileName(), QSettings.Format.IniFormat)
-    assert settings.value(window._GEOMETRY_KEY) == saved_geometry
+    settings = QSettings(first._window_settings.fileName(), QSettings.Format.IniFormat)
+    assert settings.value(first._GEOMETRY_KEY) == expected
 
-
-def test_main_window_active_flag_is_still_normal_mode(make_window) -> None:
-    window = make_window()
-    window.setWindowState(Qt.WindowState.WindowActive)
-    window._session_shutdown = True
-
-    assert window.close()
-    assert window._window_settings.contains(window._GEOMETRY_KEY)
+    second = make_window()
+    assert second.saveGeometry() == expected
 
 
 def test_main_surfaces_startup_storage_failure(

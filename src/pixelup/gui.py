@@ -446,19 +446,10 @@ class MainWindow(QMainWindow):
                 log.warning("window.geometry_restore_failed")
 
     def _accept_close(self, event: QCloseEvent) -> None:
-        # A non-normal frame is not stable placement data. Qt retains the last
-        # normal geometry while maximized, minimized, or full-screen, so leave the
-        # most recent normal save untouched until the user closes from normal mode.
-        display_modes = (
-            Qt.WindowState.WindowMinimized
-            | Qt.WindowState.WindowMaximized
-            | Qt.WindowState.WindowFullScreen
-        )
-        if not self.windowState() & display_modes:
-            self._window_settings.setValue(self._GEOMETRY_KEY, self.saveGeometry())
-            self._window_settings.sync()
-            if self._window_settings.status() != QSettings.Status.NoError:
-                log.warning("window.geometry_save_failed")
+        self._window_settings.setValue(self._GEOMETRY_KEY, self.saveGeometry())
+        self._window_settings.sync()
+        if self._window_settings.status() != QSettings.Status.NoError:
+            log.warning("window.geometry_save_failed")
         event.accept()
 
     def show_prepared(self) -> None:
