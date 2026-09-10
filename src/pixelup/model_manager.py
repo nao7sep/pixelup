@@ -243,9 +243,8 @@ class ModelManager(QObject):
         worker.progress.connect(self._show_progress)
         worker.waiting.connect(self._show_waiting)
         worker.finished.connect(self._worker_finished)
-        worker.finished.connect(worker.deleteLater)
-        worker.finished.connect(thread.quit)
         thread.setProperty("operation_id", operation_id)
+        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(self._thread_finished)
         self._threads[operation_id] = thread
         self._workers[operation_id] = worker
@@ -319,6 +318,9 @@ class ModelManager(QObject):
             cancelled=cancelled,
             reason=message,
         )
+        thread = self._threads.get(operation_id)
+        if thread is not None:
+            thread.quit()
 
     @Slot()
     def _thread_finished(self) -> None:
