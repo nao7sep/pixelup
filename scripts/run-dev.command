@@ -36,8 +36,6 @@ cleanup() {
   if is_launcher_runtime_owner "$RUNTIME_TOKEN" "$REPO_DIR"; then
     stop_owned_runtime python PixelUp "$REPO_DIR" "" pixelup "$APP_EXECUTABLE" >/dev/null 2>&1 || true
     release_launcher_runtime "$RUNTIME_TOKEN" "$REPO_DIR"
-  else
-    status=0
   fi
   pause_on_failure "$status"
   exit "$status"
