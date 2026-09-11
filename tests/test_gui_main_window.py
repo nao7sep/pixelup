@@ -1164,21 +1164,9 @@ def test_main_window_restores_geometry_saved_on_normal_close(make_window) -> Non
     assert second.geometry() == first.geometry()
 
 
-@pytest.mark.parametrize(
-    "window_state",
-    [
-        Qt.WindowState.WindowNoState,
-        Qt.WindowState.WindowMinimized,
-        Qt.WindowState.WindowMaximized,
-        Qt.WindowState.WindowFullScreen,
-    ],
-)
-def test_main_window_saves_and_restores_geometry_in_native_state(
-    make_window, window_state
-) -> None:
+def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
     first = make_window()
     first.setGeometry(1, 40, first.minimumWidth(), 650)
-    first.setWindowState(window_state)
     expected = first.saveGeometry()
     first._session_shutdown = True
 
@@ -1188,6 +1176,33 @@ def test_main_window_saves_and_restores_geometry_in_native_state(
     assert settings.value(first._GEOMETRY_KEY) == expected
 
     second = make_window()
+    assert second.saveGeometry() == expected
+
+
+@pytest.mark.parametrize(
+    "window_state",
+    [
+        Qt.WindowState.WindowMinimized,
+        Qt.WindowState.WindowMaximized,
+        Qt.WindowState.WindowFullScreen,
+    ],
+)
+def test_main_window_transient_state_does_not_replace_normal_geometry(
+    make_window, window_state
+) -> None:
+    first = make_window()
+    first.setGeometry(1, 40, first.minimumWidth(), 650)
+    expected = first.saveGeometry()
+    first._session_shutdown = True
+    assert first.close()
+
+    transient = make_window()
+    transient.setWindowState(window_state)
+    transient._session_shutdown = True
+    assert transient.close()
+
+    second = make_window()
+    assert second.windowState() == Qt.WindowState.WindowNoState
     assert second.saveGeometry() == expected
 
 

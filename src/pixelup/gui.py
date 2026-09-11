@@ -444,12 +444,20 @@ class MainWindow(QMainWindow):
         if isinstance(geometry, QByteArray) and not geometry.isEmpty():
             if not self.restoreGeometry(geometry):
                 log.warning("window.geometry_restore_failed")
+                return
+            # Qt includes maximized, minimized, and fullscreen state in its
+            # native geometry blob. Placement persistence owns only the normal
+            # bounds: discard any transient mode carried by an older blob while
+            # retaining the normal geometry embedded alongside it.
+            if self.windowState() != Qt.WindowState.WindowNoState:
+                self.setWindowState(Qt.WindowState.WindowNoState)
 
     def _accept_close(self, event: QCloseEvent) -> None:
-        self._window_settings.setValue(self._GEOMETRY_KEY, self.saveGeometry())
-        self._window_settings.sync()
-        if self._window_settings.status() != QSettings.Status.NoError:
-            log.warning("window.geometry_save_failed")
+        if self.windowState() == Qt.WindowState.WindowNoState:
+            self._window_settings.setValue(self._GEOMETRY_KEY, self.saveGeometry())
+            self._window_settings.sync()
+            if self._window_settings.status() != QSettings.Status.NoError:
+                log.warning("window.geometry_save_failed")
         event.accept()
 
     def show_prepared(self) -> None:
