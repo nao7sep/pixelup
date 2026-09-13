@@ -210,6 +210,12 @@ def bounded_initial_window_size(minimum: QSize, work_area: QSize) -> QSize:
     )
 
 
+def _restored_window_state(state: Qt.WindowState, platform: str) -> Qt.WindowState:
+    if platform == "darwin":
+        return Qt.WindowState.WindowNoState
+    return state & ~Qt.WindowState.WindowMinimized
+
+
 def announce_accessible_alert(widget: QWidget) -> None:
     """Announce a newly changed actionable result through Qt accessibility."""
     QAccessible.updateAccessibility(QAccessibleEvent(widget, QAccessible.Event.Alert))
@@ -445,19 +451,15 @@ class MainWindow(QMainWindow):
             if not self.restoreGeometry(geometry):
                 log.warning("window.geometry_restore_failed")
                 return
-            # Qt includes maximized, minimized, and fullscreen state in its
-            # native geometry blob. Placement persistence owns only the normal
-            # bounds: discard any transient mode carried by an older blob while
-            # retaining the normal geometry embedded alongside it.
-            if self.windowState() != Qt.WindowState.WindowNoState:
-                self.setWindowState(Qt.WindowState.WindowNoState)
+            state = _restored_window_state(self.windowState(), sys.platform)
+            if state != self.windowState():
+                self.setWindowState(state)
 
     def _accept_close(self, event: QCloseEvent) -> None:
-        if self.windowState() == Qt.WindowState.WindowNoState:
-            self._window_settings.setValue(self._GEOMETRY_KEY, self.saveGeometry())
-            self._window_settings.sync()
-            if self._window_settings.status() != QSettings.Status.NoError:
-                log.warning("window.geometry_save_failed")
+        self._window_settings.setValue(self._GEOMETRY_KEY, self.saveGeometry())
+        self._window_settings.sync()
+        if self._window_settings.status() != QSettings.Status.NoError:
+            log.warning("window.geometry_save_failed")
         event.accept()
 
     def show_prepared(self) -> None:

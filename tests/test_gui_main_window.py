@@ -1180,6 +1180,27 @@ def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
 
 
 @pytest.mark.parametrize(
+    ("platform", "saved", "expected"),
+    [
+        ("darwin", Qt.WindowState.WindowMaximized, Qt.WindowState.WindowNoState),
+        ("darwin", Qt.WindowState.WindowFullScreen, Qt.WindowState.WindowNoState),
+        ("win32", Qt.WindowState.WindowMaximized, Qt.WindowState.WindowMaximized),
+        ("win32", Qt.WindowState.WindowFullScreen, Qt.WindowState.WindowFullScreen),
+        ("win32", Qt.WindowState.WindowMinimized, Qt.WindowState.WindowNoState),
+        (
+            "win32",
+            Qt.WindowState.WindowMinimized | Qt.WindowState.WindowMaximized,
+            Qt.WindowState.WindowMaximized,
+        ),
+    ],
+)
+def test_restored_window_state_is_platform_appropriate(
+    platform: str, saved: Qt.WindowState, expected: Qt.WindowState
+) -> None:
+    assert gui._restored_window_state(saved, platform) == expected
+
+
+@pytest.mark.parametrize(
     "window_state",
     [
         Qt.WindowState.WindowMinimized,
@@ -1187,23 +1208,38 @@ def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
         Qt.WindowState.WindowFullScreen,
     ],
 )
-def test_main_window_transient_state_does_not_replace_normal_geometry(
+def test_main_window_saves_geometry_on_every_accepted_close(
+    make_window, window_state
+) -> None:
+    window = make_window()
+    window.setGeometry(1, 40, window.minimumWidth(), 650)
+    window.setWindowState(window_state)
+    expected = window.saveGeometry()
+    window._session_shutdown = True
+
+    assert window.close()
+
+    settings = QSettings(window._window_settings.fileName(), QSettings.Format.IniFormat)
+    assert settings.value(window._GEOMETRY_KEY) == expected
+
+
+@pytest.mark.parametrize(
+    "window_state",
+    [Qt.WindowState.WindowMaximized, Qt.WindowState.WindowFullScreen],
+)
+def test_main_window_restores_native_state_according_to_platform(
     make_window, window_state
 ) -> None:
     first = make_window()
     first.setGeometry(1, 40, first.minimumWidth(), 650)
-    expected = first.saveGeometry()
+    normal_geometry = first.normalGeometry()
+    first.setWindowState(window_state)
     first._session_shutdown = True
     assert first.close()
 
-    transient = make_window()
-    transient.setWindowState(window_state)
-    transient._session_shutdown = True
-    assert transient.close()
-
     second = make_window()
-    assert second.windowState() == Qt.WindowState.WindowNoState
-    assert second.saveGeometry() == expected
+    assert second.windowState() == gui._restored_window_state(window_state, sys.platform)
+    assert second.normalGeometry() == normal_geometry
 
 
 def test_main_surfaces_startup_storage_failure(
