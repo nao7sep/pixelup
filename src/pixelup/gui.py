@@ -1779,6 +1779,12 @@ def build_app(
     apply_palette_fixes(app)
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
+    # No custom macOS menu bar: PixelUp keeps Qt's default, which has no Edit menu, so the
+    # Edit menu's Emoji & Symbols and Start Dictation items are absent. Its one free-text
+    # field, the font family in Settings, does not justify what a working Edit menu costs
+    # under Qt: Qt disables the shared bar while a modal dialog is open, so every dialog
+    # would need its own copy. A developer-approved exception to the fleet menu bar
+    # contract; do not propose adding one.
     # On macOS, Qt maps the application icon to NSApp.applicationIconImage and
     # overrides the Liquid Glass/classic icon selected from the app bundle.
     if sys.platform == "win32":
