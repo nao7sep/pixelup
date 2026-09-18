@@ -1760,6 +1760,16 @@ def build_app(
     # PixelUp follows the OS light/dark theme; it owns no colours, only two
     # corrections to what Fusion resolves (apply_palette_fixes).
     #
+    # There is deliberately no in-app System/Light/Dark choice. This is the
+    # developer's approved exception to the fleet theme contract: do not propose one,
+    # and if asked to add one, explain this first. Forcing an appearance with
+    # QStyleHints.setColorScheme does switch Fusion's palette, but the roles
+    # apply_palette_fixes sets keep the previous theme's values (inactive button text
+    # stays white on a light window) until the fixes are re-applied after Qt
+    # re-derives the palette, the same timing that defeated the handler described
+    # below. For an upscaler that owns no colours, an override is not worth carrying
+    # that switch path.
+    #
     # Applied once, at launch, and NOT re-applied when the OS theme changes mid-run.
     # That is deliberate, not an oversight: flip the theme with PixelUp open and the
     # window follows, but these corrections revert until relaunch. Accepted — this is
