@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from pixelup.fonts import (
-    CANONICAL_UI_FONT_FAMILY_STACK,
     DEFAULT_UI_FONT_FAMILY,
     DEFAULT_UI_FONT_SIZE,
+    LEGACY_UI_FONT_FAMILY_STACK,
     apply_ui_font,
     build_ui_font,
     normalize_font_family,
@@ -25,7 +25,7 @@ def test_normalize_font_family_uses_blank_for_the_builtin_default() -> None:
     assert normalize_font_family("   ", DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
     assert normalize_font_family(None, DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
     assert normalize_font_family(42, DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
-    assert normalize_font_family(CANONICAL_UI_FONT_FAMILY_STACK) == DEFAULT_UI_FONT_FAMILY
+    assert normalize_font_family(LEGACY_UI_FONT_FAMILY_STACK) == DEFAULT_UI_FONT_FAMILY
 
 
 def test_parse_font_families_splits_strips_quotes_and_drops_empties() -> None:
@@ -65,21 +65,17 @@ def test_build_ui_font_uses_fixed_size_and_resolved_family(
     assert font.family() == installed_font
 
 
-def test_build_ui_font_uses_canonical_stack_when_configured_family_is_unresolved(
-    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(QFontDatabase, "families", staticmethod(lambda: ["Segoe UI"]))
-    font = build_ui_font("No Such Font 99999")
-    assert font.pixelSize() == DEFAULT_UI_FONT_SIZE
-    assert font.family() == "Segoe UI"
-
-
-def test_build_ui_font_keeps_size_when_no_canonical_family_is_installed(
-    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("value", ["No Such Font 99999", DEFAULT_UI_FONT_FAMILY])
+def test_build_ui_font_uses_the_system_ui_font_when_nothing_resolves(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     monkeypatch.setattr(QFontDatabase, "families", staticmethod(list))
-    font = build_ui_font("No Such Font 99999")
+    monkeypatch.setattr(
+        QFontDatabase, "systemFont", staticmethod(lambda _kind: QFont("PixelUp System UI"))
+    )
+    font = build_ui_font(value)
     assert font.pixelSize() == DEFAULT_UI_FONT_SIZE
+    assert font.family() == "PixelUp System UI"
 
 
 def test_apply_ui_font_sets_application_font(

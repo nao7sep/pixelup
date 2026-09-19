@@ -6,15 +6,13 @@ if TYPE_CHECKING:
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication
 
-# The persisted, user-facing default is blank: it means "use PixelUp's built-in
-# platform choice" without exposing that implementation detail in Settings.
+# The persisted, user-facing default is blank: it means "use the operating
+# system's own UI font" without exposing that implementation detail in Settings.
 DEFAULT_UI_FONT_FAMILY = ""
 
-# PixelUp bundles no font, so its internal Qt fallback is a small cross-platform
-# stack of system UI faces — macOS (Helvetica Neue), Windows (Segoe UI), and
-# common Linux fallbacks (Roboto, then Arial). Resolution picks the first face
-# actually installed before allowing Qt's uncontrolled platform default.
-CANONICAL_UI_FONT_FAMILY_STACK = "Helvetica Neue, Segoe UI, Roboto, Arial"
+# The built-in stack earlier versions resolved, and stored as the setting's value.
+# A saved copy of it reads as the blank default.
+LEGACY_UI_FONT_FAMILY_STACK = "Helvetica Neue, Segoe UI, Roboto, Arial"
 
 # The UI font size is deliberate and fixed, not user-configurable. Per the
 # app-chrome-conventions the UI font is family-only — a base-size knob breaks
@@ -38,7 +36,7 @@ def normalize_font_family(value: Any, default: str = DEFAULT_UI_FONT_FAMILY) -> 
     if not isinstance(value, str):
         return default
     text = value.strip()
-    if not text or text == CANONICAL_UI_FONT_FAMILY_STACK:
+    if not text or text == LEGACY_UI_FONT_FAMILY_STACK:
         return default
     return text
 
@@ -72,17 +70,19 @@ def resolve_ui_font_family(value: str) -> str | None:
 def build_ui_font(value: str) -> QFont:
     """Build the UI font from a family string at the fixed UI size.
 
-    Resolves the family against installed fonts. When a configured value has no
-    match, the canonical platform stack gets a second chance before Qt's final
-    toolkit fallback. The size is always the explicit DEFAULT_UI_FONT_SIZE.
+    Resolves the family against installed fonts. A blank or unresolved value
+    takes the operating system's own UI family, Qt's general system font (San
+    Francisco on macOS, Segoe UI on Windows, the desktop's font on Linux), per
+    the app-chrome-conventions. The size is always the explicit
+    DEFAULT_UI_FONT_SIZE.
     """
-    from PySide6.QtGui import QFont
+    from PySide6.QtGui import QFont, QFontDatabase
 
     font = QFont()
     family = resolve_ui_font_family(value)
     if family is None:
-        family = resolve_ui_font_family(CANONICAL_UI_FONT_FAMILY_STACK)
-    if family is not None:
+        family = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+    if family:
         font.setFamily(family)
     font.setPixelSize(DEFAULT_UI_FONT_SIZE)
     return font
