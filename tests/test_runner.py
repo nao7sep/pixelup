@@ -727,4 +727,7 @@ def test_every_upscale_model_enlarges_a_corpus_photo_faithfully(
             reduced = output.convert("RGB").resize(small.size, Image.Resampling.LANCZOS)
         difference = ImageChops.difference(small, reduced)
         mean = sum(ImageStat.Stat(difference).mean) / 3
-        assert mean < 12, f"{job.model} drifted from the photo by {mean:.1f} levels on average"
+        # Measured on the M4: faithful models drift 5 to 12 levels, since the GANs
+        # invent fine texture, while the photo against its own mirror image
+        # differs by 92. The bound sits between them.
+        assert mean < 25, f"{job.model} drifted from the photo by {mean:.1f} levels on average"
