@@ -51,6 +51,14 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.pytest.ini_options]
+markers = [
+  "heavy: downloads the managed Real-ESRGAN weights and runs real inference; only the full gate runs it",
+]
+# The default deselects heavy tests; the full gate selects everything with
+# `uv run pytest -m "heavy or not heavy"`.
+addopts = "-m 'not heavy'"
+
 # Coverage is an instrument, not a gate (no threshold / CI fail) — it maps where logic still
 # hides in the Qt layer. Run: `uv run pytest --cov --cov-report=term-missing --cov-report=html`.
 [tool.coverage.run]

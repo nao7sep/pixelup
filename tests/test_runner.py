@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image, ImageChops, ImageStat
 from PySide6.QtWidgets import QApplication
 
+from pixelup.config import RuntimeDirs
 from pixelup.errors import ErrorCode, PixelupError
-from pixelup.jobs import Job, JobSettings
+from pixelup.jobs import Job, JobSettings, create_jobs
+from pixelup.model_management import UPSCALE_MODELS
 from pixelup.output_reservation import PublishedFile
 from pixelup.runner import (
     JobRunner,
@@ -671,3 +675,56 @@ def test_worker_request_cancel_sets_the_should_cancel_flag(
     assert worker._is_cancelled() is False
     worker.request_cancel()
     assert worker._is_cancelled() is True
+
+
+@pytest.mark.heavy
+def test_every_upscale_model_enlarges_a_corpus_photo_faithfully(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    heavy_models_dir: Path,
+    process_until,
+    corpus_file,
+) -> None:
+    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    source = tmp_path / "input" / "apartment-cat.png"
+    source.parent.mkdir()
+    with Image.open(corpus_file("photos/similarity/apartment-cat/reference.jpg")) as photo:
+        small = photo.convert("RGB").resize((96, 64), Image.Resampling.LANCZOS)
+    small.save(source)
+
+    settings = JobSettings()
+    jobs = create_jobs(
+        input_paths=[source],
+        models=list(UPSCALE_MODELS),
+        settings=settings,
+        existing_jobs=[],
+        job_ids=count(1),
+    )
+    runner = JobRunner(
+        jobs,
+        runtime_dirs=RuntimeDirs(models_dir=heavy_models_dir, temp_dir=tmp_path / "temp"),
+    )
+    outcomes: dict[int, tuple[bool, str, object]] = {}
+    runner.finished.connect(
+        lambda job_id, ok, message, result, _warnings: outcomes.__setitem__(
+            job_id, (ok, message, result)
+        )
+    )
+    runner.schedule(1)
+    process_until(
+        lambda: len(outcomes) == len(jobs) and runner.cleanup_for_quit(),
+        timeout_s=30 * 60,
+        what="Upscaling with every model",
+    )
+
+    for job in jobs:
+        ok, message, result = outcomes[job.id]
+        assert ok, f"{job.model}: {message}"
+        assert isinstance(result, dict)
+        assert result["output_size"] == [96 * settings.scale, 64 * settings.scale], job.model
+        with Image.open(job.output_path) as output:
+            reduced = output.convert("RGB").resize(small.size, Image.Resampling.LANCZOS)
+        difference = ImageChops.difference(small, reduced)
+        mean = sum(ImageStat.Stat(difference).mean) / 3
+        assert mean < 12, f"{job.model} drifted from the photo by {mean:.1f} levels on average"

@@ -4,14 +4,21 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QEventLoop
 from PySide6.QtWidgets import QApplication
 
 from pixelup.backup_store import close_backup_store
+from pixelup.model_management import MANAGED_ARTIFACT_NAMES
+from pixelup.model_manager import ModelManager
 from pixelup.session_log import LOGGER_NAME
+
+CORPUS = Path(__file__).resolve().parents[2] / "company" / "assets" / "test-fixtures"
+MODEL_INSTALL_TIMEOUT_S = 60 * 60
 
 
 @pytest.fixture
@@ -99,3 +106,68 @@ def qapp() -> QApplication:
     if app is None:
         app = QApplication([])
     return app
+
+
+ProcessUntil = Callable[..., None]
+
+
+@pytest.fixture(scope="session")
+def process_until(qapp: QApplication) -> ProcessUntil:
+    """Run the Qt event loop until ``done()`` holds, failing after ``timeout_s``."""
+
+    def run(done: Callable[[], bool], *, timeout_s: float, what: str) -> None:
+        deadline = time.monotonic() + timeout_s
+        while not done():
+            if time.monotonic() > deadline:
+                pytest.fail(f"{what} did not finish within {timeout_s:.0f} s")
+            qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 100)
+            time.sleep(0.02)
+
+    return run
+
+
+@pytest.fixture(scope="session")
+def heavy_models_dir(
+    request: pytest.FixtureRequest,
+    tmp_path_factory: pytest.TempPathFactory,
+    process_until: ProcessUntil,
+) -> Path:
+    """Every managed Real-ESRGAN artifact, acquired through PixelUp's own ModelManager.
+
+    The weights persist in pytest's cache between runs and follow the app's rule:
+    install what is missing, and never download a present file again, since each
+    pin names its own file. Only heavy tests request this fixture.
+    """
+    models_dir = request.config.cache.mkdir("pixelup-heavy-models")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("PIXELUP_HOME", str(tmp_path_factory.mktemp("model-install-home")))
+        manager = ModelManager(models_dir)
+        missing = manager.missing(MANAGED_ARTIFACT_NAMES)
+        if missing:
+            operation_id = manager.install(missing, force=False)
+            assert operation_id is not None
+            process_until(
+                lambda: not manager.active_operations and manager.cleanup_for_quit(),
+                timeout_s=MODEL_INSTALL_TIMEOUT_S,
+                what="Installing the managed models",
+            )
+            failures = [operation.error for operation in manager.failed_operations]
+            assert not failures, f"Installing the managed models failed: {failures}"
+        manager.deleteLater()
+    return models_dir
+
+
+@pytest.fixture
+def corpus_file() -> Callable[[str], Path]:
+    """A file from the shared test-fixture corpus, checked out beside this repository."""
+
+    def resolve(relative: str) -> Path:
+        path = CORPUS / relative
+        if not path.is_file():
+            pytest.fail(
+                f"{path} is missing. Heavy tests read the shared test-fixture corpus; "
+                "check out the company repository beside this one."
+            )
+        return path
+
+    return resolve
