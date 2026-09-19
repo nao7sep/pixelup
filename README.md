@@ -39,7 +39,7 @@ You can also pass image paths directly: `uv run pixelup image.png another.jpg`.
 
 ## Tests
 
-`uv run ruff check .` and `uv run pytest` are the checks to run after a change; the suite takes a few seconds. `uv run pytest -m "heavy or not heavy"` is the full gate: it also runs the heavy tests, which install every managed Real-ESRGAN model through PixelUp's own model manager, about 230 MB on the first run and kept in `.pytest_cache` afterwards, and upscale a photo from the shared test-fixture corpus with each model. The corpus lives in the company repository, which must be checked out beside this one.
+`uv run ruff check .` and `uv run pytest` are what to run after a change; the suite takes a few seconds. `uv run pytest -m "heavy or not heavy"` is the full gate: it also runs the heavy tests, which install every managed Real-ESRGAN model through PixelUp's own model manager, about 230 MB on the first run and kept in `.pytest_cache` afterwards, and upscale a photo from the shared test-fixture corpus with each model. The corpus lives in the company repository, which must be checked out beside this one.
 
 ## License
 
