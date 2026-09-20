@@ -54,6 +54,33 @@ def is_dark(palette: QPalette) -> bool:
     return palette.color(QPalette.ColorRole.Window).lightness() < 128
 
 
+def _receded(colour: QColor, window: QColor) -> str:
+    """``colour`` drawn faded over ``window``, as the same colour at 45 per cent.
+
+    A style sheet cannot fade a widget, so the fade is computed here instead. It is
+    a proportion of whatever the colour already is, so it lands the same in both
+    themes without a second palette to keep in step.
+    """
+    amount = 0.45
+    blended = QColor(
+        round(colour.red() * amount + window.red() * (1 - amount)),
+        round(colour.green() * amount + window.green() * (1 - amount)),
+        round(colour.blue() * amount + window.blue() * (1 - amount)),
+    )
+    return blended.name()
+
+
+def accent_pressed(palette: QPalette) -> str:
+    """The accent one step beyond its hover, for the primary button's press.
+
+    Derived from ``palette(highlight)`` rather than chosen here, so the primary
+    still follows the OS accent — a style sheet has no colour arithmetic, which is
+    the only reason this is computed in Python at all. It deepens in both themes,
+    the direction the standard button's own press already moves.
+    """
+    return palette.color(QPalette.ColorRole.Highlight).darker(118).name()
+
+
 def danger_colours(palette: QPalette) -> dict[str, str]:
     """The one set of colours the app owns, for destructive actions.
 
@@ -61,10 +88,30 @@ def danger_colours(palette: QPalette) -> dict[str, str]:
     as letters on the theme's own surface, a fill for the confirming button, and
     the ink that sits on that fill. The dark theme's red is a lighter one, so its
     ink turns dark rather than staying white.
+
+    The fill deepens on press in both themes. In dark that is against the hover's
+    own direction, and deliberately: the hover already lifts the fill to where
+    white sits at 4.7:1, so a further lift would drop the label under the floor.
+
+    The disabled values are each colour faded over the window, so a destructive
+    control that is off keeps its red — red is what says the action destroys
+    something, and that does not stop being true while the action is unavailable.
     """
+    window = palette.color(QPalette.ColorRole.Window)
     if is_dark(palette):
-        return {"text": "#ff9ba6", "fill": "#b93650", "fill_hover": "#c8445e", "ink": "#ffffff"}
-    return {"text": "#a11f34", "fill": "#b42318", "fill_hover": "#96190f", "ink": "#ffffff"}
+        colours = {
+            "text": "#ff9ba6", "fill": "#b93650",
+            "fill_hover": "#c8445e", "fill_pressed": "#a52d45", "ink": "#ffffff",
+        }
+    else:
+        colours = {
+            "text": "#a11f34", "fill": "#b42318",
+            "fill_hover": "#96190f", "fill_pressed": "#7d140c", "ink": "#ffffff",
+        }
+    colours["text_disabled"] = _receded(QColor(colours["text"]), window)
+    colours["fill_disabled"] = _receded(QColor(colours["fill"]), window)
+    colours["ink_disabled"] = _receded(QColor(colours["ink"]), window)
+    return colours
 
 
 def _arrow_pixmap(colour: QColor, *, pointing_down: bool) -> QPixmap:
@@ -238,6 +285,12 @@ QPushButton[role="primary"]:hover:!disabled {{
     background-color: palette(highlight);
     border-color: palette(text);
 }}
+/* Without a press of its own it fell through to the standard button's, which
+   replaced the accent with the toolkit's grey at the moment of the click. */
+QPushButton[role="primary"]:pressed:!disabled {{
+    background-color: {accent_pressed(palette)};
+    border-color: palette(text);
+}}
 QPushButton[role="primary"]:disabled {{
     background-color: palette(midlight);
     border-color: palette(midlight);
@@ -255,6 +308,10 @@ QPushButton[role="danger"] {{
 QPushButton[role="danger"]:hover:!disabled {{
     background-color: palette(midlight);
 }}
+QPushButton[role="danger"]:disabled {{
+    color: {danger["text_disabled"]};
+    border-color: {danger["text_disabled"]};
+}}
 QPushButton[role="danger-confirm"] {{
     background-color: {danger["fill"]};
     border-color: {danger["fill"]};
@@ -264,6 +321,15 @@ QPushButton[role="danger-confirm"] {{
 QPushButton[role="danger-confirm"]:hover:!disabled {{
     background-color: {danger["fill_hover"]};
     border-color: {danger["fill_hover"]};
+}}
+QPushButton[role="danger-confirm"]:pressed:!disabled {{
+    background-color: {danger["fill_pressed"]};
+    border-color: {danger["fill_pressed"]};
+}}
+QPushButton[role="danger-confirm"]:disabled {{
+    background-color: {danger["fill_disabled"]};
+    border-color: {danger["fill_disabled"]};
+    color: {danger["ink_disabled"]};
 }}
 
 /* A compact button sits in a dense row (a table's own actions). */
