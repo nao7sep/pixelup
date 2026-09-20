@@ -11,13 +11,6 @@ from PySide6.QtWidgets import (
 
 from pixelup.ui_common import title_label, use_dialog_spacing, use_regular_spacing
 
-# Destructive actions get danger styling per the modal-dialog conventions; red is
-# not a standard palette role, so it is set explicitly here.
-_DANGER_QSS = (
-    "QPushButton { background-color: #c0392b; color: white; padding: 4px 14px; }"
-    "QPushButton:hover { background-color: #e74c3c; }"
-)
-
 
 def quit_confirmation_text(active: int) -> str:
     if not active:
@@ -59,7 +52,7 @@ class QuitConfirmDialog(QDialog):
         cancel_button.clicked.connect(self.reject)
 
         quit_button = QPushButton("Quit")
-        quit_button.setStyleSheet(_DANGER_QSS)
+        quit_button.setProperty("role", "danger-confirm")
         quit_button.clicked.connect(self.accept)
 
         # Cancel before Quit → Cancel on the left, the destructive action on the

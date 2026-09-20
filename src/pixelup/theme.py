@@ -1,0 +1,357 @@
+"""PixelUp's one owned appearance: the sizes every control is built from, and the
+style sheet that draws them.
+
+PixelUp owns no colours of its own. It follows the OS light/dark theme through
+Fusion's palette (see ``build_app``), so every colour here is a ``palette(...)``
+reference rather than a literal, and the one treatment that has no palette role —
+a destructive action's red — is the single pair of values in ``DANGER``, chosen
+per theme the way the warning button already is.
+
+What this module does own is geometry and state: one height for a standard
+control and one for a compact one, one corner radius, and a hover, pressed,
+focused and disabled treatment for each control, so nothing is left to the
+toolkit's defaults. Sizes are named so a change moves the whole app.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QColor, QPainter, QPalette, QPixmap, QPolygon
+from PySide6.QtWidgets import QApplication
+
+from pixelup.config import resolve_state_dir
+
+# One standard height for a one-line control — a text field, a combo box, a spin
+# box or a button beside them — and one compact height for a dense row. Before
+# this, the app drew one-line controls at 19, 21, 24, 25 and 26 pixels.
+CONTROL_HEIGHT = 30
+COMPACT_HEIGHT = 26
+RADIUS = 6
+# The radius of something nested inside a control (a tick, a chip) stays smaller
+# than its container's, per the fleet styling conventions.
+INNER_RADIUS = 4
+# The combo/spin mark, in logical pixels.
+ARROW_WIDTH = 9
+ARROW_HEIGHT = 6
+BORDER_WIDTH = 1
+# Qt's min-height is the content box, so the border is subtracted to make the
+# named height the one the control actually occupies.
+_INNER = CONTROL_HEIGHT - 2 * BORDER_WIDTH
+_INNER_COMPACT = COMPACT_HEIGHT - 2 * BORDER_WIDTH
+# A spin box reserves extra vertical room for its two stacked buttons on top of
+# the border, so asking for the same content height leaves it taller than every
+# other field. Its own min-height drops by that reservation instead. The value is
+# the toolkit's, not a taste: the one-height test pins the rendered result, so a
+# change in Qt's reservation fails there rather than drifting in the interface.
+_SPIN_BUTTON_RESERVE = 5
+_INNER_SPIN = _INNER - _SPIN_BUTTON_RESERVE
+
+
+def is_dark(palette: QPalette) -> bool:
+    """Whether the resolved theme is the dark one, by the window's own lightness."""
+    return palette.color(QPalette.ColorRole.Window).lightness() < 128
+
+
+def danger_colours(palette: QPalette) -> dict[str, str]:
+    """The one set of colours the app owns, for destructive actions.
+
+    Qt's palette has no error role, so these are named here: a red that can be read
+    as letters on the theme's own surface, a fill for the confirming button, and
+    the ink that sits on that fill. The dark theme's red is a lighter one, so its
+    ink turns dark rather than staying white.
+    """
+    if is_dark(palette):
+        return {"text": "#ff9ba6", "fill": "#b93650", "fill_hover": "#c8445e", "ink": "#ffffff"}
+    return {"text": "#a11f34", "fill": "#b42318", "fill_hover": "#96190f", "ink": "#ffffff"}
+
+
+def _arrow_pixmap(colour: QColor, *, pointing_down: bool) -> QPixmap:
+    """A small solid triangle in ``colour``, drawn at 2x for a sharp mark."""
+    width, height, scale = ARROW_WIDTH, ARROW_HEIGHT, 2
+    pixmap = QPixmap(width * scale, height * scale)
+    pixmap.setDevicePixelRatio(scale)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(colour)
+    # The device pixel ratio already scales the painting, so the polygon is drawn
+    # in logical coordinates; multiplying here too would draw outside the box.
+    points = (
+        [QPoint(0, 0), QPoint(width, 0), QPoint(width // 2, height)]
+        if pointing_down
+        else [QPoint(0, height), QPoint(width, height), QPoint(width // 2, 0)]
+    )
+    painter.drawPolygon(QPolygon(points))
+    painter.end()
+    return pixmap
+
+
+def write_arrow_marks(palette: QPalette, directory: Path) -> dict[str, Path] | None:
+    """Write the combo/spin arrow marks for this theme, or None if they cannot be.
+
+    A style sheet cannot draw a triangle — its arrow sub-controls take an image —
+    and an image cannot read a palette role, so the mark is rendered here in the
+    theme's own text colour and cached beside the app's state. If that write
+    fails, the caller leaves those fields unstyled so the toolkit keeps drawing
+    them, arrows included, rather than showing a field with no mark at all.
+    """
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        suffix = "dark" if is_dark(palette) else "light"
+        marks: dict[str, Path] = {}
+        states = (("", QPalette.ColorRole.Text), ("-disabled", QPalette.ColorRole.PlaceholderText))
+        for name, pointing_down in (("down", True), ("up", False)):
+            for state, role in states:
+                colour = palette.color(role)
+                path = directory / f"arrow-{name}{state}-{suffix}.png"
+                if not _arrow_pixmap(colour, pointing_down=pointing_down).save(str(path), "PNG"):
+                    return None
+                marks[f"{name}{state}"] = path
+        return marks
+    except OSError:
+        return None
+
+
+def _field_rules(marks: dict[str, Path]) -> str:
+    """Fields, including the arrow marks, which only exist when they were written."""
+    return f"""
+/* Fields. One height for every one-line field, so a text box, a number box and a
+   combo in the same column line up, and a button beside them matches. */
+QLineEdit, QComboBox {{
+    min-height: {_INNER}px;
+}}
+QSpinBox, QDoubleSpinBox {{
+    min-height: {_INNER_SPIN}px;
+}}
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
+    padding: 0 8px;
+    border: {BORDER_WIDTH}px solid palette(mid);
+    border-radius: {RADIUS}px;
+    background-color: palette(base);
+    color: palette(text);
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
+}}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+    border-color: palette(highlight);
+}}
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
+    color: palette(placeholder-text);
+    background-color: palette(window);
+}}
+QSpinBox, QDoubleSpinBox {{ padding-right: 22px; }}
+/* A spin box holds its own QLineEdit, which would otherwise take the field rule
+   above a second time and stack its height inside the box. */
+QAbstractSpinBox QLineEdit {{
+    min-height: 0;
+    border: none;
+    padding: 0;
+    background: transparent;
+}}
+QComboBox {{ padding-right: 26px; }}
+
+/* Once a sheet draws these, the toolkit stops drawing their arrows, and a sheet
+   cannot draw a triangle itself — so the app hands it the marks rendered above
+   in the theme's own text colour. */
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 24px;
+    border: none;
+    background: transparent;
+}}
+/* Without an explicit size the sub-control stretches the mark to its own box. */
+QComboBox::down-arrow,
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow,
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+    width: {ARROW_WIDTH}px;
+    height: {ARROW_HEIGHT}px;
+}}
+QComboBox::down-arrow {{ image: url({marks["down"].as_posix()}); }}
+QComboBox::down-arrow:disabled {{ image: url({marks["down-disabled"].as_posix()}); }}
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 20px;
+    border: none;
+    background: transparent;
+}}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{ subcontrol-position: bottom right; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image: url({marks["up"].as_posix()}); }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url({marks["down"].as_posix()}); }}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {{
+    image: url({marks["up-disabled"].as_posix()});
+}}
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
+    image: url({marks["down-disabled"].as_posix()});
+}}
+"""
+
+
+def build_stylesheet(palette: QPalette, marks: dict[str, Path] | None = None) -> str:
+    """The app-wide sheet. Every colour is a palette reference except DANGER.
+
+    Without ``marks`` the fields are left alone entirely, so the toolkit keeps
+    drawing them and their arrows; everything else is styled either way.
+    """
+    danger = danger_colours(palette)
+    fields = _field_rules(marks) if marks else ""
+    return f"""
+/* Buttons. A standard button is the app's utility role: the palette's own button
+   surface, a visible edge in both themes, and its own hover, pressed, focus and
+   disabled states rather than the toolkit's. */
+QPushButton {{
+    min-height: {_INNER}px;
+    padding: 0 14px;
+    border: {BORDER_WIDTH}px solid palette(mid);
+    border-radius: {RADIUS}px;
+    background-color: palette(button);
+    color: palette(button-text);
+}}
+QPushButton:hover:!disabled {{
+    background-color: palette(midlight);
+}}
+QPushButton:pressed:!disabled {{
+    background-color: palette(mid);
+}}
+QPushButton:focus {{
+    border-color: palette(highlight);
+}}
+QPushButton:disabled {{
+    color: palette(placeholder-text);
+    border-color: palette(midlight);
+}}
+
+/* The primary role: the one action a surface is really for. It takes the OS
+   accent from the palette, so the app still owns no colour of its own. */
+QPushButton[role="primary"] {{
+    background-color: palette(highlight);
+    border-color: palette(highlight);
+    color: palette(highlighted-text);
+    font-weight: 600;
+}}
+QPushButton[role="primary"]:hover:!disabled {{
+    background-color: palette(highlight);
+    border-color: palette(text);
+}}
+QPushButton[role="primary"]:disabled {{
+    background-color: palette(midlight);
+    border-color: palette(midlight);
+    color: palette(placeholder-text);
+}}
+
+/* Destructive actions, in the fleet's two roles: a trigger that opens a
+   destructive path is outlined, and the confirming button of the dialog that
+   asks is filled, so a solid red always means this is the last step. */
+QPushButton[role="danger"] {{
+    color: {danger["text"]};
+    border-color: {danger["text"]};
+    background-color: palette(button);
+}}
+QPushButton[role="danger"]:hover:!disabled {{
+    background-color: palette(midlight);
+}}
+QPushButton[role="danger-confirm"] {{
+    background-color: {danger["fill"]};
+    border-color: {danger["fill"]};
+    color: {danger["ink"]};
+    font-weight: 600;
+}}
+QPushButton[role="danger-confirm"]:hover:!disabled {{
+    background-color: {danger["fill_hover"]};
+    border-color: {danger["fill_hover"]};
+}}
+
+/* A compact button sits in a dense row (a table's own actions). */
+QPushButton[size="compact"] {{
+    min-height: {_INNER_COMPACT}px;
+    padding: 0 10px;
+}}
+
+{fields}
+/* A group's name is a heading with space under it, not a frame cut into a line:
+   six framed boxes turned one window into a grid of boxes, and in the dark theme
+   those frames all but disappeared. */
+QGroupBox {{
+    border: none;
+    margin-top: 6px;
+    padding-top: 18px;
+    font-weight: 600;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0;
+    color: palette(text);
+}}
+
+/* Collections keep the palette's own base and selection, with the grid dropped:
+   rows read as rows, not as cells of a spreadsheet. */
+QTableWidget, QTableView {{
+    border: {BORDER_WIDTH}px solid palette(mid);
+    border-radius: {RADIUS}px;
+    background-color: palette(base);
+    gridline-color: transparent;
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
+}}
+QHeaderView::section {{
+    background-color: palette(window);
+    color: palette(text);
+    border: none;
+    border-bottom: 1px solid palette(mid);
+    padding: 6px 8px;
+    font-weight: 600;
+}}
+QTableWidget::item, QTableView::item {{
+    padding: 4px 6px;
+}}
+
+/* Ticks and radios take a comfortable hit target and the accent when set. */
+QCheckBox, QRadioButton {{
+    spacing: 8px;
+    min-height: {COMPACT_HEIGHT}px;
+}}
+QCheckBox::indicator, QRadioButton::indicator {{
+    width: 16px;
+    height: 16px;
+}}
+QCheckBox::indicator {{
+    border: {BORDER_WIDTH}px solid palette(mid);
+    border-radius: {INNER_RADIUS}px;
+    background-color: palette(base);
+}}
+QCheckBox::indicator:checked {{
+    background-color: palette(highlight);
+    border-color: palette(highlight);
+}}
+QRadioButton::indicator {{
+    border: {BORDER_WIDTH}px solid palette(mid);
+    border-radius: 8px;
+    background-color: palette(base);
+}}
+/* The chosen radio reads as a ring of the accent around the base, which stays
+   legible on both surfaces where a filled disc of the accent does not. */
+QRadioButton::indicator:checked {{
+    border: 5px solid palette(highlight);
+}}
+
+/* A separator is the app's own hairline, in the palette's mid tone, so it stays
+   visible in both themes — the band lines in dialogs are drawn with these. */
+QFrame[frameShape="4"], QFrame[frameShape="5"] {{
+    color: palette(mid);
+    background-color: palette(mid);
+    border: none;
+    max-height: 1px;
+}}
+"""
+
+
+def apply_theme(app: QApplication, cache_dir: Path | None = None) -> None:
+    """Install the app-wide sheet. Call once, after the palette is settled."""
+    directory = cache_dir if cache_dir is not None else resolve_state_dir() / "ui-marks"
+    app.setStyleSheet(build_stylesheet(app.palette(), write_arrow_marks(app.palette(), directory)))

@@ -107,6 +107,7 @@ from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging, log
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
+from pixelup.theme import apply_theme
 from pixelup.ui_common import (
     apply_palette_fixes,
     use_regular_spacing,
@@ -708,6 +709,9 @@ class MainWindow(QMainWindow):
         self.open_images_button = QPushButton("Open")
         self.open_images_button.clicked.connect(self._open_dialog)
         self.remove_image_button = QPushButton("Remove")
+        # Taking images out of the collection is the destructive path's trigger, so
+        # it is outlined rather than filled (theme.py carries the two roles).
+        self.remove_image_button.setProperty("role", "danger")
         self.remove_image_button.clicked.connect(self._remove_selected_image)
         button_layout.addWidget(self.open_images_button)
         button_layout.addWidget(self.remove_image_button)
@@ -870,6 +874,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
         self.queue_selected_button = QPushButton("Queue selected image")
+        # The one action this window is for: queue what is selected, with the
+        # parameters beside it. Every other queue button is a variant of it.
+        self.queue_selected_button.setProperty("role", "primary")
         self.queue_selected_button.clicked.connect(self._queue_selected_image)
         self.queue_selected_all_models_button = QPushButton("Queue selected image with all models")
         self.queue_selected_all_models_button.clicked.connect(self._queue_selected_image_all_models)
@@ -1777,6 +1784,10 @@ def build_app(
     # removed: Qt re-derives the palette after the signal and silently undid the
     # ButtonText fix, so it only looked like it worked.
     apply_palette_fixes(app)
+    # The app's own appearance, installed once the palette is settled: one set of
+    # control sizes and a state for every control, drawn from the palette so the
+    # OS theme still decides the colours (see theme.py).
+    apply_theme(app)
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
     # No custom macOS menu bar: PixelUp keeps Qt's default, which has no Edit menu, so the

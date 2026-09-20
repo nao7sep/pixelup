@@ -32,7 +32,10 @@ def test_quit_dialog_button_order_and_styling(qapp: QApplication) -> None:
         cancel = next(b for b in dialog.findChildren(QPushButton) if b.text() == "Cancel")
         quit_button = next(b for b in dialog.findChildren(QPushButton) if b.text() == "Quit")
         assert cancel.isDefault()  # Enter/closes-safe defaults to Cancel
-        assert quit_button.styleSheet()  # danger styling applied to the destructive action
+        # The destructive action declares its role; the app-wide sheet (theme.py)
+        # draws it. It used to carry its own style sheet, which is why this asked
+        # for a non-empty styleSheet() before.
+        assert quit_button.property("role") == "danger-confirm"
         assert dialog.windowTitle() in {
             label.text() for label in dialog.findChildren(QLabel)
         }
