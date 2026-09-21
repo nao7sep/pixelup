@@ -10,8 +10,18 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QLineEdit, QPushButton
+from PySide6.QtGui import QColor, QImage, QPalette
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
+    QLineEdit,
+    QPushButton,
+    QRadioButton,
+    QWidget,
+)
 
 from pixelup import theme
 
@@ -97,14 +107,18 @@ def test_the_sheet_names_no_colour_of_its_own_beyond_the_destructive_red() -> No
         literals = set(re.findall(r"#[0-9a-fA-F]{3,8}\b", sheet))
         # The accent's pressed step is computed rather than named, because a style
         # sheet cannot darken a colour; it still comes from palette(highlight).
-        allowed = set(theme.danger_colours(palette).values()) | {theme.accent_pressed(palette)}
+        allowed = (
+            set(theme.danger_colours(palette).values())
+            | set(theme.accent_disabled(palette).values())
+            | {theme.accent_pressed(palette)}
+        )
         assert literals <= allowed, f"unexpected literal colours: {sorted(literals - allowed)}"
         assert "palette(" in sheet
 
 
 def test_one_height_for_every_one_line_control(qapp: QApplication, tmp_path) -> None:
     """A text box, a number box, a combo and a button beside them line up."""
-    marks = theme.write_arrow_marks(qapp.palette(), tmp_path / "marks")
+    marks = theme.write_control_marks(qapp.palette(), tmp_path / "marks")
     qapp.setStyleSheet(theme.build_stylesheet(qapp.palette(), marks))
     try:
         widgets = [QLineEdit(), QComboBox(), QDoubleSpinBox(), QPushButton("Go")]
@@ -118,30 +132,39 @@ def test_one_height_for_every_one_line_control(qapp: QApplication, tmp_path) -> 
         qapp.setStyleSheet("")
 
 
-def test_fields_are_left_to_the_toolkit_when_their_marks_cannot_be_written() -> None:
-    """A field with no arrow is worse than a native one, so the sheet backs off."""
+def test_marked_controls_are_left_to_the_toolkit_when_their_marks_cannot_be_written() -> None:
+    """A field with no arrow, or a tick box with no tick, is worse than a native one.
+
+    Styling either of these stops the toolkit drawing its own mark, so the sheet
+    backs off from all of them together rather than shipping a blank blue square.
+    """
     sheet = theme.build_stylesheet(LIGHT, marks=None)
     assert "QComboBox" not in sheet
     assert "QLineEdit" not in sheet
+    assert "QCheckBox" not in sheet
+    assert "QRadioButton" not in sheet
     assert "QPushButton" in sheet
 
 
-def test_arrow_marks_are_written_per_theme(tmp_path) -> None:
-    marks = theme.write_arrow_marks(DARK, tmp_path / "marks")
+def test_control_marks_are_written_per_theme(tmp_path) -> None:
+    marks = theme.write_control_marks(DARK, tmp_path / "marks")
     assert marks is not None
-    assert set(marks) == {"down", "down-disabled", "up", "up-disabled"}
+    assert set(marks) == {
+        "down", "down-disabled", "up", "up-disabled",
+        "check", "check-disabled", "radio", "radio-disabled",
+    }
     for path in marks.values():
         assert path.exists() and path.stat().st_size > 0
     # The mark is the theme's own text colour, so the two themes cannot share a file.
-    light = theme.write_arrow_marks(LIGHT, tmp_path / "marks")
+    light = theme.write_control_marks(LIGHT, tmp_path / "marks")
     assert light is not None
     assert set(light.values()).isdisjoint(set(marks.values()))
 
 
-def test_write_arrow_marks_reports_failure_instead_of_raising(tmp_path) -> None:
+def test_write_control_marks_reports_failure_instead_of_raising(tmp_path) -> None:
     blocked = tmp_path / "blocked"
     blocked.write_text("not a directory")
-    assert theme.write_arrow_marks(LIGHT, blocked / "marks") is None
+    assert theme.write_control_marks(LIGHT, blocked / "marks") is None
 
 
 def test_every_button_role_answers_a_press_and_a_disable(qapp: QApplication, tmp_path) -> None:
@@ -153,7 +176,7 @@ def test_every_button_role_answers_a_press_and_a_disable(qapp: QApplication, tmp
     switch off while a job runs on the selected image — drew exactly as it does
     when it is live.
     """
-    marks = theme.write_arrow_marks(qapp.palette(), tmp_path / "marks")
+    marks = theme.write_control_marks(qapp.palette(), tmp_path / "marks")
     qapp.setStyleSheet(theme.build_stylesheet(qapp.palette(), marks))
     try:
         roles = (("role", "primary"), ("role", "danger"), ("role", "danger-confirm"), (None, None))
@@ -184,3 +207,147 @@ def test_every_button_role_answers_a_press_and_a_disable(qapp: QApplication, tmp
                 button.deleteLater()
     finally:
         qapp.setStyleSheet("")
+
+
+def _rendered(qapp: QApplication, tmp_path, *widgets) -> QImage:
+    """Draw ``widgets`` in a row on the app's own window colour, and return the image.
+
+    Parented and filled, because an indicator's corners have to be read against
+    the surface behind them and an unparented widget grabs onto nothing.
+    """
+    marks = theme.write_control_marks(qapp.palette(), tmp_path / "marks")
+    qapp.setStyleSheet(theme.build_stylesheet(qapp.palette(), marks))
+    page = QWidget()
+    page.setAutoFillBackground(True)
+    row = QHBoxLayout(page)
+    row.setContentsMargins(0, 0, 0, 0)
+    for widget in widgets:
+        row.addWidget(widget)
+    page.resize(520, 40)
+    page.ensurePolished()
+    for widget in widgets:
+        widget.ensurePolished()
+    page.show()
+    qapp.processEvents()
+    image = page.grab().toImage()
+    page.close()
+    page.deleteLater()
+    return image
+
+
+def _indicator_box(widget: QWidget) -> tuple[int, int, int]:
+    """The indicator's own square inside ``widget``: left edge, top edge, side."""
+    side = theme.INDICATOR_SIZE + 2 * theme.BORDER_WIDTH
+    return widget.x(), widget.y() + (widget.height() - side) // 2, side
+
+
+def _distance(first: QColor, second: QColor) -> int:
+    """How far apart two colours are, on their furthest channel."""
+    return max(
+        abs(first.red() - second.red()),
+        abs(first.green() - second.green()),
+        abs(first.blue() - second.blue()),
+    )
+
+
+def _near(first: QColor, second: QColor, tolerance: int = 24) -> bool:
+    return _distance(first, second) <= tolerance
+
+
+def test_a_set_tick_box_carries_a_tick_and_not_a_block_of_accent(
+    qapp: QApplication, tmp_path
+) -> None:
+    """The defect this exists for: once the sheet borders the indicator, Qt stops
+    drawing the tick, and a checked box became a plain square of the accent.
+
+    Read as two colours rather than one, because in the light theme the ink that
+    goes on the accent is the same white as an empty box's own face — it is only
+    a mark when it appears inside a box that is filled.
+    """
+    on, off = QCheckBox("On"), QCheckBox("Off")
+    on.setChecked(True)
+    image = _rendered(qapp, tmp_path, on, off)
+    accent = qapp.palette().color(QPalette.ColorRole.Highlight)
+    ink = qapp.palette().color(QPalette.ColorRole.HighlightedText)
+
+    def count(widget: QWidget, colour: QColor, inset: int = 0) -> int:
+        left, top, side = _indicator_box(widget)
+        return sum(
+            _near(image.pixelColor(left + x, top + y), colour)
+            for y in range(inset, side - inset)
+            for x in range(inset, side - inset)
+        )
+
+    assert count(on, accent) > 0, "a set box should be filled with the accent"
+    # Inside the rounded corners, which show the surface behind the box and would
+    # otherwise be counted as the white a light theme's ink happens to be.
+    assert count(on, ink, inset=4) > 0, "a set box should carry a tick"
+    assert count(off, accent) == 0, "an empty box should not be filled"
+
+
+def test_a_chosen_radio_is_a_circle_rather_than_a_rounded_square(
+    qapp: QApplication, tmp_path
+) -> None:
+    """Its radius used to be half the box's own side and not half the border box's,
+    so the accent reached into the corners and the mark read as a square."""
+    radio = QRadioButton("Chosen")
+    radio.setChecked(True)
+    image = _rendered(qapp, tmp_path, radio)
+    accent = qapp.palette().color(QPalette.ColorRole.Highlight)
+
+    left, top, side = _indicator_box(radio)
+    corners = [
+        image.pixelColor(left, top),
+        image.pixelColor(left + side - 1, top),
+        image.pixelColor(left, top + side - 1),
+        image.pixelColor(left + side - 1, top + side - 1),
+    ]
+    assert not any(_near(pixel, accent) for pixel in corners), "the corners are filled"
+    assert _near(image.pixelColor(left + side // 2, top + 2), accent), "the ring is missing"
+
+
+def test_a_switched_off_control_keeps_an_edge_to_be_seen_by(
+    qapp: QApplication, tmp_path
+) -> None:
+    """Qt's midlight sits within two points of the window in the dark theme, so a
+    button bordered with it had no visible edge at all once disabled."""
+    live, off = QPushButton("Queue"), QPushButton("Queue")
+    off.setEnabled(False)
+    image = _rendered(qapp, tmp_path, live, off)
+
+    def edge_against_fill(button: QPushButton) -> int:
+        border = image.pixelColor(button.x() + button.width() // 2, button.y())
+        # Inside the left padding rather than mid-width, which is where the label
+        # is: sampling the glyph would compare the border against the text.
+        fill = image.pixelColor(button.x() + 6, button.y() + button.height() // 2)
+        return _distance(border, fill)
+
+    # Measured against the app's ordinary border rather than a chosen number, so
+    # the floor follows whatever the OS palette makes a border look like. Not
+    # against the live button beside it, which takes the window's focus and draws
+    # its edge in the accent.
+    palette = qapp.palette()
+    ordinary = _distance(
+        palette.color(QPalette.ColorRole.Mid), palette.color(QPalette.ColorRole.Button)
+    )
+    assert ordinary > 0, "this palette draws no button border at all"
+    assert edge_against_fill(live) > 0
+    assert edge_against_fill(off) >= ordinary * 0.8
+
+
+def test_a_switched_off_primary_still_reads_as_a_filled_button(
+    qapp: QApplication, tmp_path
+) -> None:
+    """It used to be filled and bordered with midlight, which in the dark theme is
+    the window colour — so the one action a surface is for vanished when it was
+    unavailable."""
+    off = QPushButton("Queue selected image")
+    off.setProperty("role", "primary")
+    off.setEnabled(False)
+    image = _rendered(qapp, tmp_path, off)
+
+    window = qapp.palette().color(QPalette.ColorRole.Window)
+    fill = image.pixelColor(off.x() + 6, off.y() + off.height() // 2)
+    assert not _near(fill, window, tolerance=8), f"the disabled fill is the window: {fill.name()}"
+    # And it is still the accent, receded — not a grey that could be any button.
+    assert QColor(fill).saturation() > 0

@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QColor, QPainter, QPalette, QPixmap, QPolygon
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QColor, QPainter, QPalette, QPen, QPixmap, QPolygon, QPolygonF
 from PySide6.QtWidgets import QApplication
 
 from pixelup.config import resolve_state_dir
@@ -35,6 +35,9 @@ INNER_RADIUS = 4
 # The combo/spin mark, in logical pixels.
 ARROW_WIDTH = 9
 ARROW_HEIGHT = 6
+# A tick's or a radio's box, inside its own border. Both take the same box so a
+# column of checkboxes and radios lines up on one edge.
+INDICATOR_SIZE = 14
 BORDER_WIDTH = 1
 # Qt's min-height is the content box, so the border is subtracted to make the
 # named height the one the control actually occupies.
@@ -79,6 +82,20 @@ def accent_pressed(palette: QPalette) -> str:
     the direction the standard button's own press already moves.
     """
     return palette.color(QPalette.ColorRole.Highlight).darker(118).name()
+
+
+def accent_disabled(palette: QPalette) -> dict[str, str]:
+    """The accent receded, for a primary control that is switched off.
+
+    A switched-off primary still has a shape and still says which action it is —
+    the same argument the destructive red already makes for itself. Qt's own
+    ``midlight`` was doing neither: it resolves to within two points of the
+    window in the dark theme, so the button it filled had no visible edge at all.
+    """
+    window = palette.color(QPalette.ColorRole.Window)
+    fill = _receded(palette.color(QPalette.ColorRole.Highlight), window)
+    ink = _receded(palette.color(QPalette.ColorRole.HighlightedText), QColor(fill))
+    return {"fill": fill, "ink": ink}
 
 
 def danger_colours(palette: QPalette) -> dict[str, str]:
@@ -136,14 +153,55 @@ def _arrow_pixmap(colour: QColor, *, pointing_down: bool) -> QPixmap:
     return pixmap
 
 
-def write_arrow_marks(palette: QPalette, directory: Path) -> dict[str, Path] | None:
-    """Write the combo/spin arrow marks for this theme, or None if they cannot be.
+def _check_pixmap(colour: QColor) -> QPixmap:
+    """The tick inside a set checkbox, drawn at 2x for a sharp mark.
 
-    A style sheet cannot draw a triangle — its arrow sub-controls take an image —
-    and an image cannot read a palette role, so the mark is rendered here in the
-    theme's own text colour and cached beside the app's state. If that write
-    fails, the caller leaves those fields unstyled so the toolkit keeps drawing
-    them, arrows included, rather than showing a field with no mark at all.
+    A stroke rather than a filled glyph, so it stays a tick at any size and needs
+    no font to be installed.
+    """
+    scale = 2
+    pixmap = QPixmap(INDICATOR_SIZE * scale, INDICATOR_SIZE * scale)
+    pixmap.setDevicePixelRatio(scale)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(colour)
+    pen.setWidthF(2.0)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.drawPolyline(
+        QPolygonF([QPointF(3.0, 7.3), QPointF(5.7, 10.0), QPointF(11.0, 4.3)])
+    )
+    painter.end()
+    return pixmap
+
+
+def _dot_pixmap(colour: QColor) -> QPixmap:
+    """The dot inside a chosen radio, on the same box the tick uses."""
+    scale = 2
+    pixmap = QPixmap(INDICATOR_SIZE * scale, INDICATOR_SIZE * scale)
+    pixmap.setDevicePixelRatio(scale)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(colour)
+    centre = INDICATOR_SIZE / 2
+    painter.drawEllipse(QPointF(centre, centre), 3.0, 3.0)
+    painter.end()
+    return pixmap
+
+
+def write_control_marks(palette: QPalette, directory: Path) -> dict[str, Path] | None:
+    """Write every mark a style sheet cannot draw for this theme, or None if it cannot.
+
+    A style sheet draws no triangle, tick or dot — those sub-controls take an
+    image — and an image cannot read a palette role, so each mark is rendered here
+    in the theme's own colours and cached beside the app's state. Once a sheet
+    styles one of these controls the toolkit stops drawing its mark, so a failed
+    write leaves every one of them unstyled instead: a native combo is better than
+    one with no arrow, and a native checkbox better than a blank blue square.
     """
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -155,6 +213,18 @@ def write_arrow_marks(palette: QPalette, directory: Path) -> dict[str, Path] | N
                 colour = palette.color(role)
                 path = directory / f"arrow-{name}{state}-{suffix}.png"
                 if not _arrow_pixmap(colour, pointing_down=pointing_down).save(str(path), "PNG"):
+                    return None
+                marks[f"{name}{state}"] = path
+
+        # A set indicator is filled with the accent, so its mark is the ink that
+        # goes on the accent — and receded with the fill when the control is off,
+        # so the tick fades with the box rather than standing out of a dead one.
+        ink = palette.color(QPalette.ColorRole.HighlightedText)
+        ink_disabled = QColor(accent_disabled(palette)["ink"])
+        for name, draw in (("check", _check_pixmap), ("radio", _dot_pixmap)):
+            for state, colour in (("", ink), ("-disabled", ink_disabled)):
+                path = directory / f"{name}{state}-{suffix}.png"
+                if not draw(colour).save(str(path), "PNG"):
                     return None
                 marks[f"{name}{state}"] = path
         return marks
@@ -239,14 +309,67 @@ QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
 """
 
 
+def _indicator_rules(palette: QPalette, marks: dict[str, Path]) -> str:
+    """Ticks and radios, including the marks, which only exist when they were written."""
+    off = accent_disabled(palette)
+    radius = INDICATOR_SIZE // 2 + BORDER_WIDTH
+    return f"""
+/* Ticks and radios take a comfortable hit target and the accent when set. Once a
+   sheet gives the indicator a border the toolkit stops drawing the tick and the
+   dot inside it, so both are handed in as marks — without them a set checkbox is
+   a blank square of accent, which is what this app shipped. */
+QCheckBox, QRadioButton {{
+    spacing: 8px;
+    min-height: {COMPACT_HEIGHT}px;
+}}
+QCheckBox:disabled, QRadioButton:disabled {{
+    color: palette(placeholder-text);
+}}
+QCheckBox::indicator, QRadioButton::indicator {{
+    width: {INDICATOR_SIZE}px;
+    height: {INDICATOR_SIZE}px;
+    border: {BORDER_WIDTH}px solid palette(mid);
+    background-color: palette(base);
+}}
+QCheckBox::indicator {{ border-radius: {INNER_RADIUS}px; }}
+/* Half the box plus its border, so the ring is a circle rather than the rounded
+   square a smaller radius drew. */
+QRadioButton::indicator {{ border-radius: {radius}px; }}
+QCheckBox::indicator:hover:!disabled, QRadioButton::indicator:hover:!disabled {{
+    border-color: palette(highlight);
+}}
+QCheckBox:focus::indicator, QRadioButton:focus::indicator {{
+    border-color: palette(highlight);
+}}
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+    background-color: palette(highlight);
+    border-color: palette(highlight);
+}}
+QCheckBox::indicator:checked {{ image: url({marks["check"].as_posix()}); }}
+QRadioButton::indicator:checked {{ image: url({marks["radio"].as_posix()}); }}
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
+    background-color: palette(window);
+}}
+QCheckBox::indicator:checked:disabled, QRadioButton::indicator:checked:disabled {{
+    background-color: {off["fill"]};
+    border-color: {off["fill"]};
+}}
+QCheckBox::indicator:checked:disabled {{ image: url({marks["check-disabled"].as_posix()}); }}
+QRadioButton::indicator:checked:disabled {{ image: url({marks["radio-disabled"].as_posix()}); }}
+"""
+
+
 def build_stylesheet(palette: QPalette, marks: dict[str, Path] | None = None) -> str:
     """The app-wide sheet. Every colour is a palette reference except DANGER.
 
-    Without ``marks`` the fields are left alone entirely, so the toolkit keeps
-    drawing them and their arrows; everything else is styled either way.
+    Without ``marks`` the fields, ticks and radios are left alone entirely, so the
+    toolkit keeps drawing them and their marks; everything else is styled either
+    way.
     """
     danger = danger_colours(palette)
+    off = accent_disabled(palette)
     fields = _field_rules(marks) if marks else ""
+    indicators = _indicator_rules(palette, marks) if marks else ""
     return f"""
 /* Buttons. A standard button is the app's utility role: the palette's own button
    surface, a visible edge in both themes, and its own hover, pressed, focus and
@@ -268,9 +391,12 @@ QPushButton:pressed:!disabled {{
 QPushButton:focus {{
     border-color: palette(highlight);
 }}
+/* A switched-off button keeps its edge and recedes by its label. Qt's own
+   midlight sits within two points of the window in the dark theme, so the border
+   it used to draw here simply was not there. */
 QPushButton:disabled {{
     color: palette(placeholder-text);
-    border-color: palette(midlight);
+    border-color: palette(mid);
 }}
 
 /* The primary role: the one action a surface is really for. It takes the OS
@@ -292,9 +418,9 @@ QPushButton[role="primary"]:pressed:!disabled {{
     border-color: palette(text);
 }}
 QPushButton[role="primary"]:disabled {{
-    background-color: palette(midlight);
-    border-color: palette(midlight);
-    color: palette(placeholder-text);
+    background-color: {off["fill"]};
+    border-color: {off["fill"]};
+    color: {off["ink"]};
 }}
 
 /* Destructive actions, in the fleet's two roles: a trigger that opens a
@@ -377,35 +503,7 @@ QTableWidget::item, QTableView::item {{
     padding: 4px 6px;
 }}
 
-/* Ticks and radios take a comfortable hit target and the accent when set. */
-QCheckBox, QRadioButton {{
-    spacing: 8px;
-    min-height: {COMPACT_HEIGHT}px;
-}}
-QCheckBox::indicator, QRadioButton::indicator {{
-    width: 16px;
-    height: 16px;
-}}
-QCheckBox::indicator {{
-    border: {BORDER_WIDTH}px solid palette(mid);
-    border-radius: {INNER_RADIUS}px;
-    background-color: palette(base);
-}}
-QCheckBox::indicator:checked {{
-    background-color: palette(highlight);
-    border-color: palette(highlight);
-}}
-QRadioButton::indicator {{
-    border: {BORDER_WIDTH}px solid palette(mid);
-    border-radius: 8px;
-    background-color: palette(base);
-}}
-/* The chosen radio reads as a ring of the accent around the base, which stays
-   legible on both surfaces where a filled disc of the accent does not. */
-QRadioButton::indicator:checked {{
-    border: 5px solid palette(highlight);
-}}
-
+{indicators}
 /* A separator is the app's own hairline, in the palette's mid tone, so it stays
    visible in both themes — the band lines in dialogs are drawn with these. */
 QFrame[frameShape="4"], QFrame[frameShape="5"] {{
@@ -420,4 +518,5 @@ QFrame[frameShape="4"], QFrame[frameShape="5"] {{
 def apply_theme(app: QApplication, cache_dir: Path | None = None) -> None:
     """Install the app-wide sheet. Call once, after the palette is settled."""
     directory = cache_dir if cache_dir is not None else resolve_state_dir() / "ui-marks"
-    app.setStyleSheet(build_stylesheet(app.palette(), write_arrow_marks(app.palette(), directory)))
+    marks = write_control_marks(app.palette(), directory)
+    app.setStyleSheet(build_stylesheet(app.palette(), marks))

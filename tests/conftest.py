@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QEventLoop
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QStyleFactory
 
 from pixelup.backup_store import close_backup_store
 from pixelup.model_management import MANAGED_ARTIFACT_NAMES
@@ -105,6 +105,11 @@ def qapp() -> QApplication:
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
+    # The style build_app installs. Control geometry and the palette both come
+    # from it, so a test that measures what the app draws has to measure it under
+    # the same style rather than the platform default.
+    if "Fusion" in QStyleFactory.keys():
+        app.setStyle("Fusion")
     return app
 
 
