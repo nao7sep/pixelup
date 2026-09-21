@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea
 
 from pixelup.about_dialog import AboutDialog
@@ -123,3 +124,26 @@ def test_the_scroll_bar_never_takes_a_column_out_of_the_body(
 
     assert dialog.body.width() == dialog.body_scroll.viewport().width()
     assert dialog.body_scroll.horizontalScrollBar().isVisible() is False
+
+
+def test_no_dialog_body_is_a_focus_target(dialog: DialogShell) -> None:
+    # The body reaches the dialog's own edges, so any focus treatment it carried
+    # would draw a second border just inside the window — which is exactly what a
+    # scroll region that was also a focus target drew here. The controls inside
+    # keep their own focus; the region itself takes none.
+    assert dialog.body_scroll.focusPolicy() == Qt.FocusPolicy.NoFocus
+
+
+def test_every_dialog_opens_on_a_control_it_chose(
+    dialog: DialogShell, qapp: QApplication
+) -> None:
+    # Left unsaid, Qt hands focus to whatever comes first in the tab order, which
+    # is rarely what the reader wants next and never a deliberate choice
+    # (modal-dialog-conventions).
+    dialog.show()
+    qapp.processEvents()
+
+    focused = dialog.focusWidget()
+    assert focused is not None, "nothing takes focus when this dialog opens"
+    assert focused is not dialog.body_scroll
+    assert dialog.isAncestorOf(focused)

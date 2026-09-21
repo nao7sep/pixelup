@@ -41,4 +41,6 @@ class QuitConfirmDialog(DialogShell):
         # right; the footer band's own stretch right-aligns the pair.
         self.add_footer_widget(cancel_button)
         self.add_footer_widget(quit_button)
+        # The safe action, so a reflexive Enter or Space never quits.
+        self.set_initial_focus(cancel_button)
         self.fit()

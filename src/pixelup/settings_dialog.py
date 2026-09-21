@@ -124,6 +124,7 @@ class SettingsDialog(DialogShell):
         self.body_layout.addWidget(self.error_message)
         self.body_layout.addStretch()
         self.add_footer_widget(self.buttons)
+        self.set_initial_focus(self.font_family)
         self.fit()
 
         for changed in (

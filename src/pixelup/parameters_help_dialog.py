@@ -9,6 +9,12 @@ from PySide6.QtWidgets import (
 from pixelup.dialog_shell import FORM_WIDTH, DialogShell
 from pixelup.ui_common import REGULAR_SPACING, secondary_label
 
+# This dialog is one long manual, and opening at the height of the whole thing
+# makes a reference surface as tall as the display allows. It takes a reading
+# height instead and scrolls, which is what the entries were always going to do
+# on a smaller screen anyway.
+_BODY_HEIGHT = 480
+
 # One entry per Parameters-panel control, in the panel's own order. This dialog is
 # the single home for parameter explanations — the panel itself carries none, so
 # it stays narrow enough for the window to fit small screens.
@@ -71,7 +77,7 @@ class ParametersHelpDialog(DialogShell):
             "Parameters help",
             parent,
             width=FORM_WIDTH,
-            passive_body_name="Parameter help",
+            body_height_limit=_BODY_HEIGHT,
         )
 
         # The shell's body is the sole scroll region and the entries are all of it,
@@ -96,4 +102,5 @@ class ParametersHelpDialog(DialogShell):
         # Escape with a single, unambiguous close path.
         buttons.rejected.connect(self.reject)
         self.add_footer_widget(buttons)
+        self.set_initial_focus(buttons.button(QDialogButtonBox.StandardButton.Close))
         self.fit()

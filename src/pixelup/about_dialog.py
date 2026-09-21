@@ -77,6 +77,7 @@ class AboutDialog(DialogShell):
         # Escape with a single, unambiguous close path.
         buttons.rejected.connect(self.reject)
         self.add_footer_widget(buttons)
+        self.set_initial_focus(buttons.button(QDialogButtonBox.StandardButton.Close))
         self.fit()
 
     def _open_external(self, url: str, destination: str) -> None:

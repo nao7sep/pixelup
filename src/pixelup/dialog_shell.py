@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.ui_common import DIALOG_MARGIN, DIALOG_SPACING, REGULAR_SPACING
-from pixelup.widgets import PassiveScrollArea
 
 # The share of the screen's working area a whole dialog may take — the title bar
 # the OS draws above it included, which is what the allowance below stands in for
@@ -57,7 +56,7 @@ class DialogShell(QDialog):
         parent: QWidget | None = None,
         *,
         width: int,
-        passive_body_name: str | None = None,
+        body_height_limit: int | None = None,
     ) -> None:
         # Dialog + exec() produces an ordinary titled native window on macOS.
         # QDialog.open() chooses the sheet presentation instead, hiding the native
@@ -67,6 +66,7 @@ class DialogShell(QDialog):
         self.setWindowTitle(title)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._width = width
+        self._body_height_limit = body_height_limit
 
         outer = QVBoxLayout(self)
         # No margins out here: each band carries its own padding, so the body's
@@ -81,17 +81,16 @@ class DialogShell(QDialog):
         )
         self.body_layout.setSpacing(DIALOG_SPACING)
 
-        # An informational body opts into the shared keyboard-scroll owner; a form
-        # keeps its fields as the focus and keyboard owners, so its scroll region
-        # takes no focus of its own (app-chrome-conventions).
-        if passive_body_name is not None:
-            self.body_scroll: QScrollArea = PassiveScrollArea(accessible_name=passive_body_name)
-        else:
-            self.body_scroll = QScrollArea()
-            self.body_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.body_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            self.body_scroll.setWidgetResizable(True)
-            self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # The body takes no focus of its own. It reaches the dialog's own edges, so
+        # any focus treatment it carried would draw a second border just inside the
+        # window — which is what a scroll region that was also a focus target did
+        # here. The controls inside it keep their own focus, as they do in the
+        # Avalonia apps, whose dialog bodies are not focus targets either.
+        self.body_scroll = QScrollArea()
+        self.body_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.body_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.body_scroll.setWidget(self._body)
         outer.addWidget(self.body_scroll)
 
@@ -123,6 +122,15 @@ class DialogShell(QDialog):
         """Append an action to the footer band, left to right."""
         self.footer_layout.addWidget(widget)
 
+    def set_initial_focus(self, widget: QWidget) -> None:
+        """Name what the dialog opens with focus on.
+
+        Left unsaid, Qt hands it to whatever comes first in the tab order, which is
+        rarely what the reader wants next — and never a deliberate choice
+        (modal-dialog-conventions).
+        """
+        widget.setFocus(Qt.FocusReason.OtherFocusReason)
+
     def fit(self) -> None:
         """Settle the chosen width and the body's bound. Call once the bands are filled.
 
@@ -139,6 +147,10 @@ class DialogShell(QDialog):
         chrome = self._footer_line.height() + self._footer.sizeHint().height() + frame
         limit = int(work_height * DIALOG_HEIGHT_FRACTION) - _DECORATION_ALLOWANCE
         cap = max(MIN_BODY_HEIGHT, limit - chrome)
+        # A surface may ask for less than the share — a long reference that would
+        # otherwise open at the height of its whole manual — but never for more.
+        if self._body_height_limit is not None:
+            cap = min(cap, self._body_height_limit)
 
         # A wrapped label answers a different height at every width, and its
         # ``sizeHint`` answers for none of them — it reports the shape Qt would

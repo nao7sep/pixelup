@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QFontMetrics, QPalette
 from PySide6.QtWidgets import (
     QFrame,
@@ -115,7 +115,7 @@ class ManagedModelsDialog(DialogShell):
 
         self._manager.changed.connect(self._render)
         self._render()
-        self.primary_button.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.set_initial_focus(self.primary_button)
 
     def _summary_text(self) -> str:
         if not self._required_artifacts:

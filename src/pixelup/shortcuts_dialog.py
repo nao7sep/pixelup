@@ -24,12 +24,7 @@ class ShortcutsDialog(DialogShell):
     """Named catalogue of every shortcut PixelUp binds."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(
-            "Keyboard shortcuts",
-            parent,
-            width=FORM_WIDTH,
-            passive_body_name="Keyboard shortcuts",
-        )
+        super().__init__("Keyboard shortcuts", parent, width=FORM_WIDTH)
 
         introduction = secondary_label("Use these shortcuts anywhere in PixelUp.")
         self.body_layout.addWidget(introduction)
@@ -74,6 +69,7 @@ class ShortcutsDialog(DialogShell):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         self.add_footer_widget(buttons)
+        self.set_initial_focus(buttons.button(QDialogButtonBox.StandardButton.Close))
         self.fit()
 
 

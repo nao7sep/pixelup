@@ -26,12 +26,7 @@ class MessageDialog(DialogShell):
         user_hint: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(
-            title,
-            parent,
-            width=NOTICE_WIDTH,
-            passive_body_name="Message details",
-        )
+        super().__init__(title, parent, width=NOTICE_WIDTH)
 
         self.message_label = QLabel(user_message)
         self.message_label.setWordWrap(True)
@@ -45,6 +40,7 @@ class MessageDialog(DialogShell):
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         self.buttons.rejected.connect(self.reject)
         self.add_footer_widget(self.buttons)
+        self.set_initial_focus(self.buttons.button(QDialogButtonBox.StandardButton.Close))
         self.fit()
 
 
