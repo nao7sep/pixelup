@@ -6,7 +6,6 @@ from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
-    QDialog,
     QDialogButtonBox,
     QGridLayout,
     QLabel,
@@ -16,8 +15,9 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, MIN_CONCURRENT_JOBS, AppConfig
+from pixelup.dialog_shell import FORM_WIDTH, DialogShell
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
-from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing, use_regular_spacing
+from pixelup.ui_common import secondary_label, use_regular_spacing
 from pixelup.widgets import NoWheelSpinBox
 
 # A settled column width for the value field so the control and its wrapped
@@ -45,7 +45,7 @@ def _captioned(control: QWidget, caption: str) -> QWidget:
     return container
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(DialogShell):
     """Modal settings editor: everything PixelUp persists that the main window does not show.
 
     One home per thing. The image-processing parameters live in the main window's
@@ -67,15 +67,9 @@ class SettingsDialog(QDialog):
         *,
         try_save: Callable[[AppConfig], bool] | None = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__("Settings", parent, width=FORM_WIDTH)
         self._initial = config
         self._try_save = try_save
-        self.setWindowTitle("Settings")
-        self.setModal(True)
-
-        layout = QVBoxLayout(self)
-        use_dialog_spacing(layout)
-        layout.addWidget(title_label("Settings"))
 
         form_widget = QWidget()
         form = QGridLayout(form_widget)
@@ -126,11 +120,11 @@ class SettingsDialog(QDialog):
         self.buttons.accepted.connect(self._save)
         self.buttons.rejected.connect(self.reject)
 
-        layout.addWidget(form_widget, 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(self.error_message)
-        layout.addWidget(self.buttons)
-        self.adjustSize()
-        self.setMinimumSize(self.sizeHint())
+        self.body_layout.addWidget(form_widget, 0, Qt.AlignmentFlag.AlignLeft)
+        self.body_layout.addWidget(self.error_message)
+        self.body_layout.addStretch()
+        self.add_footer_widget(self.buttons)
+        self.fit()
 
         for changed in (
             self.concurrent.valueChanged,
@@ -169,6 +163,8 @@ class SettingsDialog(QDialog):
             )
             self.error_message.setAccessibleName(self.error_message.text())
             self.error_message.show()
-            self.adjustSize()
+            # The message is body content, so the body just grew; re-measure it
+            # against the same bound rather than letting Qt size past the screen.
+            self.fit()
             return
         self.accept()

@@ -3,16 +3,15 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtWidgets import (
-    QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QVBoxLayout,
     QWidget,
 )
 
 from pixelup import __version__
+from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
 from pixelup.session_log import log
 from pixelup.ui_common import open_url, secondary_label, title_label, use_regular_spacing
 from pixelup.widgets import OperationResult
@@ -21,27 +20,20 @@ PROJECT_URL = "https://github.com/nao7sep/pixelup"
 ISSUES_URL = "https://github.com/nao7sep/pixelup/issues"
 
 
-class AboutDialog(QDialog):
+class AboutDialog(DialogShell):
     def __init__(
         self,
         parent: QWidget | None = None,
         *,
         opener: Callable[[str], None] = open_url,
     ) -> None:
-        super().__init__(parent)
+        super().__init__("About PixelUp", parent, width=NOTICE_WIDTH)
         self._opener = opener
-        self.setWindowTitle("About PixelUp")
-        self.setModal(True)
-        self.setMinimumWidth(400)
 
-        layout = QVBoxLayout(self)
-        # A graduated rhythm rather than the uniform default: the outer margins
-        # give the surface room, spacing is added explicitly per section so the
-        # heading groups with its version and the sections below stay distinct.
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(0)
-
-        name = title_label("About PixelUp")
+        # The one heading a native dialog keeps. It does not repeat the window's
+        # title — it names the product, which is what an about surface is for, and
+        # carries the version beside it (modal-dialog-conventions).
+        name = title_label("PixelUp")
         version = secondary_label(f"Version {__version__}")
         copy = QLabel("Upscale local images with Real-ESRGAN in a simple desktop workflow.")
         copy.setWordWrap(True)
@@ -66,23 +58,26 @@ class AboutDialog(QDialog):
 
         meta = secondary_label("© 2026 Yoshinao Inoguchi · GNU GPL v3 or later")
 
+        # A graduated rhythm rather than the body's uniform spacing: the heading
+        # groups with its version and the sections below stay distinct.
+        self.body_layout.setSpacing(0)
+        self.body_layout.addWidget(name)
+        self.body_layout.addSpacing(4)
+        self.body_layout.addWidget(version)
+        self.body_layout.addSpacing(12)
+        self.body_layout.addWidget(copy)
+        self.body_layout.addSpacing(16)
+        self.body_layout.addWidget(links)
+        self.body_layout.addSpacing(16)
+        self.body_layout.addWidget(self.launch_result)
+        self.body_layout.addWidget(meta)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         # Close has RejectRole, so `rejected` covers both the button click and
         # Escape with a single, unambiguous close path.
         buttons.rejected.connect(self.reject)
-
-        layout.addWidget(name)
-        layout.addSpacing(4)
-        layout.addWidget(version)
-        layout.addSpacing(12)
-        layout.addWidget(copy)
-        layout.addSpacing(16)
-        layout.addWidget(links)
-        layout.addSpacing(16)
-        layout.addWidget(self.launch_result)
-        layout.addWidget(meta)
-        layout.addSpacing(16)
-        layout.addWidget(buttons)
+        self.add_footer_widget(buttons)
+        self.fit()
 
     def _open_external(self, url: str, destination: str) -> None:
         try:

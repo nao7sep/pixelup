@@ -54,8 +54,12 @@ def test_startup_failure_fits_short_copy_without_a_severity_icon(
         assert dialog.buttons.standardButtons() == QDialogButtonBox.StandardButton.Close
         dialog.show()
         qapp.processEvents()
-        assert dialog.body_scroll.height() <= dialog.body.sizeHint().height() + 20
+
+        # Authored copy this short should simply be there to read: the body opens
+        # at its own height and the bar that would otherwise imply hidden text
+        # stays away (modal-dialog-conventions).
         assert not dialog.body_scroll.verticalScrollBar().isVisible()
+        assert dialog.body.height() <= dialog.body_scroll.viewport().height()
         assert dialog.body_scroll.verticalScrollBarPolicy() == (
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
@@ -71,23 +75,24 @@ def test_startup_failure_caps_only_the_body_for_long_copy(
     try:
         dialog.show()
         qapp.processEvents()
-        assert dialog.body.sizeHint().height() > dialog.body_scroll.height()
-        assert dialog.body_scroll.height() <= 420
-        assert dialog.layout().indexOf(dialog.buttons) > dialog.layout().indexOf(
+        screen = dialog.screen() or QApplication.primaryScreen()
+
+        # The body is what gives: it runs past its viewport and scrolls, while the
+        # dialog stays inside its share of the screen and the footer stays put.
+        assert dialog.body.height() > dialog.body_scroll.viewport().height()
+        assert dialog.body_scroll.verticalScrollBar().isVisible()
+        assert dialog.height() <= screen.availableGeometry().height() * 0.85
+        assert dialog.buttons.isVisibleTo(dialog)
+
+        outer = dialog.layout()
+        assert outer.indexOf(dialog.buttons.parentWidget()) > outer.indexOf(
             dialog.body_scroll
         )
-        assert dialog.buttons.isVisibleTo(dialog)
 
-        opening_body_height = dialog.body_scroll.height()
-        dialog.resize(dialog.width(), dialog.height() + 80)
-        qapp.processEvents()
-        assert dialog.body_scroll.height() > opening_body_height
-        assert dialog.buttons.isVisibleTo(dialog)
-
-        dialog.resize(dialog.width(), dialog.height() - 140)
-        qapp.processEvents()
-        assert dialog.body_scroll.height() < opening_body_height
-        assert dialog.buttons.isVisibleTo(dialog)
+        # And the remedy for a body this long is the scroll bar, not an edge to
+        # drag: the surface is fixed, so nothing is left hanging on the user
+        # finding a handle.
+        assert dialog.minimumSize() == dialog.maximumSize() == dialog.size()
     finally:
         dialog.close()
         dialog.deleteLater()

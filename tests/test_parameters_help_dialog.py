@@ -10,7 +10,8 @@ def test_parameters_help_dialog_covers_every_parameter(qapp: QApplication) -> No
     try:
         text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
         assert dialog.windowTitle() == "Parameters help"
-        assert dialog.windowTitle() in text
+        # Named by its title bar, not again inside the body.
+        assert dialog.windowTitle() not in text
         # One entry per Parameters-panel control.
         for name in (
             "Scale",

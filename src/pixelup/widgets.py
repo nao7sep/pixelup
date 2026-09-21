@@ -123,9 +123,10 @@ class OperationResult(QFrame):
     """A persistent inline result whose severity controls behavior and palette.
 
     The owner decides where the result lives and when its consequence is resolved.
-    This widget owns only presentation. If it is hosted by a dialog, revealing new
-    content also re-measures that dialog; otherwise Qt can compress the existing
-    controls to make the previously hidden result fit.
+    This widget owns only presentation. If it is hosted by a dialog, appearing and
+    disappearing both re-measure that dialog; otherwise Qt compresses the existing
+    controls to make the previously hidden result fit, and a dismissed one leaves
+    its gap behind.
     """
 
     def __init__(
@@ -168,9 +169,7 @@ class OperationResult(QFrame):
         self._apply_severity_style(severity)
         self.show()
 
-        owner = self.window()
-        if isinstance(owner, QDialog):
-            owner.adjustSize()
+        self._remeasure_owner()
 
         if announce and message != self._announcement:
             event = (
@@ -186,6 +185,24 @@ class OperationResult(QFrame):
         self.message_label.clear()
         self.setAccessibleName("")
         self._announcement = ""
+        self._remeasure_owner()
+
+    def _remeasure_owner(self) -> None:
+        """Let the hosting dialog take its own size again, now that this changed height.
+
+        A DialogShell is bounded and fixed, so ``adjustSize`` has nothing to do
+        there — its own ``fit`` is the arithmetic that knows the screen share. The
+        method is looked up rather than imported because the shell is built out of
+        this module, so naming it here would close the circle.
+        """
+        owner = self.window()
+        if not isinstance(owner, QDialog):
+            return
+        fit = getattr(owner, "fit", None)
+        if callable(fit):
+            fit()
+            return
+        owner.adjustSize()
 
     def _apply_severity_style(self, severity: ResultSeverity) -> None:
         dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128

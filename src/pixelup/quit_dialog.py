@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
-from pixelup.ui_common import title_label, use_dialog_spacing, use_regular_spacing
+from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
 
 
 def quit_confirmation_text(active: int) -> str:
@@ -19,7 +12,7 @@ def quit_confirmation_text(active: int) -> str:
     return f"{active} {noun} will be abandoned. Quit PixelUp?"
 
 
-class QuitConfirmDialog(QDialog):
+class QuitConfirmDialog(DialogShell):
     """Confirm quitting when images are open or work is in progress.
 
     A custom dialog rather than QMessageBox: QMessageBox lays its buttons out by
@@ -30,22 +23,11 @@ class QuitConfirmDialog(QDialog):
     """
 
     def __init__(self, active: int, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Quit PixelUp?")
-        self.setModal(True)
-
-        layout = QVBoxLayout(self)
-        use_dialog_spacing(layout)
-        layout.addWidget(title_label("Quit PixelUp?"))
+        super().__init__("Quit PixelUp?", parent, width=NOTICE_WIDTH)
 
         message = QLabel(quit_confirmation_text(active))
         message.setWordWrap(True)
-        layout.addWidget(message)
-
-        footer = QWidget()
-        footer_layout = QHBoxLayout(footer)
-        use_regular_spacing(footer_layout, margins=False)
-        footer_layout.addStretch()
+        self.body_layout.addWidget(message)
 
         cancel_button = QPushButton("Cancel")
         cancel_button.setDefault(True)
@@ -56,7 +38,7 @@ class QuitConfirmDialog(QDialog):
         quit_button.clicked.connect(self.accept)
 
         # Cancel before Quit → Cancel on the left, the destructive action on the
-        # right; the stretch right-aligns the pair.
-        footer_layout.addWidget(cancel_button)
-        footer_layout.addWidget(quit_button)
-        layout.addWidget(footer)
+        # right; the footer band's own stretch right-aligns the pair.
+        self.add_footer_widget(cancel_button)
+        self.add_footer_widget(quit_button)
+        self.fit()

@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QProgressBar, QRadioButton
 
+from pixelup.dialog_shell import TABLE_WIDTH
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.model_management import (
@@ -262,7 +263,8 @@ def test_manual_surface_has_independent_actions_and_truthful_columns(
         labels = {label.text() for label in dialog.findChildren(QLabel)}
 
         assert dialog.windowTitle() == "Managed models"
-        assert "Managed models" in labels
+        # Named by its title bar, not again inside the body.
+        assert "Managed models" not in labels
         assert "Size" in labels
         assert "Download" not in labels
         assert dialog.findChildren(QRadioButton) == []
@@ -271,7 +273,7 @@ def test_manual_surface_has_independent_actions_and_truthful_columns(
         assert {button.text() for button in dialog.row_action_buttons} == {"Install"}
         assert dialog.primary_button.text() == "Install all"
 
-        footer = dialog.layout().itemAt(dialog.layout().count() - 1).layout()
+        footer = dialog.layout().itemAt(dialog.layout().count() - 1).widget().layout()
         assert footer.itemAt(1).widget() is dialog.dismiss_button
         assert footer.itemAt(2).widget() is dialog.reveal_button
         assert footer.itemAt(3).widget() is dialog.primary_button
@@ -392,9 +394,13 @@ def test_active_progress_is_reported_in_the_row_status(
         dialog.deleteLater()
 
 
-def test_dialog_columns_are_content_derived_and_window_is_native_titled(
+def test_columns_are_content_derived_inside_a_width_that_is_chosen(
     qapp: QApplication, tmp_path: Path
 ) -> None:
+    # The columns still size to their own longest text, so a status never makes
+    # them jump — but the dialog does not size to them. It takes the one chosen
+    # width for a table, which has to be wide enough to hold them
+    # (modal-dialog-conventions).
     dialog = ManagedModelsDialog(ModelManager(tmp_path))
     try:
         longest_purpose = max(
@@ -404,7 +410,8 @@ def test_dialog_columns_are_content_derived_and_window_is_native_titled(
         assert dialog.column_minimum_widths[1] >= (
             dialog.fontMetrics().horizontalAdvance(longest_purpose) + 24
         )
-        assert dialog.sizeHint().width() >= sum(dialog.column_minimum_widths)
+        assert dialog.width() == TABLE_WIDTH
+        assert dialog.width() >= sum(dialog.column_minimum_widths)
         assert dialog.windowType() == Qt.WindowType.Dialog
         assert dialog.windowModality() == Qt.WindowModality.ApplicationModal
     finally:

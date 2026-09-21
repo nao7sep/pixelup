@@ -4,7 +4,6 @@ import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog,
     QDialogButtonBox,
     QFrame,
     QHBoxLayout,
@@ -13,28 +12,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing
+from pixelup.dialog_shell import FORM_WIDTH, DialogShell
+from pixelup.ui_common import secondary_label
 
 
 def command_modifier_name() -> str:
     return "Cmd" if sys.platform == "darwin" else "Ctrl"
 
 
-class ShortcutsDialog(QDialog):
+class ShortcutsDialog(DialogShell):
     """Named catalogue of every shortcut PixelUp binds."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Keyboard shortcuts")
-        self.setModal(True)
-        self.setMinimumWidth(440)
+        super().__init__(
+            "Keyboard shortcuts",
+            parent,
+            width=FORM_WIDTH,
+            passive_body_name="Keyboard shortcuts",
+        )
 
-        layout = QVBoxLayout(self)
-        use_dialog_spacing(layout)
-
-        layout.addWidget(title_label("Keyboard shortcuts"))
         introduction = secondary_label("Use these shortcuts anywhere in PixelUp.")
-        layout.addWidget(introduction)
+        self.body_layout.addWidget(introduction)
 
         group = QFrame()
         group.setObjectName("shortcutGroup")
@@ -70,11 +68,13 @@ class ShortcutsDialog(QDialog):
                 f"{modifier}+Slash/Question",
             )
         )
-        layout.addWidget(group)
+        self.body_layout.addWidget(group)
+        self.body_layout.addStretch()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.add_footer_widget(buttons)
+        self.fit()
 
 
 def _shortcut_row(action: str, chord: str) -> QWidget:

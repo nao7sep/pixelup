@@ -36,7 +36,9 @@ def test_quit_dialog_button_order_and_styling(qapp: QApplication) -> None:
         # draws it. It used to carry its own style sheet, which is why this asked
         # for a non-empty styleSheet() before.
         assert quit_button.property("role") == "danger-confirm"
-        assert dialog.windowTitle() in {
+        # The OS draws this window's title bar, and that bar is the header: a
+        # heading inside the body would say the same thing twice.
+        assert dialog.windowTitle() not in {
             label.text() for label in dialog.findChildren(QLabel)
         }
     finally:

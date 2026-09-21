@@ -7,8 +7,10 @@ from PySide6.QtWidgets import QApplication, QLabel, QLayout
 from .fonts import DEFAULT_UI_FONT_SIZE
 
 REGULAR_SPACING = 10
+# The roomy rhythm DialogShell gives a dialog's body band.
 DIALOG_MARGIN = 20
 DIALOG_SPACING = 16
+
 
 def use_regular_spacing(layout: QLayout, *, margins: bool = True) -> None:
     margin = REGULAR_SPACING if margins else 0
@@ -16,14 +18,13 @@ def use_regular_spacing(layout: QLayout, *, margins: bool = True) -> None:
     layout.setSpacing(REGULAR_SPACING)
 
 
-def use_dialog_spacing(layout: QLayout) -> None:
-    """Apply the roomy outer title/body/footer rhythm for app-authored dialogs."""
-    layout.setContentsMargins(DIALOG_MARGIN, DIALOG_MARGIN, DIALOG_MARGIN, DIALOG_MARGIN)
-    layout.setSpacing(DIALOG_SPACING)
-
-
 def title_label(text: str) -> QLabel:
-    """A large, bold label for a dialog's primary heading (e.g. the app name)."""
+    """A large, bold label for the product's own name on the about surface.
+
+    The one heading a native dialog keeps: the OS title bar names every other
+    surface, so nothing else here has a heading of its own
+    (modal-dialog-conventions).
+    """
     label = QLabel(text)
     font = label.font()
     font.setPixelSize(round(DEFAULT_UI_FONT_SIZE * 1.6))

@@ -25,12 +25,15 @@ def test_round_trips_config_without_changes(qapp: QApplication) -> None:
         dialog.deleteLater()
 
 
-def test_settings_has_matching_native_and_in_content_titles(qapp: QApplication) -> None:
+def test_settings_is_named_by_its_title_bar_alone(qapp: QApplication) -> None:
+    # The OS draws the title bar and that bar is the dialog's header, so the body
+    # opens on the form rather than on a heading that says "Settings" a second
+    # time (modal-dialog-conventions).
     dialog = SettingsDialog(AppConfig())
     try:
         labels = {label.text() for label in dialog.findChildren(QLabel)}
         assert dialog.windowTitle() == "Settings"
-        assert dialog.windowTitle() in labels
+        assert dialog.windowTitle() not in labels
     finally:
         dialog.deleteLater()
 

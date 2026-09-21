@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QDialog,
     QDialogButtonBox,
     QLabel,
-    QVBoxLayout,
     QWidget,
 )
 
-from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing, use_regular_spacing
-from pixelup.widgets import PassiveScrollArea
+from pixelup.dialog_shell import FORM_WIDTH, DialogShell
+from pixelup.ui_common import REGULAR_SPACING, secondary_label
 
 # One entry per Parameters-panel control, in the panel's own order. This dialog is
 # the single home for parameter explanations — the panel itself carries none, so
@@ -65,48 +63,37 @@ _ENTRIES: tuple[tuple[str, str], ...] = (
 )
 
 
-class ParametersHelpDialog(QDialog):
+class ParametersHelpDialog(DialogShell):
     """Read-only reference for every control in the Parameters panel."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Parameters help")
-        self.setModal(True)
+        super().__init__(
+            "Parameters help",
+            parent,
+            width=FORM_WIDTH,
+            passive_body_name="Parameter help",
+        )
 
-        layout = QVBoxLayout(self)
-        use_dialog_spacing(layout)
-        layout.addWidget(title_label("Parameters help"))
-
-        # Title/footer fixed, body the sole scroll region (modal-dialog
-        # conventions): the entries live in a scroll area with a bounded height,
-        # so the Close path can never be pushed out of reach.
-        body = QWidget()
-        body_layout = QVBoxLayout(body)
-        use_regular_spacing(body_layout)
+        # The shell's body is the sole scroll region and the entries are all of it,
+        # so they go straight in. Tighter than the body's default rhythm, because a
+        # term and its description are one entry rather than two sections.
+        self.body_layout.setSpacing(REGULAR_SPACING)
         for index, (name, text) in enumerate(_ENTRIES):
             if index > 0:
-                body_layout.addSpacing(8)
+                self.body_layout.addSpacing(8)
             term = QLabel(name)
             font = term.font()
             font.setBold(True)
             term.setFont(font)
             description = secondary_label(text)
             description.setWordWrap(True)
-            body_layout.addWidget(term)
-            body_layout.addWidget(description)
-        body_layout.addStretch()
-
-        scroll = PassiveScrollArea(accessible_name="Parameter help")
-        scroll.setWidget(body)
-        layout.addWidget(scroll, 1)
+            self.body_layout.addWidget(term)
+            self.body_layout.addWidget(description)
+        self.body_layout.addStretch()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         # Close has RejectRole, so `rejected` covers both the button click and
         # Escape with a single, unambiguous close path.
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        # Wide enough that descriptions wrap to a few readable lines; tall enough
-        # to show most entries while leaving the rest to the scroll body.
-        self.resize(520, 560)
-        self.setMinimumSize(420, 320)
+        self.add_footer_widget(buttons)
+        self.fit()

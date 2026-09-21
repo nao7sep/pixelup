@@ -12,7 +12,8 @@ def test_shortcuts_dialog_catalogues_every_bound_chord(qapp: QApplication) -> No
         modifier = command_modifier_name()
 
         assert dialog.windowTitle() == "Keyboard shortcuts"
-        assert "Keyboard shortcuts" in text
+        # Named by its title bar, not again inside the body.
+        assert "Keyboard shortcuts" not in text
         assert "General" in text
         assert "Open Settings" in text
         assert f"{modifier}+Comma" in text

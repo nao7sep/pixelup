@@ -5,16 +5,14 @@ from collections.abc import Iterable
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QFontMetrics, QPalette
 from PySide6.QtWidgets import (
-    QDialog,
     QFrame,
     QGridLayout,
-    QHBoxLayout,
     QLabel,
     QPushButton,
-    QVBoxLayout,
     QWidget,
 )
 
+from pixelup.dialog_shell import TABLE_WIDTH, DialogShell
 from pixelup.model_management import (
     MANAGED_ARTIFACT_NAMES,
     MANAGED_MODEL_BUNDLES,
@@ -23,15 +21,14 @@ from pixelup.model_management import (
 )
 from pixelup.model_manager import ModelManager, ModelOperation
 from pixelup.session_log import log
-from pixelup.ui_common import secondary_label, title_label, use_dialog_spacing
-from pixelup.widgets import OperationResult, PassiveScrollArea
+from pixelup.ui_common import secondary_label
+from pixelup.widgets import OperationResult
 
 _MODEL_ROW_SPACING = 12
-_MODEL_LIST_MAX_HEIGHT = 420
 _COLUMN_TEXT_PADDING = 24
 
 
-class ManagedModelsDialog(QDialog):
+class ManagedModelsDialog(DialogShell):
     """Presentation and commands for application-owned model state."""
 
     def __init__(
@@ -42,24 +39,16 @@ class ManagedModelsDialog(QDialog):
         required_artifacts: tuple[str, ...] = (),
         pending_job_count: int = 0,
     ) -> None:
-        # Dialog + show() produces an ordinary titled native window on macOS.
-        # QDialog.open() chooses the sheet presentation instead, hiding the native
-        # title bar and traffic-light controls even though this is a normal dialog.
-        super().__init__(parent, Qt.WindowType.Dialog)
+        # The body holds this dialog's row buttons, so its scroll region takes no
+        # focus of its own — the buttons are the keyboard owners.
+        super().__init__("Managed models", parent, width=TABLE_WIDTH)
         self._manager = manager
         self._required_artifacts = tuple(dict.fromkeys(required_artifacts))
         self._pending_job_count = pending_job_count
 
-        self.setWindowTitle("Managed models")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
-
-        layout = QVBoxLayout(self)
-        use_dialog_spacing(layout)
-        layout.addWidget(title_label("Managed models"))
-
         self.summary_label = secondary_label("")
         self.summary_label.setWordWrap(True)
-        layout.addWidget(self.summary_label)
+        self.body_layout.addWidget(self.summary_label)
 
         self.models_panel = QFrame()
         self.models_panel.setObjectName("managedModelsList")
@@ -104,37 +93,29 @@ class ManagedModelsDialog(QDialog):
         for column, width in enumerate(self.column_minimum_widths):
             models_layout.setColumnMinimumWidth(column, width)
 
-        models_scroll = PassiveScrollArea(accessible_name="Managed models")
-        models_scroll.setWidget(self.models_panel)
-        models_scroll.setMinimumWidth(models_layout.sizeHint().width() + 4)
-        models_scroll.setMinimumHeight(
-            min(_MODEL_LIST_MAX_HEIGHT, models_layout.sizeHint().height() + 4)
-        )
-        layout.addWidget(models_scroll, 1)
+        # The panel goes straight into the body: the shell's body is the sole
+        # scroll region, so the list no longer nests a scroll area of its own — and
+        # the bar it used to draw over the Action column now has the body's own
+        # padding to sit in.
+        self.body_layout.addWidget(self.models_panel)
+        self.body_layout.addStretch()
 
         self.result_view = OperationResult(object_name="modelInstallResult")
-        layout.addWidget(self.result_view)
+        self.body_layout.addWidget(self.result_view)
 
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 0, 0, 0)
-        footer.setSpacing(10)
-        footer.addStretch()
         self.dismiss_button = QPushButton("Close")
         self.dismiss_button.clicked.connect(self.reject)
         self.reveal_button = QPushButton("Reveal models folder")
         self.reveal_button.clicked.connect(self._reveal_models_folder)
         self.primary_button = QPushButton()
         self.primary_button.clicked.connect(self._install_all_or_cancel)
-        footer.addWidget(self.dismiss_button)
-        footer.addWidget(self.reveal_button)
-        footer.addWidget(self.primary_button)
-        layout.addLayout(footer)
+        self.add_footer_widget(self.dismiss_button)
+        self.add_footer_widget(self.reveal_button)
+        self.add_footer_widget(self.primary_button)
 
         self._manager.changed.connect(self._render)
         self._render()
         self.primary_button.setFocus(Qt.FocusReason.OtherFocusReason)
-        self.adjustSize()
-        self.setMinimumSize(self.sizeHint())
 
     def _summary_text(self) -> str:
         if not self._required_artifacts:
@@ -205,6 +186,11 @@ class ManagedModelsDialog(QDialog):
             self._show_error(" ".join(errors))
         else:
             self.result_view.clear_result()
+
+        # Every render can change the body's height — the summary swaps between two
+        # lengths, the result banner comes and goes — and the bound is arithmetic
+        # over that height, so it is re-taken here rather than once at build time.
+        self.fit()
 
     def _render_primary_action(self) -> None:
         if self._required_artifacts:
@@ -277,6 +263,10 @@ class ManagedModelsDialog(QDialog):
 
     def _show_error(self, message: str) -> None:
         self.result_view.show_result(message, severity="error")
+        # The banner is body content: the body just grew, so the bound is re-taken
+        # over it. Reached both from _render and directly, hence here rather than
+        # only at the end of a render.
+        self.fit()
 
 
 def _bundle_status(
