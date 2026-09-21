@@ -723,6 +723,17 @@ def test_settings_only_options_have_no_main_window_control(make_window) -> None:
     assert window.manage_models_button.icon().isNull()
 
 
+def test_the_main_action_leads_by_weight_not_by_an_accent_fill(make_window) -> None:
+    # Queue selected image leads its column by the weight of its label; the three
+    # queue buttons under it do the same job at another scope, so no button in the
+    # main window takes the accent fill, which is kept for a dialog's commit.
+    window = make_window()
+    assert window.queue_selected_button.property("role") == "main"
+    assert all(
+        button.property("role") != "primary" for button in window.findChildren(QPushButton)
+    )
+
+
 def test_missing_models_show_as_a_warning_line_under_the_button(make_window) -> None:
     """The button always says what it opens; the models' state is a warning line of
     its own under it. Drawn as a filled amber button labelled "Models are missing",

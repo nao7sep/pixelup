@@ -855,8 +855,11 @@ class MainWindow(QMainWindow):
         use_regular_spacing(layout)
         self.queue_selected_button = QPushButton("Queue selected image")
         # The one action this window is for: queue what is selected, with the
-        # parameters beside it. Every other queue button is a variant of it.
-        self.queue_selected_button.setProperty("role", "primary")
+        # parameters beside it. It is set apart by its label's weight, not an accent
+        # fill: the three queue buttons under it do the same job at another scope,
+        # and it is off at launch until a model is checked, so a fill would mostly
+        # have shown as a faded block. The accent is kept for a dialog's commit.
+        self.queue_selected_button.setProperty("role", "main")
         self.queue_selected_button.clicked.connect(self._queue_selected_image)
         self.queue_selected_all_models_button = QPushButton("Queue selected image with all models")
         self.queue_selected_all_models_button.clicked.connect(self._queue_selected_image_all_models)

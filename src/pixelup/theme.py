@@ -476,7 +476,13 @@ QPushButton:disabled {{
     color: {tone_off["button_ink"]};
 }}
 
-/* The primary role: the one action a surface is really for, in the OS accent. */
+/* The main action of a window full of peers: a standard button whose label
+   carries the weight, so it leads without a fill that would single it out. */
+QPushButton[role="main"] {{
+    font-weight: 600;
+}}
+
+/* The primary role: a dialog's commit, in the OS accent. */
 QPushButton[role="primary"] {{
     background-color: {accent["fill"]};
     border-color: {accent["fill"]};

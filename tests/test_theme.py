@@ -209,7 +209,10 @@ def test_every_button_role_answers_a_press_and_a_disable(qapp: QApplication, tmp
     marks = theme.write_control_marks(qapp.palette(), tmp_path / "marks")
     qapp.setStyleSheet(theme.build_stylesheet(qapp.palette(), marks))
     try:
-        roles = (("role", "primary"), ("role", "danger"), ("role", "danger-confirm"), (None, None))
+        roles = (
+            ("role", "primary"), ("role", "main"), ("role", "danger"), ("role", "danger-confirm"),
+            (None, None),
+        )
         for role, value in roles:
             resting, pressed, off = (QPushButton("Remove") for _ in range(3))
             for button in (resting, pressed, off):
