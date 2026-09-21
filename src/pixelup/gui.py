@@ -23,7 +23,6 @@ from PySide6.QtGui import (
     QGuiApplication,
     QIcon,
     QKeySequence,
-    QPalette,
     QPixmap,
     QResizeEvent,
     QShortcut,
@@ -137,36 +136,6 @@ _NAME_MIN_WIDTH = 180
 # "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
 _REVEAL_TIMEOUT_SECONDS = 5
-
-
-def _managed_models_warning_style(palette: QPalette) -> str:
-    """Return a complete warning-button treatment for the current theme."""
-    dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
-    if dark:
-        background, hover, pressed, border, foreground = (
-            "#8a5a00",
-            "#a86d00",
-            "#704900",
-            "#d89a28",
-            "#ffffff",
-        )
-    else:
-        background, hover, pressed, border, foreground = (
-            "#f2c94c",
-            "#ffd86b",
-            "#dbae30",
-            "#a66b00",
-            "#2a1d00",
-        )
-    return (
-        "QPushButton {"
-        f" background-color: {background}; color: {foreground};"
-        f" border: 1px solid {border}; border-radius: 3px;"
-        " padding: 4px 10px; font-weight: 600;"
-        "}"
-        f"QPushButton:hover {{ background-color: {hover}; }}"
-        f"QPushButton:pressed {{ background-color: {pressed}; }}"
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -644,15 +613,19 @@ class MainWindow(QMainWindow):
         self.about_button = QPushButton("About")
         self.about_button.clicked.connect(self._about_dialog)
 
-        layout.addWidget(self.logs_button, 0, 0)
-        layout.addWidget(self.settings_button, 0, 1)
-        layout.addWidget(self.shortcuts_button, 1, 0)
-        layout.addWidget(self.about_button, 1, 1)
+        start = Qt.AlignmentFlag.AlignLeft
+        layout.addWidget(self.logs_button, 0, 0, start)
+        layout.addWidget(self.settings_button, 0, 1, start)
+        layout.addWidget(self.shortcuts_button, 1, 0, start)
+        layout.addWidget(self.about_button, 1, 1, start)
+        # The two button columns take their content's width and the rest of the row
+        # stays empty, so each pair sits together rather than across the panel.
+        layout.setColumnStretch(2, 1)
         self.log_action_result = OperationResult(
             object_name="logActionResult",
             dismissible=True,
         )
-        layout.addWidget(self.log_action_result, 2, 0, 1, 2)
+        layout.addWidget(self.log_action_result, 2, 0, 1, 3)
         return row
 
     def _bind_shortcuts(self) -> None:
@@ -715,6 +688,8 @@ class MainWindow(QMainWindow):
         self.remove_image_button.clicked.connect(self._remove_selected_image)
         button_layout.addWidget(self.open_images_button)
         button_layout.addWidget(self.remove_image_button)
+        # A button is as wide as its label, not as wide as the space it sits in.
+        button_layout.addStretch()
         layout.addWidget(button_row)
         self._remove_result_path: Path | None = None
         self.remove_result = OperationResult(
@@ -769,7 +744,12 @@ class MainWindow(QMainWindow):
             layout.addWidget(checkbox)
         self.manage_models_button = QPushButton("Managed models")
         self.manage_models_button.clicked.connect(self._managed_models_dialog)
-        layout.addWidget(self.manage_models_button)
+        layout.addWidget(self.manage_models_button, 0, Qt.AlignmentFlag.AlignLeft)
+        # The models' state is a line of its own under the button that opens them:
+        # drawn as a filled warning button, it read as a second, different action.
+        self.model_status = QLabel()
+        self.model_status.setWordWrap(True)
+        layout.addWidget(self.model_status)
         self._refresh_model_rollup()
         layout.addStretch()
         return group
@@ -824,8 +804,8 @@ class MainWindow(QMainWindow):
         for label, profile in TARGET_PROFILE_CHOICES:
             self.target_profile.addItem(label, profile)
 
-        reset = QPushButton("Reset parameters")
-        reset.clicked.connect(self._reset_parameters_to_defaults)
+        self.reset_parameters_button = QPushButton("Reset parameters")
+        self.reset_parameters_button.clicked.connect(self._reset_parameters_to_defaults)
 
         # Per-control captions live in the Parameters Help dialog, not the panel:
         # always-visible help text was the main driver of the window's minimum
@@ -844,7 +824,7 @@ class MainWindow(QMainWindow):
         form.addRow("Target profile", self.target_profile)
         # Reset and Help stack as two rows: side by side they would be the widest
         # field in the form and re-widen the group the Help dialog exists to slim.
-        form.addRow("", reset)
+        form.addRow("", self.reset_parameters_button)
         form.addRow("", help_button)
         self.parameters_result = OperationResult(
             object_name="parametersSaveResult",
@@ -1144,12 +1124,6 @@ class MainWindow(QMainWindow):
     def _refresh_model_rollup(self) -> None:
         ready, total = self.model_manager.ready_count()
         missing = ready < total
-        if missing:
-            self.manage_models_button.setStyleSheet(
-                _managed_models_warning_style(self.palette())
-            )
-        else:
-            self.manage_models_button.setStyleSheet("")
         if self.model_manager.active_operations:
             completed, operation_total = self.model_manager.aggregate_progress()
             progress = (
@@ -1157,24 +1131,32 @@ class MainWindow(QMainWindow):
                 if operation_total <= 0
                 else min(100, completed * 100 // operation_total)
             )
-            self.manage_models_button.setText(f"Installing models — {progress}%")
+            self._show_model_status(f"Installing models — {progress}%", severity="")
             self.manage_models_button.setAccessibleName(
-                f"Installing models, {progress} percent"
+                f"Managed models, installing models, {progress} percent"
             )
             self.manage_models_button.setToolTip("Model installation is in progress.")
             return
         if missing:
-            self.manage_models_button.setText("Models are missing")
-            self.manage_models_button.setAccessibleName("Models are missing")
+            self._show_model_status("Some models are not installed.", severity="warning")
+            self.manage_models_button.setAccessibleName("Managed models, some models are missing")
             self.manage_models_button.setToolTip(
                 "Some models are not installed. Open Managed models to install them."
             )
         else:
-            self.manage_models_button.setText("Managed models")
+            self._show_model_status("", severity="")
             self.manage_models_button.setAccessibleName(
                 "Managed models, all models installed"
             )
             self.manage_models_button.setToolTip("All models are installed.")
+
+    def _show_model_status(self, text: str, *, severity: str) -> None:
+        self.model_status.setText(text)
+        self.model_status.setVisible(bool(text))
+        self.model_status.setProperty("severity", severity)
+        # A dynamic property only restyles once the style is told to look again.
+        self.model_status.style().unpolish(self.model_status)
+        self.model_status.style().polish(self.model_status)
 
     def _parameters_help_dialog(self) -> None:
         log.info("parameters_help.dialog_opened")
@@ -1328,9 +1310,15 @@ class MainWindow(QMainWindow):
         # persisted value reads as a change), which would leave a save armed for values
         # nobody touched. Reset flushes explicitly, so cancelling here costs it nothing.
         self._parameters_save_timer.stop()
+        self._update_reset_button()
 
     def _parameters_edited(self) -> None:
         self._parameters_save_timer.start()
+        self._update_reset_button()
+
+    def _update_reset_button(self) -> None:
+        """Reset is off while the panel already holds the built-in parameters."""
+        self.reset_parameters_button.setEnabled(self.current_job_settings() != JobSettings())
 
     def _flush_parameters_save(self, *, surface_failure: bool = True) -> bool:
         """Save any pending panel edit now, cancelling the debounce."""

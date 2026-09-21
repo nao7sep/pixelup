@@ -14,7 +14,7 @@ from PySide6.QtCore import QMargins, QRect, QSettings, QSize, Qt, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
-from pixelup import gui
+from pixelup import gui, theme
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
@@ -723,35 +723,39 @@ def test_settings_only_options_have_no_main_window_control(make_window) -> None:
     assert window.manage_models_button.icon().isNull()
 
 
-def test_missing_models_make_management_entry_visibly_actionable(make_window) -> None:
+def test_missing_models_show_as_a_warning_line_under_the_button(make_window) -> None:
+    """The button always says what it opens; the models' state is a warning line of
+    its own under it. Drawn as a filled amber button labelled "Models are missing",
+    the state read as a second action beside the real one."""
     window = make_window()
-    model_file(window.runtime_dirs.models_dir, "realesr-general-x4v3").unlink()
+    assert window.model_status.isHidden()
 
+    model_file(window.runtime_dirs.models_dir, "realesr-general-x4v3").unlink()
     window.model_manager.refresh_readiness()
 
-    assert window.manage_models_button.text() == "Models are missing"
-    assert window.manage_models_button.accessibleName() == "Models are missing"
+    assert window.manage_models_button.text() == "Managed models"
+    assert window.manage_models_button.styleSheet() == ""
+    assert window.manage_models_button.property("role") is None
     assert window.manage_models_button.icon().isNull()
-    assert "background-color" in window.manage_models_button.styleSheet()
-    assert "border-radius: 3px" in window.manage_models_button.styleSheet()
+    assert window.manage_models_button.accessibleName() == (
+        "Managed models, some models are missing"
+    )
     assert "not installed" in window.manage_models_button.toolTip()
+    assert not window.model_status.isHidden()
+    assert window.model_status.text() == "Some models are not installed."
+    assert window.model_status.property("severity") == "warning"
 
 
-def test_model_warning_button_has_complete_light_and_dark_treatments() -> None:
+def test_the_warning_line_has_an_amber_for_each_theme() -> None:
     light = QPalette()
     light.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
     dark = QPalette()
     dark.setColor(QPalette.ColorRole.Window, QColor("#111111"))
 
-    light_style = gui._managed_models_warning_style(light)
-    dark_style = gui._managed_models_warning_style(dark)
-
-    assert light_style != dark_style
-    for style in (light_style, dark_style):
-        assert "background-color" in style
-        assert "color:" in style
-        assert "border: 1px" in style
-        assert "border-radius: 3px" in style
+    assert theme.warning_text(light) != theme.warning_text(dark)
+    for palette in (light, dark):
+        sheet = theme.build_stylesheet(palette)
+        assert f'QLabel[severity="warning"] {{\n    color: {theme.warning_text(palette)};' in sheet
 
 
 def test_missing_models_cancel_before_queue_materialization(
@@ -1035,6 +1039,26 @@ def test_reset_parameters_button_restores_the_built_ins(make_window) -> None:
     assert window.current_job_settings() == JobSettings()
     assert window.tile.currentData() == JobSettings().tile == 256
     assert window.config.font_family == AppConfig().font_family
+
+
+def test_reset_parameters_is_off_while_the_panel_holds_the_built_ins(make_window) -> None:
+    # A reset that would change nothing is not offered: the button is off at the
+    # built-ins, comes on with any edit, and goes off again once it has reset.
+    window = make_window()
+    reset = _reset_button(window)
+    assert window.current_job_settings() == JobSettings()
+    assert reset.isEnabled() is False
+
+    _wander_from_defaults(window)
+    assert reset.isEnabled() is True
+
+    reset.click()
+    assert reset.isEnabled() is False
+
+    window.quality.setValue(window.quality.value() - 1)
+    assert reset.isEnabled() is True
+    window.quality.setValue(JobSettings().quality)
+    assert reset.isEnabled() is False
 
 
 def test_reset_parameters_button_restores_the_built_in_scale(make_window) -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLabel
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QFrame, QLabel
 
 from pixelup.shortcuts_dialog import ShortcutsDialog, command_modifier_name
 
@@ -21,5 +21,19 @@ def test_shortcuts_dialog_catalogues_every_bound_chord(qapp: QApplication) -> No
         assert f"{modifier}+Slash/Question" in text
         assert len(dialog.findChildren(QLabel, "shortcutKey")) == 2
         assert dialog.findChild(QDialogButtonBox) is not None
+    finally:
+        dialog.deleteLater()
+
+
+def test_the_shortcut_list_carries_no_card(qapp: QApplication) -> None:
+    # A reference list, read and never navigated: its heading and the space between
+    # rows separate it, and the one mark on the surface is each key. The card it sat
+    # in was also what filled the dark theme with the palette's near-black base.
+    dialog = ShortcutsDialog()
+    try:
+        assert dialog.findChild(QFrame, "shortcutGroup") is None
+        for label in dialog.findChildren(QLabel, "shortcutKey"):
+            assert label.styleSheet() == ""
+            assert label.parentWidget().styleSheet() == ""
     finally:
         dialog.deleteLater()

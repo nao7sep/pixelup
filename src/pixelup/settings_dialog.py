@@ -110,6 +110,8 @@ class SettingsDialog(DialogShell):
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         self.ok_button = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
+        # OK is what saves, so it is the dialog's primary action.
+        self.ok_button.setProperty("role", "primary")
         self.error_message = QLabel()
         self.error_message.setWordWrap(True)
         dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128

@@ -1,16 +1,22 @@
 """PixelUp's one owned appearance: the sizes every control is built from, and the
 style sheet that draws them.
 
-PixelUp owns no colours of its own. It follows the OS light/dark theme through
-Fusion's palette (see ``build_app``), so every colour here is a ``palette(...)``
-reference rather than a literal, and the one treatment that has no palette role —
-a destructive action's red — is the single pair of values in ``DANGER``, chosen
-per theme the way the warning button already is.
+PixelUp follows the OS light/dark theme and the OS accent, and has no theme
+setting of its own. What it does own is what the platform palette gets wrong for
+an app like this one:
 
-What this module does own is geometry and state: one height for a standard
-control and one for a compact one, one corner radius, and a hover, pressed,
-focused and disabled treatment for each control, so nothing is left to the
-toolkit's defaults. Sizes are named so a change moves the whole app.
+- the neutral surfaces, one set per theme (``surfaces``): the macOS palette fills
+  a dark field, list or popup with a near-black base and gives buttons the
+  window's own colour, so neither read as a control;
+- the primary action's colour, which is the OS accent (``accent_colours``) — the
+  palette's highlight is the text-selection colour, a muted navy in dark and a
+  pale blue under black letters in light;
+- a destructive red and a warning amber, which have no palette role at all.
+
+It also owns geometry and state: one height for a standard control and one for a
+compact one, one corner radius, and a hover, pressed, focused and disabled
+treatment for each control, so nothing is left to the toolkit's defaults. Sizes
+and colours are named so a change moves the whole app.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from PySide6.QtGui import QColor, QPainter, QPalette, QPen, QPixmap, QPolygon, Q
 from PySide6.QtWidgets import QApplication
 
 from pixelup.config import resolve_state_dir
+from pixelup.fonts import DEFAULT_UI_FONT_SIZE
 
 # One standard height for a one-line control — a text field, a combo box, a spin
 # box or a button beside them — and one compact height for a dense row. Before
@@ -39,6 +46,11 @@ ARROW_HEIGHT = 6
 # column of checkboxes and radios lines up on one edge.
 INDICATOR_SIZE = 14
 BORDER_WIDTH = 1
+# The app's text and a group heading one step above it. The heading's space is its
+# own line plus a short gap, so it sits close above the section it names.
+TEXT_SIZE = DEFAULT_UI_FONT_SIZE
+GROUP_TITLE_SIZE = DEFAULT_UI_FONT_SIZE + 2
+GROUP_TITLE_SPACE = 16
 # Qt's min-height is the content box, so the border is subtracted to make the
 # named height the one the control actually occupies.
 _INNER = CONTROL_HEIGHT - 2 * BORDER_WIDTH
@@ -73,29 +85,75 @@ def _receded(colour: QColor, window: QColor) -> str:
     return blended.name()
 
 
-def accent_pressed(palette: QPalette) -> str:
-    """The accent one step beyond its hover, for the primary button's press.
+# The ink that sits on the accent. White in both themes: the macOS palette's
+# highlighted text is black in light, because its highlight is a pale blue.
+ACCENT_INK = "#ffffff"
 
-    Derived from ``palette(highlight)`` rather than chosen here, so the primary
-    still follows the OS accent — a style sheet has no colour arithmetic, which is
-    the only reason this is computed in Python at all. It deepens in both themes,
-    the direction the standard button's own press already moves.
+
+def surfaces(palette: QPalette) -> dict[str, str]:
+    """The neutral surfaces the app owns, one set per theme.
+
+    A field, a list and a popup take ``field`` behind a visible ``field_edge``; a
+    button takes ``button`` and steps one way through ``button_hover`` to
+    ``button_pressed``, deepening in light and lifting in dark, the direction each
+    theme's hover already moves. ``hairline`` separates, ``chip`` holds a key.
     """
-    return palette.color(QPalette.ColorRole.Highlight).darker(118).name()
+    if is_dark(palette):
+        return {
+            "field": "#2a2a2a", "field_edge": "#505050",
+            "button": "#464646", "button_hover": "#505050", "button_pressed": "#5b5b5b",
+            "button_edge": "#5c5c5c", "hairline": "#4a4a4a", "chip": "#3c3c3c",
+        }
+    return {
+        "field": "#ffffff", "field_edge": "#c4c4c4",
+        "button": "#ffffff", "button_hover": "#f1f1f1", "button_pressed": "#e3e3e3",
+        "button_edge": "#c4c4c4", "hairline": "#d3d3d3", "chip": "#f6f6f6",
+    }
+
+
+def surfaces_disabled(palette: QPalette) -> dict[str, str]:
+    """The neutral surfaces receded over the window, for a control that is off."""
+    tone = surfaces(palette)
+    window = palette.color(QPalette.ColorRole.Window)
+    button = _receded(QColor(tone["button"]), window)
+    return {
+        "button": button,
+        "button_ink": _receded(palette.color(QPalette.ColorRole.ButtonText), QColor(button)),
+        "field": _receded(QColor(tone["field"]), window),
+        "field_edge": _receded(QColor(tone["field_edge"]), window),
+    }
+
+
+def accent_colours(palette: QPalette) -> dict[str, str]:
+    """The primary action's colours: the OS accent, deepening through hover and press.
+
+    The accent comes from the palette's accent role, so it follows the OS setting;
+    a style sheet has no colour arithmetic, which is the only reason the steps are
+    computed in Python. Off, the fill and its ink recede over the window, so a
+    switched-off primary still has a shape and still says which action it is.
+    """
+    accent = palette.color(QPalette.ColorRole.Accent)
+    window = palette.color(QPalette.ColorRole.Window)
+    fill_disabled = _receded(accent, window)
+    return {
+        "fill": accent.name(),
+        "fill_hover": accent.darker(110).name(),
+        "fill_pressed": accent.darker(124).name(),
+        "ink": ACCENT_INK,
+        "fill_disabled": fill_disabled,
+        "ink_disabled": _receded(QColor(ACCENT_INK), QColor(fill_disabled)),
+    }
 
 
 def accent_disabled(palette: QPalette) -> dict[str, str]:
-    """The accent receded, for a primary control that is switched off.
+    """The accent receded, for a set tick or radio that is switched off."""
+    colours = accent_colours(palette)
+    return {"fill": colours["fill_disabled"], "ink": colours["ink_disabled"]}
 
-    A switched-off primary still has a shape and still says which action it is —
-    the same argument the destructive red already makes for itself. Qt's own
-    ``midlight`` was doing neither: it resolves to within two points of the
-    window in the dark theme, so the button it filled had no visible edge at all.
-    """
-    window = palette.color(QPalette.ColorRole.Window)
-    fill = _receded(palette.color(QPalette.ColorRole.Highlight), window)
-    ink = _receded(palette.color(QPalette.ColorRole.HighlightedText), QColor(fill))
-    return {"fill": fill, "ink": ink}
+
+def warning_text(palette: QPalette) -> str:
+    """An amber that reads as letters on the theme's window, for a standing warning."""
+    return "#f2c94c" if is_dark(palette) else "#8a5a00"
 
 
 def danger_colours(palette: QPalette) -> dict[str, str]:
@@ -219,7 +277,7 @@ def write_control_marks(palette: QPalette, directory: Path) -> dict[str, Path] |
         # A set indicator is filled with the accent, so its mark is the ink that
         # goes on the accent — and receded with the fill when the control is off,
         # so the tick fades with the box rather than standing out of a dead one.
-        ink = palette.color(QPalette.ColorRole.HighlightedText)
+        ink = QColor(ACCENT_INK)
         ink_disabled = QColor(accent_disabled(palette)["ink"])
         for name, draw in (("check", _check_pixmap), ("radio", _dot_pixmap)):
             for state, colour in (("", ink), ("-disabled", ink_disabled)):
@@ -232,8 +290,11 @@ def write_control_marks(palette: QPalette, directory: Path) -> dict[str, Path] |
         return None
 
 
-def _field_rules(marks: dict[str, Path]) -> str:
+def _field_rules(palette: QPalette, marks: dict[str, Path]) -> str:
     """Fields, including the arrow marks, which only exist when they were written."""
+    tone = surfaces(palette)
+    off = surfaces_disabled(palette)
+    accent = accent_colours(palette)
     return f"""
 /* Fields. One height for every one-line field, so a text box, a number box and a
    combo in the same column line up, and a button beside them matches. */
@@ -245,19 +306,20 @@ QSpinBox, QDoubleSpinBox {{
 }}
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
     padding: 0 8px;
-    border: {BORDER_WIDTH}px solid palette(mid);
+    border: {BORDER_WIDTH}px solid {tone["field_edge"]};
     border-radius: {RADIUS}px;
-    background-color: palette(base);
+    background-color: {tone["field"]};
     color: palette(text);
-    selection-background-color: palette(highlight);
-    selection-color: palette(highlighted-text);
+    selection-background-color: {accent["fill"]};
+    selection-color: {accent["ink"]};
 }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-    border-color: palette(highlight);
+    border-color: {accent["fill"]};
 }}
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
     color: palette(placeholder-text);
-    background-color: palette(window);
+    background-color: {off["field"]};
+    border-color: {off["field_edge"]};
 }}
 QSpinBox, QDoubleSpinBox {{ padding-right: 22px; }}
 /* A spin box holds its own QLineEdit, which would otherwise take the field rule
@@ -269,6 +331,15 @@ QAbstractSpinBox QLineEdit {{
     background: transparent;
 }}
 QComboBox {{ padding-right: 26px; }}
+/* The list a combo opens is the field's own surface, not the palette's base,
+   which in the dark theme is all but black. */
+QComboBox QAbstractItemView {{
+    background-color: {tone["field"]};
+    border: {BORDER_WIDTH}px solid {tone["field_edge"]};
+    selection-background-color: {accent["fill"]};
+    selection-color: {accent["ink"]};
+    outline: 0;
+}}
 
 /* Once a sheet draws these, the toolkit stops drawing their arrows, and a sheet
    cannot draw a triangle itself — so the app hands it the marks rendered above
@@ -311,6 +382,9 @@ QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
 
 def _indicator_rules(palette: QPalette, marks: dict[str, Path]) -> str:
     """Ticks and radios, including the marks, which only exist when they were written."""
+    tone = surfaces(palette)
+    tone_off = surfaces_disabled(palette)
+    accent = accent_colours(palette)
     off = accent_disabled(palette)
     radius = INDICATOR_SIZE // 2 + BORDER_WIDTH
     return f"""
@@ -328,27 +402,28 @@ QCheckBox:disabled, QRadioButton:disabled {{
 QCheckBox::indicator, QRadioButton::indicator {{
     width: {INDICATOR_SIZE}px;
     height: {INDICATOR_SIZE}px;
-    border: {BORDER_WIDTH}px solid palette(mid);
-    background-color: palette(base);
+    border: {BORDER_WIDTH}px solid {tone["field_edge"]};
+    background-color: {tone["field"]};
 }}
 QCheckBox::indicator {{ border-radius: {INNER_RADIUS}px; }}
 /* Half the box plus its border, so the ring is a circle rather than the rounded
    square a smaller radius drew. */
 QRadioButton::indicator {{ border-radius: {radius}px; }}
 QCheckBox::indicator:hover:!disabled, QRadioButton::indicator:hover:!disabled {{
-    border-color: palette(highlight);
+    border-color: {accent["fill"]};
 }}
 QCheckBox:focus::indicator, QRadioButton:focus::indicator {{
-    border-color: palette(highlight);
+    border-color: {accent["fill"]};
 }}
 QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
-    background-color: palette(highlight);
-    border-color: palette(highlight);
+    background-color: {accent["fill"]};
+    border-color: {accent["fill"]};
 }}
 QCheckBox::indicator:checked {{ image: url({marks["check"].as_posix()}); }}
 QRadioButton::indicator:checked {{ image: url({marks["radio"].as_posix()}); }}
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
-    background-color: palette(window);
+    background-color: {tone_off["field"]};
+    border-color: {tone_off["field_edge"]};
 }}
 QCheckBox::indicator:checked:disabled, QRadioButton::indicator:checked:disabled {{
     background-color: {off["fill"]};
@@ -360,67 +435,71 @@ QRadioButton::indicator:checked:disabled {{ image: url({marks["radio-disabled"].
 
 
 def build_stylesheet(palette: QPalette, marks: dict[str, Path] | None = None) -> str:
-    """The app-wide sheet. Every colour is a palette reference except DANGER.
+    """The app-wide sheet, from the palette's text and window plus the owned colours.
 
     Without ``marks`` the fields, ticks and radios are left alone entirely, so the
     toolkit keeps drawing them and their marks; everything else is styled either
     way.
     """
+    tone = surfaces(palette)
+    tone_off = surfaces_disabled(palette)
+    accent = accent_colours(palette)
     danger = danger_colours(palette)
-    off = accent_disabled(palette)
-    fields = _field_rules(marks) if marks else ""
+    fields = _field_rules(palette, marks) if marks else ""
     indicators = _indicator_rules(palette, marks) if marks else ""
     return f"""
-/* Buttons. A standard button is the app's utility role: the palette's own button
-   surface, a visible edge in both themes, and its own hover, pressed, focus and
-   disabled states rather than the toolkit's. */
+/* Buttons. A standard button is the app's utility role: its own surface, a
+   visible edge in both themes, and its own hover, pressed, focus and disabled
+   states rather than the toolkit's. */
 QPushButton {{
     min-height: {_INNER}px;
     padding: 0 14px;
-    border: {BORDER_WIDTH}px solid palette(mid);
+    border: {BORDER_WIDTH}px solid {tone["button_edge"]};
     border-radius: {RADIUS}px;
-    background-color: palette(button);
+    background-color: {tone["button"]};
     color: palette(button-text);
 }}
 QPushButton:hover:!disabled {{
-    background-color: palette(midlight);
+    background-color: {tone["button_hover"]};
 }}
 QPushButton:pressed:!disabled {{
-    background-color: palette(mid);
+    background-color: {tone["button_pressed"]};
 }}
 QPushButton:focus {{
-    border-color: palette(highlight);
+    border-color: {accent["fill"]};
 }}
-/* A switched-off button keeps its edge and recedes by its label. Qt's own
-   midlight sits within two points of the window in the dark theme, so the border
-   it used to draw here simply was not there. */
+/* Off, a button's fill and label recede over the window and its edge stays, so
+   it keeps its anatomy and can still be seen by. */
 QPushButton:disabled {{
-    color: palette(placeholder-text);
-    border-color: palette(mid);
+    background-color: {tone_off["button"]};
+    border-color: {tone["button_edge"]};
+    color: {tone_off["button_ink"]};
 }}
 
-/* The primary role: the one action a surface is really for. It takes the OS
-   accent from the palette, so the app still owns no colour of its own. */
+/* The primary role: the one action a surface is really for, in the OS accent. */
 QPushButton[role="primary"] {{
-    background-color: palette(highlight);
-    border-color: palette(highlight);
-    color: palette(highlighted-text);
+    background-color: {accent["fill"]};
+    border-color: {accent["fill"]};
+    color: {accent["ink"]};
     font-weight: 600;
 }}
 QPushButton[role="primary"]:hover:!disabled {{
-    background-color: palette(highlight);
-    border-color: palette(text);
+    background-color: {accent["fill_hover"]};
+    border-color: {accent["fill_hover"]};
 }}
-/* Without a press of its own it fell through to the standard button's, which
-   replaced the accent with the toolkit's grey at the moment of the click. */
 QPushButton[role="primary"]:pressed:!disabled {{
-    background-color: {accent_pressed(palette)};
+    background-color: {accent["fill_pressed"]};
+    border-color: {accent["fill_pressed"]};
+}}
+QPushButton[role="primary"]:focus {{
     border-color: palette(text);
 }}
+/* Off, the primary stays a filled button in its own accent, faded over the
+   window with its ink, so it still says which action it is. */
 QPushButton[role="primary"]:disabled {{
-    background-color: {off["fill"]};
-    border-color: {off["fill"]};
-    color: {off["ink"]};
+    background-color: {accent["fill_disabled"]};
+    border-color: {accent["fill_disabled"]};
+    color: {accent["ink_disabled"]};
 }}
 
 /* Destructive actions, in the fleet's two roles: a trigger that opens a
@@ -429,12 +508,16 @@ QPushButton[role="primary"]:disabled {{
 QPushButton[role="danger"] {{
     color: {danger["text"]};
     border-color: {danger["text"]};
-    background-color: palette(button);
+    background-color: {tone["button"]};
 }}
 QPushButton[role="danger"]:hover:!disabled {{
-    background-color: palette(midlight);
+    background-color: {tone["button_hover"]};
+}}
+QPushButton[role="danger"]:pressed:!disabled {{
+    background-color: {tone["button_pressed"]};
 }}
 QPushButton[role="danger"]:disabled {{
+    background-color: {tone_off["button"]};
     color: {danger["text_disabled"]};
     border-color: {danger["text_disabled"]};
 }}
@@ -465,13 +548,14 @@ QPushButton[size="compact"] {{
 }}
 
 {fields}
-/* A group's name is a heading with space under it, not a frame cut into a line:
-   six framed boxes turned one window into a grid of boxes, and in the dark theme
-   those frames all but disappeared. */
+/* A group's name is a heading that leads its section: a step larger than the
+   text, and close above what it names, with the gap between sections doing the
+   separating. Six framed boxes had turned one window into a grid of boxes. */
 QGroupBox {{
     border: none;
-    margin-top: 6px;
-    padding-top: 18px;
+    margin-top: 0;
+    padding-top: {GROUP_TITLE_SPACE}px;
+    font-size: {GROUP_TITLE_SIZE}px;
     font-weight: 600;
 }}
 QGroupBox::title {{
@@ -480,35 +564,57 @@ QGroupBox::title {{
     padding: 0;
     color: palette(text);
 }}
+/* A title cannot take a size of its own, so the group carries the heading's and
+   everything inside it returns to the app's text. The rule names no control, so a
+   field left to the toolkit (no marks) stays entirely the toolkit's; a role that
+   sets its own weight is more specific and keeps it. */
+QGroupBox * {{
+    font-size: {TEXT_SIZE}px;
+    font-weight: normal;
+}}
 
-/* Collections keep the palette's own base and selection, with the grid dropped:
+/* Collections take the field surface and the palette's selection, with no grid:
    rows read as rows, not as cells of a spreadsheet. */
 QTableWidget, QTableView {{
-    border: {BORDER_WIDTH}px solid palette(mid);
+    border: {BORDER_WIDTH}px solid {tone["field_edge"]};
     border-radius: {RADIUS}px;
-    background-color: palette(base);
-    gridline-color: transparent;
+    background-color: {tone["field"]};
     selection-background-color: palette(highlight);
     selection-color: palette(highlighted-text);
 }}
 QHeaderView::section {{
-    background-color: palette(window);
+    background-color: {tone["field"]};
     color: palette(text);
     border: none;
-    border-bottom: 1px solid palette(mid);
+    border-bottom: 1px solid {tone["hairline"]};
     padding: 6px 8px;
     font-weight: 600;
 }}
 QTableWidget::item, QTableView::item {{
-    padding: 4px 6px;
+    padding: 4px 8px;
+}}
+
+/* A standing warning is amber letters, not a filled control: a fill read as a
+   button beside the button it was about. */
+QLabel[severity="warning"] {{
+    color: {warning_text(palette)};
+}}
+
+/* A key in a reference list: the one mark on the surface is the key itself. */
+QLabel#shortcutKey {{
+    border: {BORDER_WIDTH}px solid {tone["field_edge"]};
+    border-radius: {INNER_RADIUS}px;
+    padding: 4px 8px;
+    background-color: {tone["chip"]};
+    font-weight: 600;
 }}
 
 {indicators}
-/* A separator is the app's own hairline, in the palette's mid tone, so it stays
-   visible in both themes — the band lines in dialogs are drawn with these. */
+/* A separator is the app's own hairline, so it stays visible in both themes —
+   the band lines in dialogs are drawn with these. */
 QFrame[frameShape="4"], QFrame[frameShape="5"] {{
-    color: palette(mid);
-    background-color: palette(mid);
+    color: {tone["hairline"]};
+    background-color: {tone["hairline"]};
     border: none;
     max-height: 1px;
 }}

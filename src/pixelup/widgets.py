@@ -206,6 +206,14 @@ class EmptyStateTableWidget(QTableWidget):
     ) -> None:
         super().__init__(rows, columns, parent)
         self.empty_text = empty_text
+        # A collection of rows, not a spreadsheet: no cell grid, whose gaps cut the
+        # selected row into blocks; no row numbers; and each heading starts where
+        # the values under it start.
+        self.setShowGrid(False)
+        self.verticalHeader().setVisible(False)
+        self.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         model = self.model()
         model.rowsInserted.connect(self._sync_empty_state)
         model.rowsRemoved.connect(self._sync_empty_state)

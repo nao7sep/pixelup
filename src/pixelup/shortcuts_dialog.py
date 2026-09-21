@@ -5,7 +5,6 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialogButtonBox,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
@@ -29,24 +28,12 @@ class ShortcutsDialog(DialogShell):
         introduction = secondary_label("Use these shortcuts anywhere in PixelUp.")
         self.body_layout.addWidget(introduction)
 
-        group = QFrame()
-        group.setObjectName("shortcutGroup")
-        group.setStyleSheet(
-            "QFrame#shortcutGroup {"
-            " border: 1px solid palette(mid);"
-            " border-radius: 7px;"
-            " background: palette(base);"
-            "}"
-            "QLabel#shortcutKey {"
-            " border: 1px solid palette(mid);"
-            " border-radius: 4px;"
-            " padding: 4px 8px;"
-            " background: palette(window);"
-            " font-weight: 600;"
-            "}"
-        )
+        # A reference list, read and never navigated, so it carries no card: the
+        # heading and the space between rows separate it, and the one mark on the
+        # surface is each key (theme.py draws the key chip).
+        group = QWidget()
         group_layout = QVBoxLayout(group)
-        group_layout.setContentsMargins(14, 14, 14, 14)
+        group_layout.setContentsMargins(0, 4, 0, 0)
         group_layout.setSpacing(12)
 
         group_heading = QLabel("General")

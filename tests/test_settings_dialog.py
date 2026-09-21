@@ -55,6 +55,8 @@ def test_commit_disabled_until_dirty_and_back(qapp: QApplication) -> None:
     try:
         assert dialog.is_dirty() is False
         assert dialog.ok_button.isEnabled() is False
+        # OK is what saves, so it takes the primary role rather than looking like Cancel.
+        assert dialog.ok_button.property("role") == "primary"
 
         dialog.concurrent.setValue(dialog.concurrent.value() + 1)
         assert dialog.is_dirty() is True

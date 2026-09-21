@@ -86,6 +86,19 @@ def test_dialog_remeasures_when_a_hidden_result_appears(qapp: QApplication) -> N
         dialog.deleteLater()
 
 
+def test_empty_state_table_draws_rows_not_cells(qapp: QApplication) -> None:
+    # No cell grid, whose gaps cut a selected row into blocks; no row numbers; and
+    # each heading starts where the values under it start.
+    table = EmptyStateTableWidget(0, 2, empty_text="Nothing here yet.")
+    try:
+        assert table.showGrid() is False
+        assert table.verticalHeader().isHidden() is True
+        alignment = table.horizontalHeader().defaultAlignment()
+        assert alignment & Qt.AlignmentFlag.AlignLeft
+    finally:
+        table.deleteLater()
+
+
 def test_empty_state_table_tracks_zero_to_one_and_one_to_zero(qapp: QApplication) -> None:
     table = EmptyStateTableWidget(0, 1, empty_text="Nothing here yet.")
     try:

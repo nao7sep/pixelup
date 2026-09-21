@@ -86,34 +86,64 @@ def test_a_disabled_destructive_control_keeps_its_red() -> None:
             assert faded.saturation() > 0
 
 
-def test_the_accent_press_is_derived_from_the_palette_not_chosen() -> None:
-    """A style sheet has no colour arithmetic, so the step is computed — but from
-    the OS accent, so a different accent still moves it."""
+def test_the_primary_takes_the_os_accent_not_the_selection_colour() -> None:
+    """The accent role follows the OS setting; the highlight is the text-selection
+    colour, a muted navy in dark and a pale blue under black letters in light, and
+    filling the primary with it is what made that button a strange blue. The steps
+    are computed, since a style sheet has no colour arithmetic, but from the accent,
+    so a different accent still moves them — and both deepen, one way."""
     blue, green = _palette("#efefef", "#000000"), _palette("#efefef", "#000000")
-    blue.setColor(QPalette.ColorRole.Highlight, QColor("#2f6fd0"))
-    green.setColor(QPalette.ColorRole.Highlight, QColor("#2f9d55"))
-    assert theme.accent_pressed(blue) != theme.accent_pressed(green)
+    blue.setColor(QPalette.ColorRole.Accent, QColor("#2f6fd0"))
+    green.setColor(QPalette.ColorRole.Accent, QColor("#2f9d55"))
     for palette in (blue, green):
-        highlight = palette.color(QPalette.ColorRole.Highlight)
-        pressed = QColor(theme.accent_pressed(palette))
-        assert pressed != highlight
-        assert pressed.value() < highlight.value()
+        palette.setColor(QPalette.ColorRole.Highlight, QColor("#a5cdff"))
+    assert theme.accent_colours(blue) != theme.accent_colours(green)
+    for palette in (blue, green):
+        accent = palette.color(QPalette.ColorRole.Accent)
+        colours = theme.accent_colours(palette)
+        assert colours["fill"] == accent.name()
+        assert colours["fill"] != palette.color(QPalette.ColorRole.Highlight).name()
+        hover, pressed = QColor(colours["fill_hover"]), QColor(colours["fill_pressed"])
+        assert accent.value() > hover.value() > pressed.value()
+        assert colours["ink"] == "#ffffff"
+        sheet = theme.build_stylesheet(palette)
+        assert f"background-color: {colours['fill']};" in sheet
 
 
-def test_the_sheet_names_no_colour_of_its_own_beyond_the_destructive_red() -> None:
-    """Every other colour must come from the palette, so the OS theme decides it."""
+def test_every_colour_in_the_sheet_is_one_the_app_names() -> None:
+    """The app owns its neutral surfaces, the accent's steps, a destructive red and
+    a warning amber, each named once per theme; nothing else in the sheet is a
+    literal, so a stray colour cannot creep in beside them."""
     for palette in (LIGHT, DARK):
         sheet = theme.build_stylesheet(palette)
-        literals = set(re.findall(r"#[0-9a-fA-F]{3,8}\b", sheet))
-        # The accent's pressed step is computed rather than named, because a style
-        # sheet cannot darken a colour; it still comes from palette(highlight).
-        allowed = (
-            set(theme.danger_colours(palette).values())
-            | set(theme.accent_disabled(palette).values())
-            | {theme.accent_pressed(palette)}
-        )
+        literals = {c.lower() for c in re.findall(r"#[0-9a-fA-F]{3,8}\b", sheet)}
+        allowed = {
+            c.lower()
+            for c in (
+                set(theme.surfaces(palette).values())
+                | set(theme.surfaces_disabled(palette).values())
+                | set(theme.accent_colours(palette).values())
+                | set(theme.danger_colours(palette).values())
+                | {theme.warning_text(palette)}
+            )
+        }
         assert literals <= allowed, f"unexpected literal colours: {sorted(literals - allowed)}"
-        assert "palette(" in sheet
+
+
+def test_the_dark_surfaces_are_not_the_palettes_near_black() -> None:
+    """The macOS dark palette fills a field, a list and a popup with #171717, which
+    read as black holes in the window; the app's own field sits a step below the
+    window instead, and its buttons a step above it."""
+    dark = _palette("#323232", "#ffffff")
+    dark.setColor(QPalette.ColorRole.Base, QColor("#171717"))
+    tone = theme.surfaces(dark)
+    window = QColor("#323232")
+    assert QColor(tone["field"]).lightness() > QColor("#171717").lightness() + 12
+    assert QColor(tone["field"]).lightness() < window.lightness()
+    assert QColor(tone["button"]).lightness() > window.lightness()
+    sheet = theme.build_stylesheet(dark)
+    assert "#171717" not in sheet
+    assert "palette(base)" not in sheet
 
 
 def test_one_height_for_every_one_line_control(qapp: QApplication, tmp_path) -> None:
