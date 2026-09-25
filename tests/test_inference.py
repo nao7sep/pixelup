@@ -108,6 +108,44 @@ def test_tile_reporting_upsampler_emits_per_tile_callback(capsys) -> None:
     assert capsys.readouterr().out == ""
 
 
+def test_tile_reporting_upsampler_process_checks_cancel_before_and_after() -> None:
+    from pixelup.errors import PixelupError
+    from pixelup.inference import _tile_reporting_upsampler_class
+
+    class _FakeBase:
+        def __init__(self) -> None:
+            self.ran = False
+
+        def process(self) -> None:
+            self.ran = True
+
+    cls = _tile_reporting_upsampler_class(_FakeBase)
+
+    # Cancelled before the pass starts: process() never runs.
+    upsampler = cls()
+    upsampler._pixelup_should_cancel = lambda: True
+    with pytest.raises(PixelupError) as excinfo:
+        upsampler.process()
+    assert excinfo.value.code == "job_cancelled"
+    assert upsampler.ran is False
+
+    # Cancelled only after the pass returns: still raises, but the pass itself ran
+    # (mirrors "cancel lands while the forward pass runs" — caught the moment it
+    # returns rather than after every remaining step).
+    upsampler = cls()
+    calls = [False, True]
+    upsampler._pixelup_should_cancel = lambda: calls.pop(0)
+    with pytest.raises(PixelupError) as excinfo:
+        upsampler.process()
+    assert excinfo.value.code == "job_cancelled"
+    assert upsampler.ran is True
+
+    # No should_cancel wired up: behaves exactly like the base class.
+    upsampler = cls()
+    upsampler.process()
+    assert upsampler.ran is True
+
+
 def test_tile_reporting_upsampler_falls_back_when_shape_unexpected() -> None:
     from pixelup.inference import _tile_reporting_upsampler_class
 

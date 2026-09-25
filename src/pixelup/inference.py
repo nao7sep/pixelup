@@ -172,8 +172,11 @@ def _create_upsampler(
         dni_weight = [config.denoise_strength, 1 - config.denoise_strength]
 
     spec = model_architecture_spec(config.model, requested_scale=config.scale)
-    needs_tile_subclass = config.tile > 0 and (on_tile is not None or should_cancel is not None)
-    cls = _tile_reporting_upsampler_class(RealESRGANer) if needs_tile_subclass else RealESRGANer
+    # Installed independent of config.tile: "whole image" (tile=0) runs the single-shot
+    # process() path, which needs its own cancellation checkpoint just as much as the
+    # per-tile loop does (PU-1).
+    needs_cancel_subclass = on_tile is not None or should_cancel is not None
+    cls = _tile_reporting_upsampler_class(RealESRGANer) if needs_cancel_subclass else RealESRGANer
     upsampler = cls(
         scale=spec.netscale,
         model_path=model_paths,
@@ -193,15 +196,34 @@ def _create_upsampler(
 
 
 def _tile_reporting_upsampler_class(base: type) -> type:
-    # Subclass of PixelUp's RealESRGANer subset that emits a per-tile callback.
-    # The override delegates to the adapted implementation and only assumes:
+    # Subclass of PixelUp's RealESRGANer subset that emits a per-tile callback and
+    # honors should_cancel. tile_process()'s override delegates to the adapted
+    # implementation and only assumes:
     #   - self.img.shape is (batch, channel, height, width)
     #   - self.tile_size is the tile edge length
     #   - the upstream loop calls self.model(input_tile) exactly once per tile
     # If a future release breaks any of these, the override silently falls back
     # to plain super().tile_process() and emits no per-tile events. The actual
     # upscale always proceeds. Callback exceptions are swallowed.
+    #
+    # process() (the "whole image" / tile=0 path) has no per-tile loop to hook, so
+    # it cannot interrupt the single forward pass itself; it instead checks
+    # should_cancel immediately before and after that call, so a cancellation
+    # requested before the pass starts is honored without paying for it, and one
+    # that lands while it runs is caught the moment it returns rather than only
+    # after every remaining step (the second RGBA alpha pass, encode, publish).
     class _TileReportingUpsampler(base):
+        def process(self) -> Any:
+            should_cancel: CancelCheck | None = getattr(self, "_pixelup_should_cancel", None)
+            if should_cancel is None:
+                return super().process()
+            if should_cancel():
+                raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+            result = super().process()
+            if should_cancel():
+                raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+            return result
+
         def tile_process(self) -> Any:
             callback: TileCallback | None = getattr(self, "_pixelup_on_tile", None)
             should_cancel: CancelCheck | None = getattr(self, "_pixelup_should_cancel", None)
