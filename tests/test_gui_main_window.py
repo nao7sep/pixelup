@@ -505,6 +505,52 @@ def test_job_finished_maps_outcomes_and_updates_summary(
     assert _summary(window, image) == "1 cancelled"
 
 
+def test_job_finished_recomputes_only_its_own_images_summary(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PU-5: a single job's completion must touch only its own image's row, not
+    # rescan every job and rewrite every image row in the batch.
+    window = make_window()
+    image_a = _png(tmp_path, "a.png")
+    image_b = _png(tmp_path, "b.png")
+    window.open_paths([image_a, image_b])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    window._queue_all_images_selected_models()
+    assert len(window.jobs) == 2
+    job_a = next(job for job in window.jobs if job.input_path == image_a)
+
+    calls: list[list[str]] = []
+    original = gui.job_status_summary
+
+    def _counting_summary(statuses: list[str]) -> str:
+        calls.append(list(statuses))
+        return original(statuses)
+
+    monkeypatch.setattr("pixelup.gui.job_status_summary", _counting_summary)
+
+    window._job_finished(job_a.id, True, "Done", {"ok": True}, [])
+
+    # Exactly one image's summary was recomputed — image_a's — not both.
+    assert calls == [["succeeded"]]
+    assert _summary(window, image_a) == "1 done"
+    assert _summary(window, image_b) == "1 queued"
+
+
+def test_find_job_uses_the_id_index_and_rejects_an_unknown_id(
+    make_window, tmp_path: Path
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    window._queue_selected_image()
+    job = window.jobs[0]
+
+    assert window._find_job(job.id) is job
+    with pytest.raises(RuntimeError, match="Unknown job id"):
+        window._find_job(job.id + 999)
+
+
 def test_failed_jobs_keep_a_queue_local_accessible_summary_until_retry(
     make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

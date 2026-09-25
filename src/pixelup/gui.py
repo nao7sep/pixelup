@@ -351,6 +351,13 @@ class MainWindow(QMainWindow):
         self._active_models_dialog: ManagedModelsDialog | None = None
         self._pending_model_work: PendingModelWork | None = None
         self.jobs: list[Job] = []
+        # Jobs are only ever appended, never removed, so these two indexes only need
+        # updating where jobs are created (_materialize_jobs); every other job-state
+        # change mutates an existing Job in place. They turn _find_job and an image
+        # row's status summary from an O(jobs) scan into an O(1) lookup, which matters
+        # because both run on every per-tile progress tick and job completion (PU-5).
+        self._jobs_by_id: dict[int, Job] = {}
+        self._jobs_by_input_path: dict[Path, list[Job]] = defaultdict(list)
         self.runner = JobRunner(self.jobs, self, runtime_dirs=self.runtime_dirs)
         self.runner.progress.connect(self._job_progress)
         self.runner.finished.connect(self._job_finished)
@@ -1504,8 +1511,11 @@ class MainWindow(QMainWindow):
         for job in new_jobs:
             log.debug("job.queued", job_id=job.id, details=job_log_payload(job))
         self.jobs.extend(new_jobs)
+        for job in new_jobs:
+            self._jobs_by_id[job.id] = job
+            self._jobs_by_input_path[job.input_path].append(job)
         self._add_queue_rows(new_jobs)
-        self._refresh_image_job_summaries()
+        self._refresh_image_job_summaries_for(job.input_path for job in new_jobs)
         self._update_action_buttons()
         self.runner.schedule(self.config.max_concurrent_jobs)
 
@@ -1531,23 +1541,26 @@ class MainWindow(QMainWindow):
     def _cancel_queue(self) -> None:
         cancelled_pending: list[int] = []
         signalled_running: list[int] = []
+        touched_paths: list[Path] = []
         for job in self.jobs:
             if job.status == "pending":
                 job.status = "cancelled"
                 job.message = "Cancelled"
                 self._update_job(job)
                 cancelled_pending.append(job.id)
+                touched_paths.append(job.input_path)
             elif job.status == "running":
                 self.runner.request_cancel(job.id)
                 job.status = "cancelling"
                 self._update_job(job)
                 signalled_running.append(job.id)
+                touched_paths.append(job.input_path)
         log.info(
             "queue.cancelled",
             cancelled_pending=cancelled_pending,
             signalled_running=signalled_running,
         )
-        self._refresh_image_job_summaries()
+        self._refresh_image_job_summaries_for(touched_paths)
         self._update_action_buttons()
 
     def _retry_failed(self) -> None:
@@ -1581,12 +1594,14 @@ class MainWindow(QMainWindow):
     def _retry_failed_snapshot(self, failed_job_ids: frozenset[int]) -> None:
         retried_jobs = retry_failed_jobs(self.jobs, only_job_ids=failed_job_ids)
         retried = set(retried_jobs)
+        touched_paths: list[Path] = []
         for job in self.jobs:
             if job.id in retried:
                 self._update_job(job)
+                touched_paths.append(job.input_path)
         if retried_jobs:
             log.info("jobs.retried", job_ids=retried_jobs)
-            self._refresh_image_job_summaries()
+            self._refresh_image_job_summaries_for(touched_paths)
             self._update_action_buttons()
             self.runner.schedule(self.config.max_concurrent_jobs)
 
@@ -1625,14 +1640,14 @@ class MainWindow(QMainWindow):
         job.message = message
         job.warnings = list(warnings) if isinstance(warnings, list) else []
         self._update_job(job)
-        self._refresh_image_job_summaries()
+        self._refresh_image_job_summaries_for((job.input_path,))
         self._update_action_buttons()
 
     def _find_job(self, job_id: int) -> Job:
-        for job in self.jobs:
-            if job.id == job_id:
-                return job
-        raise RuntimeError(f"Unknown job id: {job_id}")
+        try:
+            return self._jobs_by_id[job_id]
+        except KeyError as exc:
+            raise RuntimeError(f"Unknown job id: {job_id}") from exc
 
     def _update_job(self, job: Job) -> None:
         row = self._queue_rows[job.id]
@@ -1645,13 +1660,20 @@ class MainWindow(QMainWindow):
         tooltip = "\n".join(job.warnings) if job.warnings else status_text
         self.queue_table.item(row, 4).setToolTip(tooltip)
 
-    def _refresh_image_job_summaries(self) -> None:
-        statuses_by_input: dict[Path, list[str]] = defaultdict(list)
-        for job in self.jobs:
-            statuses_by_input[job.input_path].append(job.status)
-        for path in self._image_order:
-            row = self._image_rows[path]
-            summary = job_status_summary(statuses_by_input[path])
+    def _refresh_image_job_summaries_for(self, paths: Iterable[Path]) -> None:
+        """Recompute only the given images' summaries (PU-5).
+
+        A job status change never affects an image other than its own, so redoing
+        every row on every job event costs more the larger the batch gets. Duplicate
+        paths collapse to one recompute each (``self._jobs_by_input_path`` already
+        holds every job for a path, so repeating it would be redundant, not wrong).
+        """
+        for path in dict.fromkeys(paths):
+            row = self._image_rows.get(path)
+            if row is None:
+                continue
+            statuses = [job.status for job in self._jobs_by_input_path.get(path, ())]
+            summary = job_status_summary(statuses)
             item = self.image_table.item(row, 2)
             item.setText(summary)
             item.setToolTip(summary)
