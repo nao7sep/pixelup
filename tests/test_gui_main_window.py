@@ -1138,12 +1138,13 @@ def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft
     window.quality.setValue(10)
     attempts: list[AppConfig] = []
 
-    def _save(candidate: AppConfig) -> None:
+    def _save(candidate: AppConfig, _previous: AppConfig) -> AppConfig:
         attempts.append(candidate)
         if len(attempts) == 1:
             raise OSError("disk full")
+        return candidate
 
-    monkeypatch.setattr("pixelup.gui.save_app_config", _save)
+    monkeypatch.setattr("pixelup.gui.save_app_config_merged", _save)
 
     assert window._flush_parameters_save() is False
     assert window.config is original

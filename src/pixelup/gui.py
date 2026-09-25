@@ -59,7 +59,7 @@ from pixelup.app_config import (
     config_path,
     ensure_app_config,
     load_app_config_result,
-    save_app_config,
+    save_app_config_merged,
 )
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs, window_settings_path
 from pixelup.errors import PixelupError
@@ -1360,7 +1360,10 @@ class MainWindow(QMainWindow):
         surface_failure: bool = True,
     ) -> bool:
         try:
-            save_app_config(candidate)
+            # previous=self.config: only the fields this candidate actually changed
+            # from it are written, so a sibling PixelUp window's own saved change to
+            # some other field is never clobbered (PU-3).
+            merged = save_app_config_merged(candidate, self.config)
         except Exception as exc:  # noqa: BLE001 - persistence failure must remain in the UI.
             log.warning(
                 "config.save_failed",
@@ -1374,7 +1377,7 @@ class MainWindow(QMainWindow):
                     severity="error",
                 )
             return False
-        self.config = candidate
+        self.config = merged
         return True
 
     def _reset_parameters_to_defaults(self) -> None:

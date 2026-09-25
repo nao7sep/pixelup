@@ -1,7 +1,10 @@
 import json
+import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from filelock import FileLock
 
 from pixelup.app_config import (
     AppConfig,
@@ -10,7 +13,9 @@ from pixelup.app_config import (
     load_app_config,
     load_app_config_result,
     save_app_config,
+    save_app_config_merged,
 )
+from pixelup.errors import PixelupError
 from pixelup.jobs import JobSettings, job_settings_log_payload
 from pixelup.paths import OutputFormat
 
@@ -414,6 +419,91 @@ def test_old_flat_keys_are_inert(tmp_path: Path) -> None:
     config = load_app_config(path)
 
     assert config.parameters == JobSettings()
+
+
+def test_save_app_config_merged_keeps_a_sibling_windows_untouched_field(
+    tmp_path: Path,
+) -> None:
+    # Two windows open on the same config.json (PU-3). Window A saves a settings
+    # change; window B, still holding its older snapshot, then saves an unrelated
+    # Parameters-panel edit. B's save must not carry A's field back to its stale value.
+    path = tmp_path / "config.json"
+    opened = AppConfig()
+    save_app_config(opened, path)
+
+    save_app_config(replace(opened, max_concurrent_jobs=4), path)  # window A
+
+    b_candidate = replace(opened, parameters=JobSettings(quality=42))  # window B
+    merged = save_app_config_merged(b_candidate, opened, path)
+
+    assert merged.max_concurrent_jobs == 4
+    assert merged.parameters.quality == 42
+    assert load_app_config(path) == merged
+
+
+def test_save_app_config_merged_is_a_no_op_when_candidate_matches_previous(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    opened = AppConfig(max_concurrent_jobs=3)
+    save_app_config(opened, path)
+    written_at = path.stat().st_mtime_ns
+
+    merged = save_app_config_merged(opened, opened, path)
+
+    assert merged == opened
+    assert path.stat().st_mtime_ns == written_at
+
+
+def test_save_app_config_merged_times_out_behind_another_holder(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    save_app_config(AppConfig(), path)
+    lock = FileLock(str(path.with_name(f"{path.name}.lock")))
+    lock.acquire()
+    try:
+        with pytest.raises(PixelupError) as excinfo:
+            save_app_config_merged(
+                AppConfig(max_concurrent_jobs=2),
+                AppConfig(),
+                path,
+            )
+        assert excinfo.value.code == "internal_error"
+    finally:
+        lock.release()
+
+
+def test_save_app_config_merged_serializes_two_concurrent_savers(tmp_path: Path) -> None:
+    # Not a race in the fix itself: both callers' edits land, applied one after the
+    # other rather than one silently overwriting the other's.
+    path = tmp_path / "config.json"
+    opened = AppConfig()
+    save_app_config(opened, path)
+    ready = threading.Barrier(2)
+    results: list[AppConfig] = []
+    errors: list[Exception] = []
+
+    def save(candidate: AppConfig) -> None:
+        try:
+            ready.wait(timeout=2)
+            results.append(save_app_config_merged(candidate, opened, path))
+        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` for the assertion.
+            errors.append(exc)
+
+    thread_a = threading.Thread(
+        target=save, args=(replace(opened, max_concurrent_jobs=5),)
+    )
+    thread_b = threading.Thread(
+        target=save, args=(replace(opened, parameters=JobSettings(quality=17)),)
+    )
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=5)
+    thread_b.join(timeout=5)
+
+    assert not errors
+    final = load_app_config(path)
+    assert final.max_concurrent_jobs == 5
+    assert final.parameters.quality == 17
 
 
 def test_config_log_payload_shape() -> None:

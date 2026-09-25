@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from filelock import FileLock, Timeout
+
 from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_managed_text
 from pixelup.devices import DEVICE_VALUES
+from pixelup.errors import ErrorCode, PixelupError
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
 from pixelup.jobs import (
     JobSettings,
@@ -34,6 +37,17 @@ def config_path() -> Path:
     means a ``PIXELUP_HOME`` set before launch is honored and tests can vary it.
     """
     return resolve_state_dir() / "config.json"
+
+
+# Two PixelUp windows share one config.json. This bounds how long a save waits for
+# the other window's own in-flight save (backup_store.py's SQLite busy_timeout for
+# the same two-instance case is 5s; matched here for a consistent worst-case wait).
+_CONFIG_LOCK_TIMEOUT_SECONDS = 5
+
+
+def _config_lock_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.lock")
+
 
 # Valid domain of the settings this module still owns. The settings dialog and this
 # loader both reference these, so a value can never be representable in one place but
@@ -132,6 +146,66 @@ def save_app_config(config: AppConfig, path: Path | None = None) -> None:
     if path is None:
         path = config_path()
     write_managed_text(path, json.dumps(_to_json(config), indent=2, sort_keys=True) + "\n")
+
+
+def save_app_config_merged(
+    candidate: AppConfig,
+    previous: AppConfig,
+    path: Path | None = None,
+) -> AppConfig:
+    """Save an edit to ``config.json`` without discarding a sibling window's own edit.
+
+    A caller keeps its own full in-memory ``AppConfig`` and edits it by building
+    ``candidate = replace(previous, <one field>=<new value>)``. Saving that whole
+    object naively (PU-3) loses any field a second PixelUp window already changed
+    and saved since ``previous`` was loaded, because ``candidate`` still carries
+    ``previous``'s stale copy of it. This takes a short-lived cross-process
+    :class:`filelock.FileLock` on ``config.json`` — the same tolerated-two-instance
+    pattern :mod:`pixelup.models`, :mod:`pixelup.output_reservation`, and
+    :mod:`pixelup.backup_store` already use for their own shared files — re-reads the
+    file fresh under the lock, applies onto *that* only the fields ``candidate``
+    actually changed relative to ``previous``, and saves the result. The returned
+    ``AppConfig`` becomes the caller's new in-memory copy, so it also picks up
+    whatever the other window wrote to fields this edit did not touch.
+    """
+    if path is None:
+        path = config_path()
+    lock = FileLock(str(_config_lock_path(path)), timeout=_CONFIG_LOCK_TIMEOUT_SECONDS)
+    try:
+        lock.acquire()
+    except Timeout as exc:
+        raise PixelupError(
+            ErrorCode.INTERNAL_ERROR,
+            "Timed out saving settings; another PixelUp window is saving them.",
+            details={"path": str(path), "lock_timeout": _CONFIG_LOCK_TIMEOUT_SECONDS},
+        ) from exc
+    try:
+        current = load_app_config(path)
+        merged = _merge_app_config(current=current, previous=previous, candidate=candidate)
+        if merged != current:
+            save_app_config(merged, path)
+        return merged
+    finally:
+        lock.release()
+
+
+def _merge_app_config(
+    *, current: AppConfig, previous: AppConfig, candidate: AppConfig
+) -> AppConfig:
+    """Apply onto ``current`` only the fields ``candidate`` changed from ``previous``.
+
+    A field of ``candidate`` that still equals ``previous`` was never touched by this
+    edit, so ``current``'s value for it — possibly written by another window after
+    ``previous`` was loaded — is kept rather than clobbered.
+    """
+    updates: dict[str, Any] = {}
+    if candidate.max_concurrent_jobs != previous.max_concurrent_jobs:
+        updates["max_concurrent_jobs"] = candidate.max_concurrent_jobs
+    if candidate.font_family != previous.font_family:
+        updates["font_family"] = candidate.font_family
+    if candidate.parameters != previous.parameters:
+        updates["parameters"] = candidate.parameters
+    return replace(current, **updates) if updates else current
 
 
 def ensure_app_config(path: Path | None = None) -> bool:
