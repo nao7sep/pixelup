@@ -951,32 +951,80 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
     assert job.message == "Model was removed"
 
 
+def _run_reveal(window: MainWindow, qapp: QApplication) -> None:
+    window._reveal_log_file()
+    deadline = time.monotonic() + 2
+    while window._reveal_thread is not None and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.001)
+    qapp.processEvents()
+    assert window._reveal_thread is None
+
+
 def test_reveal_log_file_survives_failure(
-    make_window, monkeypatch: pytest.MonkeyPatch
+    make_window, qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window = make_window()
 
     # A False result (reveal could not be confirmed) must not raise.
     monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", lambda path: False)
-    window._reveal_log_file()
+    _run_reveal(window, qapp)
     assert window.log_action_result.isVisibleTo(window)
     assert "Try again" in window.log_action_result.message_label.text()
+    assert window.logs_button.isEnabled()
 
     # An OSError (e.g. the helper binary is missing) is caught and logged.
     def _raise(path: Path) -> bool:
         raise OSError("no file browser")
 
     monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _raise)
-    window._reveal_log_file()
+    _run_reveal(window, qapp)
 
     def _timeout(path: Path) -> bool:
         raise gui.subprocess.TimeoutExpired(["open", "-R", str(path)], 5)
 
     monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _timeout)
-    window._reveal_log_file()
+    _run_reveal(window, qapp)
 
     monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", lambda path: True)
+    _run_reveal(window, qapp)
+    assert window.log_action_result.isHidden()
+
+
+def test_reveal_log_file_runs_off_the_gui_thread_and_ignores_repeat_clicks(
+    make_window, qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PU-4: a slow file browser must not freeze the window, and a second click while
+    # one reveal is still running must not stack another wait behind it.
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[Path] = []
+
+    def _slow_reveal(path: Path) -> bool:
+        calls.append(path)
+        started.set()
+        assert release.wait(2)
+        return True
+
+    monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _slow_reveal)
+    window = make_window()
+
     window._reveal_log_file()
+    assert started.wait(1)
+    assert window._reveal_thread is not None
+    assert window.logs_button.isEnabled() is False
+
+    window._reveal_log_file()  # ignored: a reveal is already in flight
+
+    release.set()
+    deadline = time.monotonic() + 2
+    while window._reveal_thread is not None and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.001)
+    qapp.processEvents()
+
+    assert calls == [window.log_file]
+    assert window.logs_button.isEnabled()
     assert window.log_action_result.isHidden()
 
 

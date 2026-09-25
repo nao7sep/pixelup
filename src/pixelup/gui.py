@@ -10,7 +10,18 @@ from itertools import count
 from pathlib import Path
 from typing import Literal
 
-from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import (
+    QByteArray,
+    QObject,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
@@ -327,6 +338,8 @@ class MainWindow(QMainWindow):
         # wide, so this is the single place the UI font is established.
         apply_ui_font(QApplication.instance(), self.config.font_family)
         self.log_file = log_file
+        self._reveal_thread: QThread | None = None
+        self._reveal_worker: _RevealWorker | None = None
         self.runtime_dirs = runtime_dirs or resolve_runtime_dirs()
         self._job_ids = count(1)
         self._images_by_path: dict[Path, ImageEntry] = {}
@@ -491,7 +504,11 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
 
     def _workers_clean_for_quit(self) -> bool:
-        return self.runner.cleanup_for_quit() and self.model_manager.cleanup_for_quit()
+        return (
+            self.runner.cleanup_for_quit()
+            and self.model_manager.cleanup_for_quit()
+            and self._reveal_thread is None
+        )
 
     def open_paths(self, paths: list[Path]) -> None:
         log.info("open.requested", paths=[str(path) for path in paths])
@@ -1174,24 +1191,41 @@ class MainWindow(QMainWindow):
         AboutDialog(self).exec()
 
     def _reveal_log_file(self) -> None:
-        try:
-            revealed = _reveal_in_file_browser(self.log_file)
-        except (OSError, subprocess.TimeoutExpired):
-            log.exception("log.reveal_failed", log_file=str(self.log_file))
-            self.log_action_result.show_result(
-                "Could not reveal the log. Try again from this button.",
-                severity="error",
-            )
+        # _reveal_in_file_browser runs a real subprocess with its own timeout; run it
+        # off the GUI thread so a slow/unresponsive volume or file browser cannot
+        # freeze the whole window for that long, and disable the button meanwhile so
+        # repeat clicks cannot stack several such waits back to back (PU-4).
+        if self._reveal_thread is not None:
             return
+        self.logs_button.setEnabled(False)
+        thread = QThread(self)
+        worker = _RevealWorker(self.log_file)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._reveal_log_file_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._reveal_thread = thread
+        # Kept alive explicitly: moveToThread/connect do not retain a Python
+        # reference of their own, and a GC'd worker mid-run would be undefined.
+        self._reveal_worker = worker
+        thread.start()
+
+    @Slot(bool)
+    def _reveal_log_file_finished(self, revealed: bool) -> None:
+        self._reveal_thread = None
+        self._reveal_worker = None
+        self.logs_button.setEnabled(True)
         if revealed:
-            log.info("log.revealed", log_file=str(self.log_file))
             self.log_action_result.clear_result()
         else:
-            log.warning("log.reveal_failed", log_file=str(self.log_file))
             self.log_action_result.show_result(
                 "Could not reveal the log. Try again from this button.",
                 severity="error",
             )
+        # A quit that arrived while this ran was deferred behind it; retry it now.
+        self._close_when_workers_stop()
 
     def _add_image_row(self, entry: ImageEntry) -> None:
         row = self.image_table.rowCount()
@@ -1706,6 +1740,30 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
     if count == 1:
         return singular
     return plural if plural is not None else f"{singular}s"
+
+
+class _RevealWorker(QObject):
+    """Runs one bounded ``_reveal_in_file_browser`` call off the GUI thread."""
+
+    finished = Signal(bool)
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            revealed = _reveal_in_file_browser(self._path)
+        except (OSError, subprocess.TimeoutExpired):
+            log.exception("log.reveal_failed", log_file=str(self._path))
+            self.finished.emit(False)
+            return
+        if revealed:
+            log.info("log.revealed", log_file=str(self._path))
+        else:
+            log.warning("log.reveal_failed", log_file=str(self._path))
+        self.finished.emit(revealed)
 
 
 def _reveal_in_file_browser(path: Path) -> bool:
