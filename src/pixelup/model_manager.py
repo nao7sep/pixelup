@@ -15,11 +15,18 @@ from pixelup.session_log import log
 _DOWNLOAD_TIMEOUT_SECONDS = 600
 _LOCK_TIMEOUT_SECONDS = 600
 
+# Unlike the job queue's own configurable cap, this one has no UI: "Install all" is
+# the only path that can start several downloads in the same pass (a lone row
+# install is always one bundle at a time already), so a fixed small number is
+# enough to stop them saturating bandwidth and fighting each other's per-download
+# minimum-rate deadline (PU-2). Matches the plan's "two at a time" decision.
+MAX_CONCURRENT_INSTALLS = 2
+
 
 @dataclass(frozen=True, slots=True)
 class ModelOperation:
     id: int
-    kind: Literal["running", "completed", "failed", "cancelled"]
+    kind: Literal["queued", "running", "completed", "failed", "cancelled"]
     artifact_names: tuple[str, ...]
     current_artifact: str | None = None
     completed_bytes: int = 0
@@ -139,6 +146,9 @@ class ModelManager(QObject):
         self._threads: dict[int, QThread] = {}
         self._workers: dict[int, ModelInstallWorker] = {}
         self._install_results: dict[int, tuple[bool, bool, str]] = {}
+        # Artifact groups waiting for a free install slot, in request order;
+        # each has an already-visible "queued" operation in self._operations.
+        self._pending: dict[int, tuple[tuple[str, ...], bool]] = {}
         self._shutting_down = False
 
     @property
@@ -147,7 +157,15 @@ class ModelManager(QObject):
 
     @property
     def active_operations(self) -> tuple[ModelOperation, ...]:
+        """Operations with a live worker thread actually downloading right now."""
         return tuple(operation for operation in self.operations if operation.kind == "running")
+
+    @property
+    def in_progress_operations(self) -> tuple[ModelOperation, ...]:
+        """Operations that are running or waiting their turn behind the install cap."""
+        return tuple(
+            operation for operation in self.operations if operation.kind in {"running", "queued"}
+        )
 
     @property
     def failed_operations(self) -> tuple[ModelOperation, ...]:
@@ -172,13 +190,20 @@ class ModelManager(QObject):
             if operation.kind == "running"
         )
 
+    def in_progress_for(self, artifact_names: tuple[str, ...]) -> tuple[ModelOperation, ...]:
+        return tuple(
+            operation
+            for operation in self.operations_for(artifact_names)
+            if operation.kind in {"running", "queued"}
+        )
+
     def missing(self, artifact_names: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(name for name in artifact_names if name not in self._ready_names)
 
     def available_to_install(self, artifact_names: tuple[str, ...]) -> tuple[str, ...]:
         active = {
             name
-            for operation in self.active_operations
+            for operation in self.in_progress_operations
             for name in operation.artifact_names
         }
         return tuple(name for name in artifact_names if name not in active)
@@ -190,7 +215,7 @@ class ModelManager(QObject):
         operations = tuple(
             operation
             for operation in self.operations
-            if operation.kind in {"running", "completed"}
+            if operation.kind in {"running", "queued", "completed"}
         )
         return (
             sum(operation.completed_bytes for operation in operations),
@@ -208,7 +233,7 @@ class ModelManager(QObject):
         if self._shutting_down:
             return None
         names = tuple(dict.fromkeys(artifact_names))
-        if not names or self.active_for(names):
+        if not names or self.in_progress_for(names):
             return None
 
         # A retry supersedes terminal state for the same artifacts. Unrelated
@@ -217,25 +242,44 @@ class ModelManager(QObject):
         self._operations = {
             operation_id: operation
             for operation_id, operation in self._operations.items()
-            if operation.kind == "running"
+            if operation.kind in {"running", "queued"}
             or not names_set.intersection(operation.artifact_names)
         }
 
         operation_id = next(self._operation_ids)
-        operation = ModelOperation(
+        if len(self._threads) >= MAX_CONCURRENT_INSTALLS:
+            self._operations[operation_id] = ModelOperation(
+                id=operation_id,
+                kind="queued",
+                artifact_names=names,
+                total_bytes=artifact_size_bytes(names),
+            )
+            self._pending[operation_id] = (names, force)
+            log.info(
+                "models.install_queued",
+                operation_id=operation_id,
+                artifacts=list(names),
+                force=force,
+            )
+            self.changed.emit()
+            return operation_id
+
+        self._operations[operation_id] = ModelOperation(
             id=operation_id,
             kind="running",
             artifact_names=names,
             total_bytes=artifact_size_bytes(names),
         )
-        self._operations[operation_id] = operation
         log.info(
             "models.install_requested",
             operation_id=operation_id,
             artifacts=list(names),
             force=force,
         )
+        self._spawn_worker(operation_id, names, force=force)
+        return operation_id
 
+    def _spawn_worker(self, operation_id: int, names: tuple[str, ...], *, force: bool) -> None:
         thread = QThread(self)
         worker = ModelInstallWorker(operation_id, self.models_dir, names, force=force)
         worker.moveToThread(thread)
@@ -250,12 +294,37 @@ class ModelManager(QObject):
         self._workers[operation_id] = worker
         self.changed.emit()
         thread.start()
-        return operation_id
+
+    def _start_next_pending(self) -> None:
+        while self._pending and len(self._threads) < MAX_CONCURRENT_INSTALLS:
+            operation_id, (names, force) = next(iter(self._pending.items()))
+            del self._pending[operation_id]
+            if self._shutting_down:
+                continue
+            operation = self._operations.get(operation_id)
+            if operation is None or operation.kind != "queued":
+                continue
+            self._operations[operation_id] = replace(operation, kind="running")
+            log.info(
+                "models.install_requested",
+                operation_id=operation_id,
+                artifacts=list(names),
+                force=force,
+            )
+            self._spawn_worker(operation_id, names, force=force)
 
     def cancel(self, operation_id: int) -> bool:
-        worker = self._workers.get(operation_id)
         operation = self._operations.get(operation_id)
-        if worker is None or operation is None or operation.kind != "running":
+        if operation is None:
+            return False
+        if operation.kind == "queued":
+            self._pending.pop(operation_id, None)
+            del self._operations[operation_id]
+            self.changed.emit()
+            self.cancelled.emit(operation.artifact_names)
+            return True
+        worker = self._workers.get(operation_id)
+        if worker is None or operation.kind != "running":
             return False
         self._operations[operation_id] = replace(operation, cancelling=True)
         worker.request_cancel()
@@ -264,13 +333,13 @@ class ModelManager(QObject):
 
     def cancel_for(self, artifact_names: tuple[str, ...]) -> bool:
         cancelled = False
-        for operation in self.active_for(artifact_names):
+        for operation in self.in_progress_for(artifact_names):
             cancelled = self.cancel(operation.id) or cancelled
         return cancelled
 
     def cancel_all(self) -> bool:
         cancelled = False
-        for operation in self.active_operations:
+        for operation in self.in_progress_operations:
             cancelled = self.cancel(operation.id) or cancelled
         return cancelled
 
@@ -279,7 +348,7 @@ class ModelManager(QObject):
         self.cancel_all()
 
     def cleanup_for_quit(self) -> bool:
-        return not self._threads
+        return not self._threads and not self._pending
 
     @Slot(int, str, int, int)
     def _show_progress(self, operation_id: int, name: str, done: int, total: int) -> None:
@@ -333,6 +402,9 @@ class ModelManager(QObject):
         thread = self._threads.pop(operation_id, None)
         if thread is not None:
             thread.deleteLater()
+        # A freed slot goes straight to the next queued group rather than sitting
+        # idle until something else pokes the manager (PU-2).
+        self._start_next_pending()
 
         # Concurrent operations publish disjoint artifacts atomically. Re-read the
         # shared cache at each operation boundary so every view sees partial success.

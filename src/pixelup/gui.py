@@ -1078,7 +1078,7 @@ class MainWindow(QMainWindow):
             self._active_models_dialog = None
         if (
             self._pending_model_work is not None
-            and not self.model_manager.active_for(
+            and not self.model_manager.in_progress_for(
                 self._pending_model_work.required_artifacts
             )
         ):
@@ -1093,7 +1093,7 @@ class MainWindow(QMainWindow):
         pending = self._pending_model_work
         if pending is None:
             return
-        if self.model_manager.active_for(
+        if self.model_manager.in_progress_for(
             pending.required_artifacts
         ) or self.model_manager.missing(pending.required_artifacts):
             return
@@ -1127,7 +1127,7 @@ class MainWindow(QMainWindow):
     def _refresh_model_rollup(self) -> None:
         ready, total = self.model_manager.ready_count()
         missing = ready < total
-        if self.model_manager.active_operations:
+        if self.model_manager.in_progress_operations:
             completed, operation_total = self.model_manager.aggregate_progress()
             progress = (
                 0

@@ -139,8 +139,12 @@ class ManagedModelsDialog(DialogShell):
 
         for row, bundle in enumerate(MANAGED_MODEL_BUNDLES):
             bundle_operations = self._manager.operations_for(bundle.artifact_names)
-            active = next(
-                (operation for operation in bundle_operations if operation.kind == "running"),
+            in_progress = next(
+                (
+                    operation
+                    for operation in bundle_operations
+                    if operation.kind in {"running", "queued"}
+                ),
                 None,
             )
             failed = next(
@@ -149,20 +153,20 @@ class ManagedModelsDialog(DialogShell):
             )
             ready = len(ready_names.intersection(bundle.artifact_names))
             total = len(bundle.artifact_names)
-            status = _bundle_status(active, failed, ready, total)
+            status = _bundle_status(in_progress, failed, ready, total)
             self.status_labels[row].setText(status)
             self.status_labels[row].setToolTip(status)
             missing_required = bool(required.intersection(bundle.artifact_names)) and ready < total
             self.status_labels[row].setStyleSheet(
                 _required_missing_style(self.palette())
-                if missing_required and active is None and failed is None
+                if missing_required and in_progress is None and failed is None
                 else ""
             )
 
             action = self.row_action_buttons[row]
-            if active is not None:
-                action.setText("Cancelling…" if active.cancelling else "Cancel")
-                action.setEnabled(not active.cancelling and not self._required_artifacts)
+            if in_progress is not None:
+                action.setText("Cancelling…" if in_progress.cancelling else "Cancel")
+                action.setEnabled(not in_progress.cancelling and not self._required_artifacts)
             else:
                 action.setText("Reinstall" if ready == total else "Install")
                 # A queue-preflight surface has one exact authorization action in
@@ -194,7 +198,7 @@ class ManagedModelsDialog(DialogShell):
 
     def _render_primary_action(self) -> None:
         if self._required_artifacts:
-            active = self._manager.active_for(self._required_artifacts)
+            active = self._manager.in_progress_for(self._required_artifacts)
             if active:
                 self.primary_button.setText(
                     "Cancelling…"
@@ -221,9 +225,9 @@ class ManagedModelsDialog(DialogShell):
         if self._required_artifacts or not 0 <= bundle_index < len(MANAGED_MODEL_BUNDLES):
             return
         bundle = MANAGED_MODEL_BUNDLES[bundle_index]
-        active = self._manager.active_for(bundle.artifact_names)
-        if active:
-            self._manager.cancel(active[0].id)
+        in_progress = self._manager.in_progress_for(bundle.artifact_names)
+        if in_progress:
+            self._manager.cancel(in_progress[0].id)
             return
         missing = self._manager.missing(bundle.artifact_names)
         artifact_names = missing or bundle.artifact_names
@@ -235,7 +239,7 @@ class ManagedModelsDialog(DialogShell):
             if self._required_artifacts
             else MANAGED_ARTIFACT_NAMES
         )
-        if self._required_artifacts and self._manager.active_for(targets):
+        if self._required_artifacts and self._manager.in_progress_for(targets):
             self._manager.cancel_for(targets)
             return
         missing = self._manager.missing(targets)
@@ -270,15 +274,17 @@ class ManagedModelsDialog(DialogShell):
 
 
 def _bundle_status(
-    active: ModelOperation | None,
+    in_progress: ModelOperation | None,
     failed: ModelOperation | None,
     ready: int,
     total: int,
 ) -> str:
-    if active is not None:
-        if active.cancelling:
+    if in_progress is not None:
+        if in_progress.kind == "queued":
+            return "Queued"
+        if in_progress.cancelling:
             return "Cancelling…"
-        return f"Installing {_percentage(active.completed_bytes, active.total_bytes)}%"
+        return f"Installing {_percentage(in_progress.completed_bytes, in_progress.total_bytes)}%"
     if failed is not None:
         return "Failed"
     if ready == total:

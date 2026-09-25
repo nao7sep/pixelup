@@ -15,7 +15,7 @@ from pixelup.model_management import (
     MANAGED_MODEL_BUNDLES,
     artifact_size_bytes,
 )
-from pixelup.model_manager import ModelManager
+from pixelup.model_manager import MAX_CONCURRENT_INSTALLS, ModelManager
 from pixelup.models import model_file
 
 
@@ -306,6 +306,56 @@ def test_install_all_requests_every_missing_artifact(
         assert dialog.primary_button.text() == "Install all"
         assert not dialog.primary_button.isEnabled()
     finally:
+        dialog.deleteLater()
+
+
+def test_install_all_caps_concurrent_downloads(
+    qapp: QApplication, tmp_path: Path, monkeypatch
+) -> None:
+    assert len(MANAGED_ARTIFACT_NAMES) > MAX_CONCURRENT_INSTALLS
+    lock = threading.Lock()
+    current = 0
+    peak = 0
+    reached_cap = threading.Event()
+    release = threading.Event()
+
+    def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
+        nonlocal current, peak
+        with lock:
+            current += 1
+            peak = max(peak, current)
+            if current >= MAX_CONCURRENT_INSTALLS:
+                reached_cap.set()
+        assert release.wait(2)
+        with lock:
+            current -= 1
+        target = model_file(models_dir, name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"model")
+        return {"status": "downloaded"}
+
+    monkeypatch.setattr("pixelup.model_manager.download_model", install)
+    manager = ModelManager(tmp_path)
+    dialog = ManagedModelsDialog(manager)
+    try:
+        dialog._install_all_or_cancel()
+        # Wait until MAX_CONCURRENT_INSTALLS downloads are truly running at once
+        # (not merely marked "running" — the worker threads may not have reached
+        # download_model yet) before checking that a 3rd never joins them.
+        assert reached_cap.wait(2)
+        qapp.processEvents()
+
+        # The cap holds even though every missing artifact was requested at once:
+        # exactly MAX_CONCURRENT_INSTALLS run, the rest wait as "queued".
+        assert len(manager.active_operations) == MAX_CONCURRENT_INSTALLS
+        assert any(operation.kind == "queued" for operation in manager.operations)
+
+        release.set()
+        _finish_manager(manager, qapp)
+        assert peak == MAX_CONCURRENT_INSTALLS
+        assert all(model_file(tmp_path, name).exists() for name in MANAGED_ARTIFACT_NAMES)
+    finally:
+        release.set()
         dialog.deleteLater()
 
 
