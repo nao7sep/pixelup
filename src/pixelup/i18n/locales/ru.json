@@ -73,7 +73,7 @@
   "error.qualityInvalid": "Качество должно быть от 0 до 100.",
   "error.redirectNoLocation": "Перенаправление при загрузке модели не содержало заголовка Location.",
   "error.scaleInvalid": "Масштаб должен быть 2x или 4x.",
-  "error.sidecarChanged": "Файл настроек результата изменился во время публикации.",
+  "error.sidecarChanged": "Файл настроек результата изменился во время сохранения.",
   "error.sidecarExists": "Файл настроек результата уже существует.",
   "error.sidecarWriteFailed": "Не удалось записать файл настроек результата.",
   "error.storageCreateFailed": "Не удалось создать папку хранилища PixelUp.",

@@ -73,7 +73,7 @@
   "error.qualityInvalid": "품질은 0에서 100 사이여야 합니다.",
   "error.redirectNoLocation": "모델 다운로드 리디렉션에 Location 헤더가 없습니다.",
   "error.scaleInvalid": "배율은 2x 또는 4x여야 합니다.",
-  "error.sidecarChanged": "출력 설정 파일이 게시하는 중에 변경되었습니다.",
+  "error.sidecarChanged": "저장하는 중에 출력 설정 파일이 변경되었습니다.",
   "error.sidecarExists": "출력 설정 파일이 이미 있습니다.",
   "error.sidecarWriteFailed": "출력 설정 파일을 쓸 수 없습니다.",
   "error.storageCreateFailed": "PixelUp 저장 폴더를 만들 수 없습니다.",

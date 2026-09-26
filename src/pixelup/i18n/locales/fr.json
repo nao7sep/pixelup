@@ -73,7 +73,7 @@
   "error.qualityInvalid": "La qualité doit être comprise entre 0 et 100.",
   "error.redirectNoLocation": "Une redirection du téléchargement du modèle ne contenait pas d’en-tête Location.",
   "error.scaleInvalid": "Le facteur doit être 2x ou 4x.",
-  "error.sidecarChanged": "Le fichier de réglages de la sortie a changé pendant la publication.",
+  "error.sidecarChanged": "Le fichier de réglages de la sortie a changé pendant son enregistrement.",
   "error.sidecarExists": "Le fichier de réglages de la sortie existe déjà.",
   "error.sidecarWriteFailed": "Impossible d’écrire le fichier de réglages de la sortie.",
   "error.storageCreateFailed": "Impossible de créer le dossier de stockage de PixelUp.",
