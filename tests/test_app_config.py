@@ -515,5 +515,6 @@ def test_config_log_payload_shape() -> None:
     assert config_log_payload(config) == {
         "max_concurrent_jobs": 2,
         "font_family": AppConfig().font_family,
+        "language": "system",
         "parameters": job_settings_log_payload(config.parameters),
     }

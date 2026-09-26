@@ -28,10 +28,12 @@ _FOOTER_MARGIN_Y = 16
 # One chosen width per surface rather than one that follows its content, so the
 # same dialog keeps its shape whatever it happens to be saying
 # (modal-dialog-conventions). Three roles, three widths: a column of prose, a
-# form or reference, and the one table.
+# form or reference, and the one table. The table's width is the one its columns
+# need in the language whose words are longest (German), measured by the
+# label-fit test in all ten (localization-conventions).
 NOTICE_WIDTH = 440
 FORM_WIDTH = 560
-TABLE_WIDTH = 820
+TABLE_WIDTH = 880
 
 
 class DialogShell(QDialog):

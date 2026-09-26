@@ -79,6 +79,7 @@ from pixelup.devices import DEVICE_CHOICES
 from pixelup.errors import PixelupError
 from pixelup.fonts import apply_ui_font
 from pixelup.i18n import localizer
+from pixelup.i18n.bootstrap import settle_language
 from pixelup.i18n.localized import localize, unlocalize
 from pixelup.i18n.message import Message, join
 from pixelup.imaging import read_image_size, register_image_plugins
@@ -1108,6 +1109,9 @@ class MainWindow(QMainWindow):
             app = QApplication.instance()
             apply_ui_font(app, self.config.font_family)
             self.setFont(app.font())
+            # A changed language applies on Save, like its neighbours, and rewrites
+            # what is already on screen (see _retranslate), which re-measures.
+            localizer.use(self.config.language)
             self._refresh_layout_metrics()
             log.info(
                 "settings.saved",
@@ -1926,6 +1930,9 @@ def build_app(
     injectable so a test can point them at a temp location; both default to the real resolution.
     """
     register_image_plugins()
+    # Before the application object exists, so AppKit's own menu items and the
+    # first frame are both already in the reader's language.
+    settle_language()
     resolved_log_file = configure_session_logging(log_file)
     resolved_runtime_dirs = runtime_dirs if runtime_dirs is not None else resolve_runtime_dirs()
     app = QApplication.instance() or QApplication(argv)

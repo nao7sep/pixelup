@@ -17,9 +17,11 @@ from PySide6.QtWidgets import (
 from pixelup.app_config import MAX_CONCURRENT_JOBS, MIN_CONCURRENT_JOBS, AppConfig
 from pixelup.dialog_shell import FORM_WIDTH, DialogShell
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
+from pixelup.i18n import localizer
+from pixelup.i18n.languages import LANGUAGES, SYSTEM
 from pixelup.i18n.localized import localize
 from pixelup.ui_common import secondary_label, use_regular_spacing
-from pixelup.widgets import NoWheelSpinBox
+from pixelup.widgets import NoWheelComboBox, NoWheelSpinBox
 
 # A settled column width for the value field so the control and its wrapped
 # caption share one edge, and the caption wraps predictably instead of stretching
@@ -51,10 +53,10 @@ class SettingsDialog(DialogShell):
 
     One home per thing. The image-processing parameters live in the main window's
     Parameters panel, which persists its own edits and resets to its own built-ins,
-    so this dialog deliberately holds only the leftovers: the UI font and the
-    concurrent job count. It carries no reset button — neither setting is a stale-able
-    built-in or a tuned, interacting set worth returning to, so there is no default
-    worth a control (config-seeding-conventions).
+    so this dialog deliberately holds only the leftovers: the interface language, the
+    UI font and the concurrent job count. It carries no reset button — no setting here
+    is a stale-able built-in or a tuned, interacting set worth returning to, so there
+    is no default worth a control (config-seeding-conventions).
 
     The widgets hold a draft; the incoming config is never mutated. The commit
     (OK) button stays disabled until the draft differs from the config the
@@ -85,12 +87,25 @@ class SettingsDialog(DialogShell):
         localize(self.font_family, placeholder="settings.uiFontPlaceholder")
         self.font_family.setMinimumWidth(260)
 
+        # System first, then each language in its own name, so a reader finds
+        # theirs whatever language is showing (localization-conventions). The
+        # names are the languages' own and are never translated. A modal dialog
+        # renders its choices once: the language cannot change while it is up.
+        self.language = NoWheelComboBox()
+        self.language.addItem(localizer.t("settings.languageSystem"), SYSTEM)
+        for tag, name in LANGUAGES:
+            self.language.addItem(name, tag)
+        self.language.setCurrentIndex(max(0, self.language.findData(config.language)))
+
         # Each caption groups under its own control (see _captioned) rather than
         # floating a full row-gap away, so the label reads as sub-text of the
         # field it explains. Row labels top-align to sit beside the control, not
         # the caption.
         label_align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         row = 0
+        form.addWidget(localize(QLabel(), text="settings.language"), row, 0)
+        form.addWidget(self.language, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
         form.addWidget(localize(QLabel(), text="settings.uiFont"), row, 0, label_align)
         form.addWidget(_captioned(self.font_family, "settings.uiFontCaption"), row, 1)
         row += 1
@@ -126,12 +141,13 @@ class SettingsDialog(DialogShell):
         for changed in (
             self.concurrent.valueChanged,
             self.font_family.textChanged,
+            self.language.currentIndexChanged,
         ):
             changed.connect(self._update_commit_enabled)
         self._update_commit_enabled()
 
     def config(self) -> AppConfig:
-        """The draft config: the opened one with exactly this dialog's two fields replaced.
+        """The draft config: the opened one with exactly this dialog's fields replaced.
 
         Built by ``replace`` rather than a fresh ``AppConfig(...)`` so the settings this
         dialog does not show — today the Parameters panel — pass through untouched.
@@ -142,6 +158,7 @@ class SettingsDialog(DialogShell):
             self._initial,
             max_concurrent_jobs=self.concurrent.value(),
             font_family=normalize_font_family(self.font_family.text(), DEFAULT_UI_FONT_FAMILY),
+            language=self.language.currentData(),
         )
 
     def is_dirty(self) -> bool:

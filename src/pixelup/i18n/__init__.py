@@ -9,6 +9,7 @@
 - ``translator``: one immutable translator per language.
 - ``localizer``: the current translator, Qt's own translation, and ``changed``.
 - ``localized``: widget bindings that hold a key and follow a language change.
+- ``bootstrap``: settles the language before the application object exists.
 """
 
 from pixelup.i18n.message import Message, join

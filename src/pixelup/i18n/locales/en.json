@@ -254,6 +254,8 @@
   "result.dismiss": "Dismiss",
   "result.dismissAccessible": "Dismiss result",
   "settings.concurrentJobs": "Concurrent jobs",
+  "settings.language": "Language",
+  "settings.languageSystem": "System",
   "settings.saveFailed": "PixelUp could not save your settings. Your changes are still here; try again.",
   "settings.title": "Settings",
   "settings.uiFont": "UI font",

@@ -18,6 +18,7 @@ Managed models shows which pinned model files are ready and installs or repairs 
 - Optional denoise, alpha handling, tiling, and output format/quality
 - Per-image job summaries, a selected-image preview, and retry/cancel of jobs
 - Remembers the main window position and size between launches
+- Speaks English, Japanese, Chinese, Korean, Spanish, Portuguese, French, German, Italian, and Russian, following the computer's language unless you choose one in Settings
 
 ## Requirements
 

@@ -148,6 +148,12 @@ if is_mac:
             # the freeze (see the liquid-glass-icon-workflow). The catalog is generated from
             # company/assets by company/tools/liquid-glass-icon/apps/pixelup.mjs.
             "CFBundleIconName": "pixel-butterfly-paper",
+            # Every interface language, so AppKit agrees to draw its own menu items
+            # (Services, Emoji & Symbols, Start Dictation) in the language the app
+            # points it at before QApplication exists (localization-conventions).
+            "CFBundleLocalizations": [
+                "en", "de", "es", "fr", "it", "pt-BR", "ru", "zh-Hans", "ja", "ko",
+            ],
             # No document types / URL schemes; PixelUp takes image paths as argv.
         },
     )

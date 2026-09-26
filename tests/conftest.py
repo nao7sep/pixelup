@@ -176,3 +176,20 @@ def corpus_file() -> Callable[[str], Path]:
         return path
 
     return resolve
+
+
+@pytest.fixture(autouse=True)
+def _english_interface(monkeypatch: pytest.MonkeyPatch):
+    """Run every test in English, whatever language the computer running it speaks.
+
+    build_app settles the interface language from the computer's own list; a test
+    asserts the English because it is the source language, so the computer's list
+    is pinned to English here, AppKit is left alone, and a test that switched the
+    language is put back.
+    """
+    from pixelup.i18n import bootstrap, localizer
+
+    monkeypatch.setattr(bootstrap, "read_computer_languages", lambda: ("en",))
+    monkeypatch.setattr(bootstrap, "align_appkit", lambda tag: None)
+    yield
+    localizer.use("en", ("en",))

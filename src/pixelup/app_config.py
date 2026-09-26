@@ -11,6 +11,7 @@ from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_man
 from pixelup.devices import DEVICE_VALUES
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
+from pixelup.i18n.languages import SYSTEM, normalize_preference
 from pixelup.jobs import (
     JobSettings,
     job_settings_log_payload,
@@ -61,8 +62,8 @@ MAX_CONCURRENT_JOBS = 8
 class AppConfig:
     """Everything PixelUp persists in ``config.json``.
 
-    Two kinds of thing, one home each. The two scalars are the Settings modal's
-    whole content — what the main window does not show. ``parameters`` is the main
+    Two kinds of thing, one home each. The scalars are the Settings modal's whole
+    content — what the main window does not show. ``parameters`` is the main
     window's Parameters panel, persisted whole: the panel is the only place those
     values are edited, and ``JobSettings()`` is the only place their built-in
     defaults are written, so there is no second defaults layer to drift against.
@@ -70,6 +71,9 @@ class AppConfig:
 
     max_concurrent_jobs: int = MIN_CONCURRENT_JOBS
     font_family: str = DEFAULT_UI_FONT_FAMILY
+    # The interface language: "system" to follow the computer, or a language tag
+    # (localization-conventions).
+    language: str = SYSTEM
     parameters: JobSettings = field(default_factory=JobSettings)
 
 
@@ -203,6 +207,8 @@ def _merge_app_config(
         updates["max_concurrent_jobs"] = candidate.max_concurrent_jobs
     if candidate.font_family != previous.font_family:
         updates["font_family"] = candidate.font_family
+    if candidate.language != previous.language:
+        updates["language"] = candidate.language
     if candidate.parameters != previous.parameters:
         updates["parameters"] = candidate.parameters
     return replace(current, **updates) if updates else current
@@ -243,6 +249,10 @@ def _decode_app_config(value: Any) -> AppConfig:
             MAX_CONCURRENT_JOBS,
         ),
         font_family=_optional_font_family(data, defaults.font_family),
+        # Deliberately lenient where the rest is strict: a missing or unknown
+        # language means System (localization-conventions), so a value this build
+        # does not know never costs the user the rest of their settings.
+        language=normalize_preference(data.get("language")),
         parameters=(
             _decode_parameters(data["parameters"])
             if "parameters" in data
@@ -371,6 +381,7 @@ def _optional_font_family(data: dict[str, Any], default: str) -> str:
 def _to_json(config: AppConfig) -> dict[str, Any]:
     return {
         "font_family": config.font_family,
+        "language": config.language,
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "parameters": _parameters_to_json(config.parameters),
     }
@@ -394,5 +405,6 @@ def config_log_payload(config: AppConfig) -> dict[str, object]:
     return {
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "font_family": config.font_family,
+        "language": config.language,
         "parameters": job_settings_log_payload(config.parameters),
     }
