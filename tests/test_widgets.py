@@ -15,6 +15,7 @@ from pixelup.paths import OutputFormat
 from pixelup.widgets import (
     EmptyStateTableWidget,
     OperationResult,
+    ResultCloseButton,
     device_combo,
     output_format_combo,
 )
@@ -146,3 +147,11 @@ def test_output_format_combo_carries_lowercase_value_as_item_data(qapp: QApplica
             assert OutputFormat(combo.currentData()) == fmt
     finally:
         combo.deleteLater()
+
+
+def test_result_close_button_keeps_the_platform_arrow_cursor(qapp: QApplication) -> None:
+    button = ResultCloseButton()
+    try:
+        assert button.cursor().shape() == Qt.CursorShape.ArrowCursor
+    finally:
+        button.deleteLater()

@@ -41,7 +41,6 @@ class ResultCloseButton(QToolButton):
         self.setAccessibleName("Dismiss result")
         self.setAutoRaise(True)
         self.setFixedSize(24, 24)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(
             "QToolButton {"
             " border: none; border-radius: 4px; background: transparent; padding: 0;"
