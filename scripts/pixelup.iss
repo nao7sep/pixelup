@@ -29,6 +29,22 @@ SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 PrivilegesRequiredOverridesAllowed=dialog
+; The wizard speaks the Windows display language when Inno ships it, and asks
+; only when it does not (localization-conventions).
+ShowLanguageDialog=auto
+
+[Languages]
+; Inno's own built-in translations of the interface languages, English first as
+; the fallback. Inno ships none for Korean or Simplified Chinese, and no
+; third-party .isl files are vendored, so those readers get the English wizard.
+Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "de"; MessagesFile: "compiler:Languages\German.isl"
+Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
+Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "ptbr"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
+Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl"
 
 [Files]
 Source: "dist\PixelUp\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
@@ -38,9 +54,11 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+; The custom strings are Inno's own standard messages, translated in every
+; language above.
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Run]
 ; Inno cannot recover a non-elevated user token for every elevated setup path.
 ; All-users installs launch later through their scoped shell shortcuts.
-Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: not IsAdminInstallMode
+Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: not IsAdminInstallMode

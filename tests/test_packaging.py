@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -112,3 +113,25 @@ def test_package_scripts_reject_editable_install_metadata() -> None:
 
     assert '-name direct_url.json' in mac_packager
     assert '-Filter direct_url.json' in windows_packager
+
+
+def test_windows_installer_speaks_innos_own_languages() -> None:
+    # Inno's built-in translations of the interface languages, English first; no
+    # third-party .isl file is vendored, so Korean and Simplified Chinese readers
+    # get the English wizard. The installer's own strings are Inno's standard
+    # messages, which every one of those translations carries.
+    script = (ROOT / "scripts" / "pixelup.iss").read_text(encoding="utf-8")
+    files = re.findall(r'MessagesFile: "([^"]+)"', script)
+    assert files == [
+        "compiler:Default.isl",
+        "compiler:Languages\\German.isl",
+        "compiler:Languages\\Spanish.isl",
+        "compiler:Languages\\French.isl",
+        "compiler:Languages\\Italian.isl",
+        "compiler:Languages\\BrazilianPortuguese.isl",
+        "compiler:Languages\\Russian.isl",
+        "compiler:Languages\\Japanese.isl",
+    ]
+    assert not list((ROOT / "scripts").rglob("*.isl"))
+    descriptions = re.findall(r'(?:Description|GroupDescription): "([^"]*)"', script)
+    assert descriptions and all(text.startswith("{cm:") for text in descriptions)
