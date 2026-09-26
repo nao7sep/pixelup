@@ -15,7 +15,7 @@
   "actions.queueSelected": "선택한 이미지를 대기열에 추가",
   "actions.queueSelectedAllModels": "선택한 이미지를 모든 모델로 대기열에 추가",
   "actions.retryFailed": "실패한 작업 다시 시도",
-  "actions.title": "대기열에 추가",
+  "actions.title": "대기열 동작",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
   "error.alphaModeInvalid": "알파 모드는 Real-ESRGAN 또는 '바이큐빅'이어야 합니다.",
@@ -55,7 +55,7 @@
   "error.modelsDirCreateFailed": "모델 폴더를 만들 수 없습니다.",
   "error.mpsUnavailable": "MPS를 사용할 수 없습니다.",
   "error.noUnusedName": "사용되지 않은 출력 파일 이름을 찾을 수 없습니다.",
-  "error.outOfMemory": "처리 중에 메모리가 부족합니다.",
+  "error.outOfMemory": "처리 중에 메모리가 부족했습니다.",
   "error.outputBundleExists": "출력 파일 또는 해당 설정 파일이 이미 있습니다.",
   "error.outputDirInspectFailed": "출력 폴더를 확인할 수 없습니다.",
   "error.outputDirMissing": "출력의 상위 폴더가 없습니다.",
@@ -73,7 +73,7 @@
   "error.qualityInvalid": "품질은 0에서 100 사이여야 합니다.",
   "error.redirectNoLocation": "모델 다운로드 리디렉션에 Location 헤더가 없습니다.",
   "error.scaleInvalid": "배율은 2x 또는 4x여야 합니다.",
-  "error.sidecarChanged": "게시 중에 출력 설정 파일이 변경되었습니다.",
+  "error.sidecarChanged": "저장하는 중에 출력 설정 파일이 변경되었습니다.",
   "error.sidecarExists": "출력 설정 파일이 이미 있습니다.",
   "error.sidecarWriteFailed": "출력 설정 파일을 쓸 수 없습니다.",
   "error.storageCreateFailed": "PixelUp 저장 폴더를 만들 수 없습니다.",
@@ -113,7 +113,7 @@
   },
   "images.jobsJoin": "{first}, {rest}",
   "images.jobsQueued": {
-    "other": "대기 {count}"
+    "other": "대기열 {count}"
   },
   "images.noJobs": "작업 없음",
   "images.open": "열기",
@@ -159,7 +159,7 @@
     "other": "모델 파일 {count}개"
   },
   "managedModels.purposeDenoise": "노이즈 제거용",
-  "managedModels.purposeUpscaler": "업스케일",
+  "managedModels.purposeUpscaler": "업스케일용",
   "managedModels.reinstall": "다시 설치",
   "managedModels.revealFailed": "모델 폴더를 열 수 없습니다.",
   "managedModels.revealFolder": "모델 폴더 보기",

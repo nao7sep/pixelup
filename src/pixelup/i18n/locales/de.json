@@ -15,7 +15,7 @@
   "actions.queueSelected": "Ausgewähltes Bild einreihen",
   "actions.queueSelectedAllModels": "Ausgewähltes Bild mit allen Modellen einreihen",
   "actions.retryFailed": "Fehlgeschlagene Aufträge wiederholen",
-  "actions.title": "Einreihen",
+  "actions.title": "Warteschlangenaktionen",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
   "error.alphaModeInvalid": "Der Alpha-Modus muss Real-ESRGAN oder Bikubisch sein.",
@@ -73,7 +73,7 @@
   "error.qualityInvalid": "Die Qualität muss zwischen 0 und 100 liegen.",
   "error.redirectNoLocation": "Eine Weiterleitung beim Modell-Download enthielt keinen Location-Header.",
   "error.scaleInvalid": "Der Faktor muss 2x oder 4x sein.",
-  "error.sidecarChanged": "Die Einstellungsdatei der Ausgabe hat sich beim Veröffentlichen geändert.",
+  "error.sidecarChanged": "Die Einstellungsdatei der Ausgabe hat sich beim Speichern geändert.",
   "error.sidecarExists": "Die Einstellungsdatei der Ausgabe existiert bereits.",
   "error.sidecarWriteFailed": "Die Einstellungsdatei der Ausgabe konnte nicht geschrieben werden.",
   "error.storageCreateFailed": "Der Speicherordner von PixelUp konnte nicht erstellt werden.",
@@ -117,8 +117,8 @@
   },
   "images.jobsJoin": "{first}, {rest}",
   "images.jobsQueued": {
-    "one": "{count} wartend",
-    "other": "{count} wartend"
+    "one": "{count} eingereiht",
+    "other": "{count} eingereiht"
   },
   "images.noJobs": "Keine Aufträge",
   "images.open": "Öffnen",

@@ -73,7 +73,7 @@
   "error.qualityInvalid": "Quality must be between 0 and 100.",
   "error.redirectNoLocation": "Model download redirect did not include a Location header.",
   "error.scaleInvalid": "Scale must be 2x or 4x.",
-  "error.sidecarChanged": "Output settings sidecar changed during publication.",
+  "error.sidecarChanged": "Output settings sidecar changed while it was being saved.",
   "error.sidecarExists": "Output settings sidecar already exists.",
   "error.sidecarWriteFailed": "Could not write the output settings sidecar.",
   "error.storageCreateFailed": "Could not create the PixelUp storage directory.",
