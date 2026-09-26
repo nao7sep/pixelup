@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from pixelup.app_config import MAX_CONCURRENT_JOBS, MIN_CONCURRENT_JOBS, AppConfig
 from pixelup.dialog_shell import FORM_WIDTH, DialogShell
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
+from pixelup.i18n.localized import localize
 from pixelup.ui_common import secondary_label, use_regular_spacing
 from pixelup.widgets import NoWheelSpinBox
 
@@ -26,7 +27,7 @@ from pixelup.widgets import NoWheelSpinBox
 _FIELD_WIDTH = 320
 
 
-def _captioned(control: QWidget, caption: str) -> QWidget:
+def _captioned(control: QWidget, caption_key: str) -> QWidget:
     """Group a control with a muted caption directly beneath it.
 
     The caption reads as sub-text of its control (a tight 2px gap) rather than a
@@ -39,7 +40,7 @@ def _captioned(control: QWidget, caption: str) -> QWidget:
     box.setContentsMargins(0, 0, 0, 0)
     box.setSpacing(2)
     box.addWidget(control)
-    cap = secondary_label(caption)
+    cap = localize(secondary_label(""), text=caption_key)
     cap.setWordWrap(True)
     box.addWidget(cap)
     return container
@@ -67,7 +68,7 @@ class SettingsDialog(DialogShell):
         *,
         try_save: Callable[[AppConfig], bool] | None = None,
     ) -> None:
-        super().__init__("Settings", parent, width=FORM_WIDTH)
+        super().__init__("settings.title", parent, width=FORM_WIDTH)
         self._initial = config
         self._try_save = try_save
 
@@ -81,7 +82,7 @@ class SettingsDialog(DialogShell):
 
         self.font_family = QLineEdit()
         self.font_family.setText(config.font_family)
-        self.font_family.setPlaceholderText("Platform default")
+        localize(self.font_family, placeholder="settings.uiFontPlaceholder")
         self.font_family.setMinimumWidth(260)
 
         # Each caption groups under its own control (see _captioned) rather than
@@ -90,17 +91,10 @@ class SettingsDialog(DialogShell):
         # the caption.
         label_align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         row = 0
-        form.addWidget(QLabel("UI font"), row, 0, label_align)
-        form.addWidget(
-            _captioned(
-                self.font_family,
-                "Blank uses the platform UI face. Otherwise, the first installed font is used.",
-            ),
-            row,
-            1,
-        )
+        form.addWidget(localize(QLabel(), text="settings.uiFont"), row, 0, label_align)
+        form.addWidget(_captioned(self.font_family, "settings.uiFontCaption"), row, 1)
         row += 1
-        form.addWidget(QLabel("Concurrent jobs"), row, 0)
+        form.addWidget(localize(QLabel(), text="settings.concurrentJobs"), row, 0)
         form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)
         form.setColumnStretch(0, 0)
         form.setColumnStretch(1, 0)
@@ -161,10 +155,11 @@ class SettingsDialog(DialogShell):
         self.error_message.clear()
         self.error_message.hide()
         if self._try_save is not None and not self._try_save(candidate):
-            self.error_message.setText(
-                "PixelUp could not save your settings. Your changes are still here; try again."
+            localize(
+                self.error_message,
+                text="settings.saveFailed",
+                accessible_name="settings.saveFailed",
             )
-            self.error_message.setAccessibleName(self.error_message.text())
             self.error_message.show()
             # The message is body content, so the body just grew; re-measure it
             # against the same bound rather than letting Qt size past the screen.

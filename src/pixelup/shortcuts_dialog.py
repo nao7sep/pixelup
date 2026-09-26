@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.dialog_shell import FORM_WIDTH, DialogShell
+from pixelup.i18n.localized import localize
 from pixelup.ui_common import secondary_label
 
 
@@ -19,13 +20,19 @@ def command_modifier_name() -> str:
     return "Cmd" if sys.platform == "darwin" else "Ctrl"
 
 
+def shortcut_chord(*keys: str) -> str:
+    """A chord as the shortcuts list shows it. Key tokens stay English in every
+    language, because they name the keycaps (keyboard-shortcut-conventions)."""
+    return "+".join((command_modifier_name(), *keys))
+
+
 class ShortcutsDialog(DialogShell):
     """Named catalogue of every shortcut PixelUp binds."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Keyboard shortcuts", parent, width=FORM_WIDTH)
+        super().__init__("shortcuts.title", parent, width=FORM_WIDTH)
 
-        introduction = secondary_label("Use these shortcuts anywhere in PixelUp.")
+        introduction = localize(secondary_label(""), text="shortcuts.introduction")
         self.body_layout.addWidget(introduction)
 
         # A reference list, read and never navigated, so it carries no card: the
@@ -36,19 +43,15 @@ class ShortcutsDialog(DialogShell):
         group_layout.setContentsMargins(0, 4, 0, 0)
         group_layout.setSpacing(12)
 
-        group_heading = QLabel("General")
+        group_heading = localize(QLabel(), text="shortcuts.groupGeneral")
         group_font = group_heading.font()
         group_font.setBold(True)
         group_heading.setFont(group_font)
         group_layout.addWidget(group_heading)
 
-        modifier = command_modifier_name()
-        group_layout.addWidget(_shortcut_row("Open Settings", f"{modifier}+Comma"))
+        group_layout.addWidget(_shortcut_row("shortcuts.openSettings", shortcut_chord("Comma")))
         group_layout.addWidget(
-            _shortcut_row(
-                "Show keyboard shortcuts",
-                f"{modifier}+Slash/Question",
-            )
+            _shortcut_row("shortcuts.showShortcuts", shortcut_chord("Slash/Question"))
         )
         self.body_layout.addWidget(group)
         self.body_layout.addStretch()
@@ -60,13 +63,13 @@ class ShortcutsDialog(DialogShell):
         self.fit()
 
 
-def _shortcut_row(action: str, chord: str) -> QWidget:
+def _shortcut_row(action_key: str, chord: str) -> QWidget:
     row = QWidget()
     layout = QHBoxLayout(row)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(16)
 
-    action_label = QLabel(action)
+    action_label = localize(QLabel(), text=action_key)
     key_label = QLabel(chord)
     key_label.setObjectName("shortcutKey")
     key_label.setAlignment(Qt.AlignmentFlag.AlignCenter)

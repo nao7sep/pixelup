@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 from pixelup.nanoid import nanoid
 from pixelup.timestamps import utc_now_stamp_ms
 
@@ -59,11 +60,11 @@ def window_settings_path() -> Path:
 
 
 def ensure_models_dir(path: Path) -> Path:
-    return _ensure_dir(path, ErrorCode.MODEL_NOT_FOUND, "Could not create the models directory.")
+    return _ensure_dir(path, ErrorCode.MODEL_NOT_FOUND, Message("error.modelsDirCreateFailed"))
 
 
 def ensure_temp_dir(path: Path) -> Path:
-    return _ensure_dir(path, ErrorCode.OUTPUT_UNWRITABLE, "Could not create the temp directory.")
+    return _ensure_dir(path, ErrorCode.OUTPUT_UNWRITABLE, Message("error.tempDirCreateFailed"))
 
 
 def _resolve_dir(
@@ -117,11 +118,8 @@ def _expand_home_override(raw: str) -> Path:
     if not expanded or _UNRESOLVED_ENV_REF.search(expanded):
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            f"{HOME_ENV} does not expand to a usable path.",
-            user_hint=(
-                f"Check that every environment variable referenced in {HOME_ENV} "
-                "is set to a non-empty value."
-            ),
+            Message.of("error.homeUnusable", variable=HOME_ENV),
+            hint=Message.of("error.hintHomeVariables", variable=HOME_ENV),
             details={"value": raw, "expanded": expanded},
         )
     return Path(expanded)
@@ -140,21 +138,21 @@ def _ensure_state_root(root: Path) -> Path:
     except OSError as exc:
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            "Could not create the PixelUp storage directory.",
-            user_hint=f"Set {HOME_ENV} to a writable location, or make the path usable.",
+            Message("error.storageCreateFailed"),
+            hint=Message.of("error.hintHomeWritableLocation", variable=HOME_ENV),
             details={"path": str(root), "reason": str(exc)},
         ) from exc
     if not root.is_dir():
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            "The PixelUp storage path is not a usable directory.",
-            user_hint=f"Set {HOME_ENV} to a writable directory.",
+            Message("error.storageNotDirectory"),
+            hint=Message.of("error.hintHomeWritableDirectory", variable=HOME_ENV),
             details={"path": str(root)},
         )
     return root
 
 
-def _ensure_dir(path: Path, code: ErrorCode, message: str) -> Path:
+def _ensure_dir(path: Path, code: ErrorCode, message: Message) -> Path:
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

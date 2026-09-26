@@ -27,9 +27,9 @@ def test_terminal_result_is_recorded_before_manager_requests_thread_shutdown(
     thread = _QuittableThread()
     manager._threads[7] = thread  # type: ignore[assignment]
 
-    manager._worker_finished(7, True, False, "")
+    manager._worker_finished(7, True, False, None)
 
-    assert manager._install_results[7] == (True, False, "")
+    assert manager._install_results[7] == (True, False, None)
     assert thread.quit_calls == 1
 
 

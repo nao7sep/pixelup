@@ -27,6 +27,9 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.devices import DEVICE_CHOICES
+from pixelup.i18n import localizer
+from pixelup.i18n.localized import localize, unlocalize
+from pixelup.i18n.message import Message
 from pixelup.paths import OutputFormat
 
 ResultSeverity = Literal["information", "warning", "error"]
@@ -37,8 +40,7 @@ class ResultCloseButton(QToolButton):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setToolTip("Dismiss")
-        self.setAccessibleName("Dismiss result")
+        localize(self, tooltip="result.dismiss", accessible_name="result.dismissAccessible")
         self.setAutoRaise(True)
         self.setFixedSize(24, 24)
         self.setStyleSheet(
@@ -82,7 +84,7 @@ class OperationResult(QFrame):
         super().__init__(parent)
         self.setObjectName(object_name)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self._announcement = ""
+        self._announcement: Message | None = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 7, 5 if dismissible else 10, 7)
@@ -102,13 +104,15 @@ class OperationResult(QFrame):
 
     def show_result(
         self,
-        message: str,
+        message: Message,
         *,
         severity: ResultSeverity,
         announce: bool = True,
     ) -> None:
-        self.message_label.setText(message)
-        self.setAccessibleName(message)
+        # Bound rather than written once, so a result still showing when the
+        # language changes is rewritten in the new one.
+        localize(self.message_label, text=message)
+        localize(self, accessible_name=message)
         self._apply_severity_style(severity)
         self.show()
 
@@ -123,11 +127,18 @@ class OperationResult(QFrame):
             QAccessible.updateAccessibility(QAccessibleEvent(self, event))
         self._announcement = message
 
+    @property
+    def message(self) -> Message | None:
+        """What the result is saying, or None while it is hidden."""
+        return self._announcement or None
+
     def clear_result(self) -> None:
         self.hide()
+        unlocalize(self.message_label, "text")
+        unlocalize(self, "accessible_name")
         self.message_label.clear()
         self.setAccessibleName("")
-        self._announcement = ""
+        self._announcement = None
         self._remeasure_owner()
 
     def _remeasure_owner(self) -> None:
@@ -200,11 +211,11 @@ class EmptyStateTableWidget(QTableWidget):
         rows: int,
         columns: int,
         *,
-        empty_text: str,
+        empty_message: Message,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(rows, columns, parent)
-        self.empty_text = empty_text
+        self.empty_message = empty_message
         # A collection of rows, not a spreadsheet: no cell grid, whose gaps cut the
         # selected row into blocks; no row numbers; and each heading starts where
         # the values under it start.
@@ -217,7 +228,12 @@ class EmptyStateTableWidget(QTableWidget):
         model.rowsInserted.connect(self._sync_empty_state)
         model.rowsRemoved.connect(self._sync_empty_state)
         model.modelReset.connect(self._sync_empty_state)
+        localizer.changed.connect(self._sync_empty_state)
         self._sync_empty_state()
+
+    @property
+    def empty_text(self) -> str:
+        return localizer.of(self.empty_message)
 
     @property
     def empty_state_visible(self) -> bool:
@@ -246,16 +262,29 @@ class EmptyStateTableWidget(QTableWidget):
         )
 
 
-def device_combo() -> NoWheelComboBox:
-    """A scroll-safe combo box populated with the shared device choices.
+def choice_combo(choices: tuple[tuple[Message | str, object], ...]) -> NoWheelComboBox:
+    """A scroll-safe combo box populated with ``(label, value)`` choices.
 
-    Items carry the device value as item data, so callers read selection via
+    Items carry the value as item data, so callers read selection via
     ``currentData()`` and restore it via ``setCurrentIndex(findData(value))``.
     """
     combo = NoWheelComboBox()
-    for label, value in DEVICE_CHOICES:
-        combo.addItem(label, value)
+    for label, value in choices:
+        combo.addItem(localizer.display(label), value)
     return combo
+
+
+def retranslate_choices(
+    combo: QComboBox, choices: tuple[tuple[Message | str, object], ...]
+) -> None:
+    """Rewrite a choice combo's labels in the current language, keeping its selection."""
+    for index, (label, _value) in enumerate(choices):
+        combo.setItemText(index, localizer.display(label))
+
+
+def device_combo() -> NoWheelComboBox:
+    """A scroll-safe combo box populated with the shared device choices."""
+    return choice_combo(DEVICE_CHOICES)
 
 
 def output_format_combo() -> NoWheelComboBox:

@@ -10,6 +10,8 @@ from pathlib import Path
 from pixelup.config import RuntimeDirs
 from pixelup.devices import DEVICE_VALUES, resolve_device
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.imaging import (
     PublishedCallback,
     image_from_bgr_array,
@@ -41,7 +43,7 @@ from pixelup.session_log import log
 
 StartCallback = Callable[["UpscalePlan", int], None]
 ProgressCallback = Callable[[str], None]
-WarningCallback = Callable[[str], None]
+WarningCallback = Callable[[Message], None]
 TileCallback = Callable[[int, int], None]
 CancelCheck = Callable[[], bool]
 
@@ -94,13 +96,13 @@ def build_plan(
     if not read_path.exists():
         raise PixelupError(
             ErrorCode.INPUT_NOT_FOUND,
-            "Input image does not exist.",
+            Message("error.inputMissing"),
             details={"input": str(input_path)},
         )
     if not read_path.is_file():
         raise PixelupError(
             ErrorCode.INPUT_UNREADABLE,
-            "Input path is not a file.",
+            Message("error.inputNotFile"),
             details={"input": str(input_path)},
         )
 
@@ -162,7 +164,7 @@ def run_upscale(
         device=plan.device,
     )
     for warning in plan_warnings(options, plan):
-        log.warning("upscale.warning", input=str(plan.input_path), text=warning)
+        log.warning("upscale.warning", input=str(plan.input_path), text=english().of(warning))
         if on_warning:
             on_warning(warning)
     if on_start:
@@ -228,20 +230,20 @@ def validate_options(options: UpscaleOptions) -> None:
     # panel and the config loader read. Hardcoding them here (as this once did) let
     # the panel offer a value this function would reject at runtime.
     if options.scale not in SCALE_VALUES:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Scale must be 2x or 4x.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.scaleInvalid"))
     if options.tile not in TILE_VALUES:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Tile size must be one of the offered sizes.",
+            Message("error.tileInvalid"),
         )
     if options.tile_pad < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Tile padding must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.tilePadInvalid"))
     if options.pre_pad < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Pre-padding must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.prePadInvalid"))
     if not MIN_DENOISE_STRENGTH <= options.denoise_strength <= MAX_DENOISE_STRENGTH:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Denoise strength must be between 0 and 1.",
+            Message("error.denoiseInvalid"),
         )
     # Denoise on a non-general model is not an error: it simply does not apply and is normalized
     # to the neutral value (see effective_denoise_strength). Rejecting a non-neutral value here
@@ -249,22 +251,22 @@ def validate_options(options: UpscaleOptions) -> None:
     if options.alpha_mode not in ALPHA_MODE_VALUES:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Alpha mode must be Real-ESRGAN or Bicubic.",
+            Message("error.alphaModeInvalid"),
         )
     if not MIN_QUALITY <= options.quality <= MAX_QUALITY:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Quality must be between 0 and 100.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.qualityInvalid"))
     if options.target_profile not in TARGET_PROFILE_VALUES:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Target profile must be one of sRGB, Display P3, or Adobe RGB.",
+            Message("error.targetProfileInvalid"),
         )
     if options.device not in DEVICE_VALUES:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Device must be one of Auto, MPS, CUDA, or CPU.",
+            Message("error.deviceInvalid"),
         )
     if options.lock_timeout < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Lock timeout must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.lockTimeoutInvalid"))
 
 
 def required_model_names(options: UpscaleOptions) -> list[str]:
@@ -276,19 +278,26 @@ def required_model_names(options: UpscaleOptions) -> list[str]:
     )
 
 
-def plan_warnings(options: UpscaleOptions, plan: UpscalePlan) -> list[str]:
-    warnings: list[str] = []
+def plan_warnings(options: UpscaleOptions, plan: UpscalePlan) -> list[Message]:
+    warnings: list[Message] = []
     if format_mismatch := _format_extension_mismatch(plan.output_path, plan.output_format):
         warnings.append(
-            "Output path extension "
-            f"'.{format_mismatch}' does not match requested format "
-            f"'{plan.output_format.value}'."
+            Message.of(
+                "warning.extensionMismatch",
+                extension=format_mismatch,
+                format=plan.output_format.value,
+            )
         )
     native_scale = model_architecture_spec(options.model, requested_scale=options.scale).netscale
     if native_scale != options.scale:
+        # The scales are passed as text: "4x" is a factor, not a quantity to group.
         warnings.append(
-            f"Model '{options.model}' is trained for {native_scale}x, "
-            f"but the selected scale is {options.scale}x; Real-ESRGAN will rescale the output."
+            Message.of(
+                "warning.scaleMismatch",
+                model=options.model,
+                native=str(native_scale),
+                scale=str(options.scale),
+            )
         )
     return warnings
 
@@ -315,25 +324,25 @@ def validate_output_path(path: Path, *, overwrite: bool) -> None:
     if not parent.exists():
         raise PixelupError(
             ErrorCode.OUTPUT_DIR_MISSING,
-            "Output parent directory does not exist.",
+            Message("error.outputDirMissing"),
             details={"output": str(path), "parent": str(parent)},
         )
     if not parent.is_dir():
         raise PixelupError(
             ErrorCode.OUTPUT_DIR_MISSING,
-            "Output parent path is not a directory.",
+            Message("error.outputDirNotDirectory"),
             details={"output": str(path), "parent": str(parent)},
         )
     if path.exists() and not overwrite:
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
-            "Output file already exists.",
-            user_hint="Remove the existing file, then retry the job.",
+            Message("error.outputExists"),
+            hint=Message("error.hintRemoveExisting"),
             details={"output": str(path)},
         )
     if not os.access(parent, os.W_OK):
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            "Output parent directory is not writable.",
+            Message("error.outputDirUnwritable"),
             details={"output": str(path), "parent": str(parent)},
         )

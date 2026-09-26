@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from pixelup.devices import DEFAULT_DEVICE
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.jobs import (
     Job,
     JobSettings,
@@ -140,7 +142,7 @@ def test_zero_tile_stays_selectable_as_the_whole_image_pass() -> None:
     # directly below 128 and implied was "less".
     assert 0 in TILE_VALUES
     assert JobSettings(tile=0).tile == 0
-    assert ("Whole image", 0) in TILE_CHOICES
+    assert (Message("parameters.tileWholeImage"), 0) in TILE_CHOICES
 
 
 def test_tile_choices_are_doublings_ordered_by_ascending_memory() -> None:
@@ -150,7 +152,7 @@ def test_tile_choices_are_doublings_ordered_by_ascending_memory() -> None:
     # the ordering the old control inverted.
     assert TILE_VALUES == (128, 256, 512, 1024, 2048, 0)
     assert [v for v in TILE_VALUES if v] == [128, 256, 512, 1024, 2048]
-    assert TILE_CHOICES[-1] == ("Whole image", 0)
+    assert TILE_CHOICES[-1] == (Message("parameters.tileWholeImage"), 0)
     assert DEFAULT_TILE in TILE_VALUES
     # 128 must be one rung below the default: the machine that cannot fit 256 has
     # somewhere to go. The old 256-step spin box's only move below the default was 0.
@@ -179,7 +181,7 @@ def test_job_log_payload_includes_settings_and_paths(tmp_path: Path) -> None:
 
 
 def test_job_status_summary_empty() -> None:
-    assert job_status_summary([]) == "No jobs"
+    assert english().of(job_status_summary([])) == "No jobs"
 
 
 def test_job_status_summary_omits_zero_counts_and_groups_queued() -> None:
@@ -193,11 +195,11 @@ def test_job_status_summary_omits_zero_counts_and_groups_queued() -> None:
         "cancelling",
     ]
 
-    assert job_status_summary(statuses) == "2 done, 1 failed, 1 cancelled, 3 queued"
+    assert english().of(job_status_summary(statuses)) == "2 done, 1 failed, 1 cancelled, 3 queued"
 
 
 def test_job_status_summary_orders_done_then_queued() -> None:
-    assert job_status_summary(["pending", "succeeded"]) == "1 done, 1 queued"
+    assert english().of(job_status_summary(["pending", "succeeded"])) == "1 done, 1 queued"
 
 
 def test_job_settings_log_payload_accepts_string_backed_output_format() -> None:
@@ -376,13 +378,13 @@ def test_retry_failed_jobs_replans_outputs(tmp_path: Path) -> None:
         output_path=tmp_path / "old.png",
         settings=JobSettings(),
         status="failed",
-        message="bad",
-        warnings=["warning"],
+        message=Message("jobs.failedFallback"),
+        warnings=[Message("warning.extensionMismatch")],
     )
 
     assert retry_failed_jobs([succeeded, failed]) == [2]
     assert failed.status == "pending"
-    assert failed.message == ""
+    assert failed.message is None
     assert failed.warnings == []
     assert failed.output_path.name == "a-realesr-general-x4v3-4x-2.png"
 

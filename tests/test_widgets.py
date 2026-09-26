@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.devices import DEVICE_CHOICES
+from pixelup.i18n.message import Message
 from pixelup.paths import OutputFormat
 from pixelup.widgets import (
     EmptyStateTableWidget,
@@ -90,7 +91,7 @@ def test_dialog_remeasures_when_a_hidden_result_appears(qapp: QApplication) -> N
 def test_empty_state_table_draws_rows_not_cells(qapp: QApplication) -> None:
     # No cell grid, whose gaps cut a selected row into blocks; no row numbers; and
     # each heading starts where the values under it start.
-    table = EmptyStateTableWidget(0, 2, empty_text="Nothing here yet.")
+    table = EmptyStateTableWidget(0, 2, empty_message=Message("queue.empty"))
     try:
         assert table.showGrid() is False
         assert table.verticalHeader().isHidden() is True
@@ -101,13 +102,13 @@ def test_empty_state_table_draws_rows_not_cells(qapp: QApplication) -> None:
 
 
 def test_empty_state_table_tracks_zero_to_one_and_one_to_zero(qapp: QApplication) -> None:
-    table = EmptyStateTableWidget(0, 1, empty_text="Nothing here yet.")
+    table = EmptyStateTableWidget(0, 1, empty_message=Message("queue.empty"))
     try:
         table.show()
         table.setFocus()
         qapp.processEvents()
         assert table.empty_state_visible is True
-        assert table.accessibleDescription() == "Nothing here yet."
+        assert table.accessibleDescription() == "No jobs queued yet."
         assert table.hasFocus() is True
 
         table.insertRow(0)
@@ -118,7 +119,7 @@ def test_empty_state_table_tracks_zero_to_one_and_one_to_zero(qapp: QApplication
 
         table.removeRow(0)
         assert table.empty_state_visible is True
-        assert table.accessibleDescription() == "Nothing here yet."
+        assert table.accessibleDescription() == "No jobs queued yet."
         assert table.hasFocus() is True
     finally:
         table.deleteLater()
@@ -128,7 +129,7 @@ def test_device_combo_carries_value_as_item_data(qapp: QApplication) -> None:
     combo = device_combo()
     try:
         pairs = [(combo.itemText(i), combo.itemData(i)) for i in range(combo.count())]
-        assert pairs == list(DEVICE_CHOICES)
+        assert pairs == [("Auto", "auto"), ("MPS", "mps"), ("CUDA", "cuda"), ("CPU", "cpu")]
         # Every stored value round-trips through findData -> currentData.
         for _label, value in DEVICE_CHOICES:
             combo.setCurrentIndex(combo.findData(value))

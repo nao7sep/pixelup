@@ -13,6 +13,7 @@ from pathlib import Path
 from filelock import FileLock, Timeout
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 
 CancelCheck = Callable[[], bool]
 WaitingCallback = Callable[[], None]
@@ -39,14 +40,16 @@ def reserve_output_bundle(
 ) -> Iterator[None]:
     """Serialize one output image plus its JSON sidecar across PixelUp processes."""
     if timeout < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Output lock timeout must not be negative.")
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT, Message("error.outputLockTimeoutNegative")
+        )
     locks_dir = temp_dir / "output-locks"
     try:
         locks_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            "Could not create the output lock directory.",
+            Message("error.outputLockDirFailed"),
             details={"path": str(locks_dir), "reason": str(exc)},
         ) from exc
 
@@ -59,7 +62,7 @@ def reserve_output_bundle(
         if timeout > 0 and remaining <= 0:
             raise PixelupError(
                 ErrorCode.OUTPUT_EXISTS,
-                "Timed out waiting to reserve the output file.",
+                Message("error.outputReserveTimeout"),
                 details={"output": str(output_path), "timeout": timeout},
             )
         try:
@@ -69,7 +72,7 @@ def reserve_output_bundle(
             if timeout == 0:
                 raise PixelupError(
                     ErrorCode.OUTPUT_EXISTS,
-                    "The output file is already reserved by another job.",
+                    Message("error.outputReserved"),
                     details={"output": str(output_path)},
                 ) from exc
             if on_waiting:
@@ -190,7 +193,7 @@ def _bundle_entries(output_path: Path) -> list[Path]:
     except OSError as exc:
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            "Could not inspect the output directory.",
+            Message("error.outputDirInspectFailed"),
             details={"output": str(output_path), "reason": str(exc)},
         ) from exc
 
@@ -204,8 +207,8 @@ def _bundle_exists(output_path: Path, occupied: Path) -> PixelupError:
     # any pre-existing entry in the normalized bundle identity.
     return PixelupError(
         ErrorCode.OUTPUT_EXISTS,
-        "The output file or its settings sidecar already exists.",
-        user_hint="Retry the job to choose a new unused filename.",
+        Message("error.outputBundleExists"),
+        hint=Message("error.hintRetryNewName"),
         details={"output": str(output_path), "occupied": str(occupied)},
     )
 

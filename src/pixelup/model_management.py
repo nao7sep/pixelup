@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from pixelup.i18n.message import Message
 from pixelup.model_registry import ModelInfo, known_model
 from pixelup.models import model_is_ready
 
@@ -24,17 +25,22 @@ UPSCALE_MODELS = (
 @dataclass(frozen=True, slots=True)
 class ManagedModelBundle:
     key: str
-    label: str
-    purpose: str
+    # A model's own name is a plain string, the same in every language; a name
+    # PixelUp gives is interface text.
+    label: Message | str
+    purpose: Message
     artifact_names: tuple[str, ...]
 
 
 MANAGED_MODEL_BUNDLES = (
-    *(ManagedModelBundle(name, name, "Upscaler", (name,)) for name in UPSCALE_MODELS),
+    *(
+        ManagedModelBundle(name, name, Message("managedModels.purposeUpscaler"), (name,))
+        for name in UPSCALE_MODELS
+    ),
     ManagedModelBundle(
         "general-denoise",
-        "General x4v3 denoise",
-        "Denoise support",
+        Message("managedModels.generalDenoise"),
+        Message("managedModels.purposeDenoise"),
         (GENERAL_DENOISE_MODEL,),
     ),
 )

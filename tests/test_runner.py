@@ -12,6 +12,8 @@ from PySide6.QtWidgets import QApplication
 
 from pixelup.config import RuntimeDirs
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.jobs import Job, JobSettings, create_jobs
 from pixelup.model_management import UPSCALE_MODELS
 from pixelup.output_reservation import PublishedFile
@@ -25,17 +27,15 @@ from pixelup.runner import (
 from pixelup.session_log import configure_session_logging
 
 
-def test_progress_text_maps_known_phases() -> None:
-    assert _progress_text("upscale") == "Upscaling"
-    assert _progress_text("encode") == "Saving"
-
-
-def test_progress_text_humanizes_unknown_phase() -> None:
-    assert _progress_text("post-process_step") == "Post process step"
+def test_progress_text_maps_every_phase_inference_reports() -> None:
+    assert english().of(_progress_text("load_model")) == "Loading model"
+    assert english().of(_progress_text("upscale")) == "Upscaling"
+    assert english().of(_progress_text("encode")) == "Saving"
 
 
 def test_tile_progress_text() -> None:
-    assert _tile_progress_text(3, 8) == "3/8 tiles processed"
+    assert english().of(_tile_progress_text(3, 8)) == "3/8 tiles processed"
+    assert english().of(_tile_progress_text(1, 1)) == "1/1 tile processed"
 
 
 # --- JobRunner scheduling -------------------------------------------------
@@ -152,13 +152,13 @@ def test_shutdown_cancels_pending_jobs_and_never_reschedules_them(
     assert runner.started_ids == [1]
 
     runner.begin_shutdown()
-    runner._job_finished(1, False, "Cancelled", {"cancelled": True}, [])
+    runner._job_finished(1, False, Message("queue.statusCancelled"), {"cancelled": True}, [])
     qapp.processEvents()
     runner.schedule(3)
 
     assert runner.started_ids == [1]
     assert [job.status for job in jobs[1:]] == ["cancelled", "cancelled"]
-    assert [job.message for job in jobs[1:]] == ["Cancelled", "Cancelled"]
+    assert [english().of(job.message) for job in jobs[1:]] == ["Cancelled", "Cancelled"]
     assert [record[0] for record in finished] == [2, 3, 1]
 
 
@@ -167,22 +167,32 @@ def test_failure_message_carries_the_hint_when_there_is_one() -> None:
     # must ride along with the diagnosis rather than existing only in the log.
     with_hint = PixelupError(
         ErrorCode.MODEL_NOT_FOUND,
-        "Model 'x4plus' is not present in the models directory.",
-        user_hint="Open Managed models to install it.",
+        Message.of("error.modelMissing", model="x4plus"),
+        hint=Message("error.hintInstallModel"),
     )
-    assert failure_message(with_hint) == (
+    assert english().of(failure_message(with_hint)) == (
         "Model 'x4plus' is not present in the models directory. "
-        "Open Managed models to install it."
+        "Open Managed models to install it, or place the .pth file in the models directory."
     )
 
-    bare = PixelupError(ErrorCode.OUT_OF_MEMORY, "Ran out of memory.")
-    assert failure_message(bare) == "Ran out of memory."
+    bare = PixelupError(ErrorCode.OUT_OF_MEMORY, Message("error.outOfMemory"))
+    assert english().of(failure_message(bare)) == "Inference ran out of memory."
 
     internal = PixelupError(
         ErrorCode.INTERNAL_ERROR,
         "Inference returned an unsupported private tensor layout.",
     )
-    assert failure_message(internal) == "The image could not be upscaled. Retry the job."
+    assert english().of(failure_message(internal)) == (
+        "The image could not be upscaled. Retry the job."
+    )
+
+
+def test_a_failure_the_reader_sees_must_be_a_catalogue_message() -> None:
+    # Only a failure no reader ever sees may carry plain English: anything else
+    # would reach the queue row in English whatever the interface speaks.
+    with pytest.raises(TypeError):
+        PixelupError(ErrorCode.OUT_OF_MEMORY, "Ran out of memory.")
+    assert str(PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")) == "Job cancelled."
 
 
 def test_request_cancel_for_unknown_job_is_a_noop(tmp_path: Path) -> None:
@@ -339,8 +349,13 @@ def test_thread_finished_releases_registry_and_emits_idle(tmp_path: Path) -> Non
 def _capture_worker(worker: JobWorker) -> tuple[list, list]:
     finished: list[tuple[object, ...]] = []
     progress: list[tuple[object, ...]] = []
-    worker.signals.finished.connect(lambda *args: finished.append(args))
-    worker.signals.progress.connect(lambda *args: progress.append(args))
+    # Status text travels as a Message; the capture reads it back in English, the
+    # source language, so each test can still say what the row is told.
+    def english_args(args: tuple[object, ...]) -> tuple[object, ...]:
+        return tuple(english().of(arg) if isinstance(arg, Message) else arg for arg in args)
+
+    worker.signals.finished.connect(lambda *args: finished.append(english_args(args)))
+    worker.signals.progress.connect(lambda *args: progress.append(english_args(args)))
     return finished, progress
 
 
@@ -348,6 +363,9 @@ def _publish_fixture(path: Path, data: bytes) -> PublishedFile:
     path.write_bytes(data)
     written = os.lstat(path)
     return PublishedFile(path, written.st_dev, written.st_ino)
+
+
+NOTE = Message.of("warning.extensionMismatch", extension="png", format="jpg")
 
 
 def test_worker_run_success_emits_done_with_sidecar(
@@ -359,7 +377,7 @@ def test_worker_run_success_emits_done_with_sidecar(
     job = _make_job(1, tmp_path)
 
     def fake_upscale(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
-        kwargs["on_warning"]("note")  # type: ignore[operator]
+        kwargs["on_warning"](NOTE)  # type: ignore[operator]
         kwargs["on_output_published"](_publish_fixture(job.output_path, b"image"))  # type: ignore[operator]
         return {"ok": True, "output": getattr(options, "output_arg", "")}
 
@@ -378,7 +396,7 @@ def test_worker_run_success_emits_done_with_sidecar(
     assert (job_id, ok, message) == (job.id, True, "Done")
     assert result["ok"] is True
     assert str(result["sidecar"]).endswith(".json")
-    assert warnings == ["note"]
+    assert warnings == [NOTE]
 
 
 def test_worker_holds_output_reservation_through_inference_and_sidecar(
@@ -468,7 +486,7 @@ def test_worker_removes_its_image_when_sidecar_publication_loses(
 
     def _lose_sidecar(**kwargs: object) -> Path:
         job.output_path.with_suffix(".json").write_bytes(b"external-sidecar")
-        raise PixelupError(ErrorCode.OUTPUT_EXISTS, "Sidecar exists.")
+        raise PixelupError(ErrorCode.OUTPUT_EXISTS, Message("error.sidecarExists"))
 
     monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
     monkeypatch.setattr("pixelup.runner.write_sidecar", _lose_sidecar)
@@ -501,7 +519,7 @@ def test_sidecar_loss_cleanup_preserves_a_replacement_image_winner(
     def _replace_then_lose(**kwargs: object) -> Path:
         job.output_path.unlink()
         job.output_path.write_bytes(b"external-winner")
-        raise PixelupError(ErrorCode.OUTPUT_EXISTS, "Sidecar exists.")
+        raise PixelupError(ErrorCode.OUTPUT_EXISTS, Message("error.sidecarExists"))
 
     monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
     monkeypatch.setattr("pixelup.runner.write_sidecar", _replace_then_lose)
@@ -605,7 +623,7 @@ def test_worker_run_pixelup_error_emits_its_message(
     job = _make_job(3, tmp_path)
 
     def raise_error(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
-        raise PixelupError(ErrorCode.MODEL_NOT_FOUND, "Model missing.")
+        raise PixelupError(ErrorCode.MODEL_NOT_FOUND, Message("error.modelFileMissing"))
 
     monkeypatch.setattr("pixelup.runner.run_upscale", raise_error)
     worker = JobWorker(job)
@@ -613,7 +631,7 @@ def test_worker_run_pixelup_error_emits_its_message(
 
     worker.run()
 
-    assert finished == [(job.id, False, "Model missing.", {}, [])]
+    assert finished == [(job.id, False, "Model file is missing.", {}, [])]
 
 
 def test_worker_run_unexpected_error_is_wrapped(

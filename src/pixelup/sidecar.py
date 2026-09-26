@@ -7,6 +7,8 @@ from pathlib import Path
 
 from pixelup import __version__
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.output_reservation import (
     PublishedFile,
     published_file,
@@ -25,7 +27,7 @@ def write_sidecar(
     output_path: Path,
     options: UpscaleOptions,
     result: dict[str, object],
-    warnings: list[str],
+    warnings: list[Message],
 ) -> PublishedFile:
     sidecar_path = output_path.with_suffix(".json")
     payload = {
@@ -64,7 +66,9 @@ def write_sidecar(
             "strip_metadata": options.strip_metadata,
             "target_profile": options.target_profile,
         },
-        "warnings": warnings,
+        # The file records what happened, in English whatever the interface
+        # speaks: a stored value keeps its stored form (localization-conventions).
+        "warnings": [english().of(warning) for warning in warnings],
         "duration_ms": result.get("ms"),
     }
     # not recorded: this sidecar is OUTPUT metadata written beside the output image
@@ -81,14 +85,14 @@ def write_sidecar(
     except FileExistsError as exc:
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
-            "Output settings sidecar already exists.",
-            user_hint="Retry the job to choose a new unused filename.",
+            Message("error.sidecarExists"),
+            hint=Message("error.hintRetryNewName"),
             details={"sidecar": str(sidecar_path)},
         ) from exc
     except OSError as exc:
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            "Could not write the output settings sidecar.",
+            Message("error.sidecarWriteFailed"),
             details={"sidecar": str(sidecar_path), "reason": str(exc)},
         ) from exc
 
@@ -110,7 +114,7 @@ def write_sidecar(
             remove_published_file(claim)
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            "Could not write the output settings sidecar.",
+            Message("error.sidecarWriteFailed"),
             details={"sidecar": str(sidecar_path), "reason": str(exc)},
         ) from exc
     except Exception:
@@ -128,8 +132,8 @@ def write_sidecar(
         remove_published_file(claim)
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
-            "Output settings sidecar changed during publication.",
-            user_hint="Retry the job to choose a new unused filename.",
+            Message("error.sidecarChanged"),
+            hint=Message("error.hintRetryNewName"),
             details={"sidecar": str(sidecar_path)},
         )
     return claim

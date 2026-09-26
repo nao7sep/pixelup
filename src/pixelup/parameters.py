@@ -6,11 +6,13 @@ from __future__ import annotations
 # it, and upscale.validate_options rejects out-of-domain values against it — so a
 # value can never be offered by one and refused by another.
 #
-# This is a LEAF: it imports nothing from pixelup, exactly like devices.py. That is
-# the point. These constants used to live in jobs.py, which imports upscale.py —
-# so upscale.py could not import them back without a cycle and re-enumerated five
-# of these domains as literals instead. The panel could then offer a value the
-# validator rejected at runtime. A leaf has no such problem; keep it dependency-free.
+# This is a LEAF: it imports nothing from pixelup but the Qt-free Message type its
+# labels are written in. That is the point. These constants used to live in
+# jobs.py, which imports upscale.py — so upscale.py could not import them back
+# without a cycle and re-enumerated five of these domains as literals instead. The
+# panel could then offer a value the validator rejected at runtime. A leaf has no
+# such problem; keep it dependency-free.
+from pixelup.i18n.message import Message
 
 MIN_QUALITY = 0
 MAX_QUALITY = 100
@@ -21,19 +23,21 @@ DENOISE_STRENGTH_STEP = 0.1
 # Ordered (label, value) pairs for the enumerated parameters, in the shape
 # DEVICE_CHOICES already established: labels are for UI display, values are what a
 # job carries and what config persistence stores. Keep these the only place any of
-# these sets is enumerated.
+# these sets is enumerated. A label that is a Message is interface text, rendered
+# in the reader's language; a plain string is a name or a figure that reads the
+# same in every language (Real-ESRGAN, sRGB, 512).
 SCALE_CHOICES: tuple[tuple[str, int], ...] = (
     ("2x", 2),
     ("4x", 4),
 )
 SCALE_VALUES: tuple[int, ...] = tuple(value for _label, value in SCALE_CHOICES)
-ALPHA_MODE_CHOICES: tuple[tuple[str, str], ...] = (
+ALPHA_MODE_CHOICES: tuple[tuple[Message | str, str], ...] = (
     ("Real-ESRGAN", "realesrgan"),
-    ("Bicubic", "bicubic"),
+    (Message("parameters.alphaBicubic"), "bicubic"),
 )
 ALPHA_MODE_VALUES: tuple[str, ...] = tuple(value for _label, value in ALPHA_MODE_CHOICES)
-TARGET_PROFILE_CHOICES: tuple[tuple[str, str | None], ...] = (
-    ("Default", None),
+TARGET_PROFILE_CHOICES: tuple[tuple[Message | str, str | None], ...] = (
+    (Message("parameters.profileDefault"), None),
     ("sRGB", "srgb"),
     ("Display P3", "p3"),
     ("Adobe RGB", "adobergb"),
@@ -56,13 +60,13 @@ TARGET_PROFILE_VALUES: tuple[str | None, ...] = tuple(
 # The top is 2048 because tiling self-cancels above it: at 4096 a typical photo is a
 # single tile, which already *is* "Whole image". The bottom is 128 because tile_pad
 # overlap (~8% per edge there) and tile count both worsen sharply below it.
-TILE_CHOICES: tuple[tuple[str, int], ...] = (
+TILE_CHOICES: tuple[tuple[Message | str, int], ...] = (
     ("128", 128),
     ("256", 256),
     ("512", 512),
     ("1024", 1024),
     ("2048", 2048),
-    ("Whole image", 0),
+    (Message("parameters.tileWholeImage"), 0),
 )
 TILE_VALUES: tuple[int, ...] = tuple(value for _label, value in TILE_CHOICES)
 

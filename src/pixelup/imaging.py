@@ -13,6 +13,7 @@ from typing import Any
 from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageError
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
 from pixelup.nanoid import nanoid
 from pixelup.output_reservation import (
@@ -53,19 +54,19 @@ def read_image_size(path: Path) -> tuple[int, int]:
     except UnidentifiedImageError as exc:
         raise PixelupError(
             ErrorCode.INPUT_INVALID_FORMAT,
-            "Input is not a readable image format.",
+            Message("error.inputInvalidFormat"),
             details={"input": str(path)},
         ) from exc
     except PermissionError as exc:
         raise PixelupError(
             ErrorCode.INPUT_UNREADABLE,
-            "Input image is not readable.",
+            Message("error.inputUnreadable"),
             details={"input": str(path), "reason": str(exc)},
         ) from exc
     except OSError as exc:
         raise PixelupError(
             ErrorCode.INPUT_UNREADABLE,
-            "Input image could not be opened.",
+            Message("error.inputOpenFailed"),
             details={"input": str(path), "reason": str(exc)},
         ) from exc
 
@@ -166,7 +167,7 @@ def save_output_image(
         temp_path.unlink(missing_ok=True)
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            "Could not write the output image.",
+            Message("error.outputWriteFailed"),
             details={"output": str(output_path), "reason": str(exc)},
         ) from exc
     return encoded.size
@@ -222,8 +223,8 @@ def _fsync_file(path: Path) -> None:
 def _output_exists(output_path: Path) -> PixelupError:
     return PixelupError(
         ErrorCode.OUTPUT_EXISTS,
-        "Output file already exists.",
-        user_hint="Retry the job to choose a new unused filename.",
+        Message("error.outputExists"),
+        hint=Message("error.hintRetryNewName"),
         details={"output": str(output_path)},
     )
 
@@ -259,7 +260,7 @@ def _flatten_alpha(image: Image.Image, background: str) -> Image.Image:
     except ValueError as exc:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Background is not a valid color.",
+            Message("error.backgroundInvalid"),
             details={"background": background},
         ) from exc
     rgba = image.convert("RGBA")
@@ -354,7 +355,7 @@ def _profile_bytes(name: str) -> bytes:
     except ValueError as exc:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Target profile must be one of sRGB, Display P3, or Adobe RGB.",
+            Message("error.targetProfileInvalid"),
         ) from exc
     except (OSError, ImageCms.PyCMSError) as exc:
         raise PixelupError(

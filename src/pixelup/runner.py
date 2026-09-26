@@ -6,6 +6,8 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError, user_text
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.jobs import Job, job_log_payload, options_for_job
 from pixelup.output_reservation import (
     PublishedFile,
@@ -19,11 +21,16 @@ from pixelup.upscale import run_upscale
 
 
 class JobSignals(QObject):
-    progress = Signal(int, str)
-    finished = Signal(int, bool, str, object, object)
+    # A job's status text travels as a Message and is rendered by the window, in
+    # whatever language it speaks when the row is drawn.
+    progress = Signal(int, object)
+    finished = Signal(int, bool, object, object, object)
 
 
-def failure_message(exc: PixelupError) -> str:
+FAILED_FALLBACK = Message("jobs.failedFallback")
+
+
+def failure_message(exc: PixelupError) -> Message:
     """The queue-row text for a failed job: the diagnosis plus its remedy.
 
     The row is the only place a processing failure surfaces, so its corrective hint
@@ -31,7 +38,7 @@ def failure_message(exc: PixelupError) -> str:
     """
     return user_text(
         exc,
-        internal_fallback="The image could not be upscaled. Retry the job.",
+        internal_fallback=FAILED_FALLBACK,
     )
 
 
@@ -51,7 +58,7 @@ class JobWorker(QObject):
 
     @Slot()
     def run(self) -> None:
-        warnings: list[str] = []
+        warnings: list[Message] = []
         published_image: PublishedFile | None = None
 
         def capture_published_image(published: PublishedFile) -> None:
@@ -68,7 +75,7 @@ class JobWorker(QObject):
                 timeout=options.lock_timeout,
                 should_cancel=self._is_cancelled,
                 on_waiting=lambda: self.signals.progress.emit(
-                    self.job.id, "Waiting for output"
+                    self.job.id, Message("progress.waitingForOutput")
                 ),
             ):
                 result = run_upscale(
@@ -123,16 +130,18 @@ class JobWorker(QObject):
                 job_id=self.job.id,
                 output=str(self.job.output_path),
                 sidecar=str(sidecar),
-                warnings=warnings,
+                warnings=[english().of(warning) for warning in warnings],
             )
-            self.signals.finished.emit(self.job.id, True, "Done", result, warnings)
+            self.signals.finished.emit(
+                self.job.id, True, Message("queue.statusDone"), result, warnings
+            )
         except PixelupError as exc:
             if exc.code == ErrorCode.JOB_CANCELLED:
                 log.info("job.cancelled", job_id=self.job.id)
                 self.signals.finished.emit(
                     self.job.id,
                     False,
-                    "Cancelled",
+                    Message("queue.statusCancelled"),
                     {"cancelled": True},
                     warnings,
                 )
@@ -142,7 +151,7 @@ class JobWorker(QObject):
                 job_id=self.job.id,
                 code=exc.code.value,
                 error_details=exc.details,
-                warnings=warnings,
+                warnings=[english().of(warning) for warning in warnings],
                 details=job_log_payload(self.job),
             )
             self.signals.finished.emit(self.job.id, False, failure_message(exc), {}, warnings)
@@ -152,18 +161,12 @@ class JobWorker(QObject):
                 job_id=self.job.id,
                 details=job_log_payload(self.job),
             )
-            self.signals.finished.emit(
-                self.job.id,
-                False,
-                "The image could not be upscaled. Retry the job.",
-                {},
-                warnings,
-            )
+            self.signals.finished.emit(self.job.id, False, FAILED_FALLBACK, {}, warnings)
 
 
 class JobRunner(QObject):
-    progress = Signal(int, str)
-    finished = Signal(int, bool, str, object, object)
+    progress = Signal(int, object)
+    finished = Signal(int, bool, object, object, object)
     idle = Signal()
 
     def __init__(
@@ -206,7 +209,7 @@ class JobRunner(QObject):
         for job in self._jobs:
             if job.status == "pending":
                 job.status = "cancelled"
-                job.message = "Cancelled"
+                job.message = Message("queue.statusCancelled")
                 cancelled.append(job.id)
         for _thread, worker in self._threads.values():
             try:
@@ -214,7 +217,9 @@ class JobRunner(QObject):
             except Exception:
                 log.debug("quit.cancel_request_failed", job_id=worker.job.id)
         for job_id in cancelled:
-            self.finished.emit(job_id, False, "Cancelled", {"cancelled": True}, [])
+            self.finished.emit(
+                job_id, False, Message("queue.statusCancelled"), {"cancelled": True}, []
+            )
 
     def cleanup_for_quit(self) -> bool:
         self.begin_shutdown()
@@ -260,7 +265,7 @@ class JobRunner(QObject):
 
     def _start_job(self, job: Job) -> None:
         job.status = "running"
-        job.message = "Starting"
+        job.message = Message("progress.starting")
         self._active_jobs += 1
         self.progress.emit(job.id, job.message)
 
@@ -282,12 +287,12 @@ class JobRunner(QObject):
         if not self._threads:
             self.idle.emit()
 
-    @Slot(int, bool, str, object, object)
+    @Slot(int, bool, object, object, object)
     def _job_finished(
         self,
         job_id: int,
         ok: bool,
-        message: str,
+        message: object,
         result: object,
         warnings: object,
     ) -> None:
@@ -297,15 +302,16 @@ class JobRunner(QObject):
             QTimer.singleShot(0, lambda: self.schedule(self._max_concurrent_jobs))
 
 
-def _progress_text(phase: str) -> str:
-    match phase:
-        case "upscale":
-            return "Upscaling"
-        case "encode":
-            return "Saving"
-        case _:
-            return phase.replace("-", " ").replace("_", " ").capitalize()
+_PHASE_KEYS = {
+    "load_model": "progress.loadingModel",
+    "upscale": "progress.upscaling",
+    "encode": "progress.saving",
+}
 
 
-def _tile_progress_text(done: int, total: int) -> str:
-    return f"{done}/{total} tiles processed"
+def _progress_text(phase: str) -> Message:
+    return Message(_PHASE_KEYS[phase])
+
+
+def _tile_progress_text(done: int, total: int) -> Message:
+    return Message.of("progress.tiles", done=done, count=total)

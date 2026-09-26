@@ -13,6 +13,7 @@ from PIL import Image, UnidentifiedImageError
 
 from pixelup.devices import resolve_device, to_torch_device
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 from pixelup.imaging import register_image_plugins
 from pixelup.models import model_file
 from pixelup.realesrgan_models import RRDBNet, SRVGGNetCompact
@@ -81,8 +82,8 @@ def run_inference(
         if _is_out_of_memory(exc):
             raise PixelupError(
                 ErrorCode.OUT_OF_MEMORY,
-                "Inference ran out of memory.",
-                user_hint="Try a smaller tile size, such as 512.",
+                Message("error.outOfMemory"),
+                hint=Message("error.hintSmallerTile"),
             ) from exc
         raise PixelupError(
             ErrorCode.INTERNAL_ERROR,
@@ -285,19 +286,19 @@ def _read_input_image(path: Path) -> Any:
     except UnidentifiedImageError as exc:
         raise PixelupError(
             ErrorCode.INPUT_INVALID_FORMAT,
-            "Input is not a readable image format.",
+            Message("error.inputInvalidFormat"),
             details={"input": str(path)},
         ) from exc
     except PermissionError as exc:
         raise PixelupError(
             ErrorCode.INPUT_UNREADABLE,
-            "Input image is not readable.",
+            Message("error.inputUnreadable"),
             details={"input": str(path), "reason": str(exc)},
         ) from exc
     except OSError as exc:
         raise PixelupError(
             ErrorCode.INPUT_UNREADABLE,
-            "Input image could not be opened.",
+            Message("error.inputOpenFailed"),
             details={"input": str(path), "reason": str(exc)},
         ) from exc
 
@@ -308,7 +309,7 @@ def _read_input_image(path: Path) -> Any:
         return array[:, :, [2, 1, 0, 3]].copy()
     raise PixelupError(
         ErrorCode.INPUT_INVALID_FORMAT,
-        "Input image has an unsupported channel layout.",
+        Message("error.inputChannelsUnsupported"),
         details={"input": str(path), "channels": channels},
     )
 

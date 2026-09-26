@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton
 
+from pixelup.i18n.localizer import english
 from pixelup.quit_dialog import QuitConfirmDialog, quit_confirmation_text
 
 
 def test_quit_confirmation_text_pluralizes() -> None:
-    assert quit_confirmation_text(0) == "Open images will be closed. Quit PixelUp?"
-    assert quit_confirmation_text(1) == "1 active job will be abandoned. Quit PixelUp?"
-    assert quit_confirmation_text(2) == "2 active jobs will be abandoned. Quit PixelUp?"
+    text = english().of
+    assert text(quit_confirmation_text(0)) == "Open images will be closed. Quit PixelUp?"
+    assert text(quit_confirmation_text(1)) == "1 active job will be abandoned. Quit PixelUp?"
+    assert text(quit_confirmation_text(2)) == "2 active jobs will be abandoned. Quit PixelUp?"
 
 
 def _footer_button_labels(dialog: QuitConfirmDialog) -> list[str]:

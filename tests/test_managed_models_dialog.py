@@ -9,6 +9,8 @@ from PySide6.QtWidgets import QApplication, QDialog, QLabel, QProgressBar, QRadi
 
 from pixelup.dialog_shell import TABLE_WIDTH
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.model_management import (
     MANAGED_ARTIFACT_NAMES,
@@ -128,7 +130,10 @@ def test_install_failure_remains_visible_and_retryable(
     qapp: QApplication, tmp_path: Path, monkeypatch
 ) -> None:
     def fail(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise PixelupError(ErrorCode.MODEL_DOWNLOAD_FAILED, "Network unavailable.")
+        raise PixelupError(
+            ErrorCode.MODEL_DOWNLOAD_FAILED,
+            Message.of("error.modelDownloadFailed", model="RealESRGAN_x4plus"),
+        )
 
     monkeypatch.setattr("pixelup.model_manager.download_model", fail)
     manager = ModelManager(tmp_path)
@@ -138,8 +143,9 @@ def test_install_failure_remains_visible_and_retryable(
         _finish_manager(manager, qapp)
         assert manager.failed_operations[0].kind == "failed"
         assert dialog.result_view.isVisibleTo(dialog)
-        assert dialog.result_view.message_label.text() == "Network unavailable."
-        assert dialog.result_view.accessibleName() == "Network unavailable."
+        failure = "Could not download model 'RealESRGAN_x4plus'."
+        assert dialog.result_view.message_label.text() == failure
+        assert dialog.result_view.accessibleName() == failure
         assert dialog.row_action_buttons[0].isEnabled()
     finally:
         dialog.deleteLater()
@@ -175,7 +181,10 @@ def test_failure_refreshes_partial_application_owned_readiness(
 
     def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
         if name == required[1]:
-            raise PixelupError(ErrorCode.MODEL_DOWNLOAD_FAILED, "Second download failed.")
+            raise PixelupError(
+                ErrorCode.MODEL_DOWNLOAD_FAILED,
+                Message.of("error.modelDownloadFailed", model=name),
+            )
         target = model_file(models_dir, name)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"model")
@@ -454,7 +463,7 @@ def test_columns_are_content_derived_inside_a_width_that_is_chosen(
     dialog = ManagedModelsDialog(ModelManager(tmp_path))
     try:
         longest_purpose = max(
-            (bundle.purpose for bundle in MANAGED_MODEL_BUNDLES),
+            (english().of(bundle.purpose) for bundle in MANAGED_MODEL_BUNDLES),
             key=len,
         )
         assert dialog.column_minimum_widths[1] >= (
@@ -479,9 +488,7 @@ def test_dynamic_result_grows_dialog_without_compressing_rows_or_footer(
         row_height = dialog.row_action_buttons[0].height()
         close_height = dialog.dismiss_button.height()
 
-        dialog._show_error(
-            "Could not open the models folder. Check its permissions and try again."
-        )
+        dialog._show_error(Message("managedModels.revealFailed"))
         qapp.processEvents()
 
         assert dialog.height() > initial_height

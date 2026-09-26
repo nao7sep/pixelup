@@ -12,6 +12,7 @@ from typing import Literal
 
 from PySide6.QtCore import (
     QByteArray,
+    QLocale,
     QObject,
     QSettings,
     QSize,
@@ -57,6 +58,7 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QStyleFactory,
+    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -73,8 +75,12 @@ from pixelup.app_config import (
     save_app_config_merged,
 )
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs, window_settings_path
+from pixelup.devices import DEVICE_CHOICES
 from pixelup.errors import PixelupError
 from pixelup.fonts import apply_ui_font
+from pixelup.i18n import localizer
+from pixelup.i18n.localized import localize, unlocalize
+from pixelup.i18n.message import Message, join
 from pixelup.imaging import read_image_size, register_image_plugins
 from pixelup.jobs import (
     ImageEntry,
@@ -124,12 +130,13 @@ from pixelup.ui_common import (
 )
 from pixelup.widgets import (
     EmptyStateTableWidget,
-    NoWheelComboBox,
     NoWheelDoubleSpinBox,
     NoWheelSpinBox,
     OperationResult,
+    choice_combo,
     device_combo,
     output_format_combo,
+    retranslate_choices,
 )
 
 # Horizontal slack added to a measured string so cell text never touches the
@@ -217,8 +224,8 @@ class ImageDropTable(EmptyStateTableWidget):
 
     paths_dropped = Signal(list)
 
-    def __init__(self, rows: int, columns: int, *, empty_text: str) -> None:
-        super().__init__(rows, columns, empty_text=empty_text)
+    def __init__(self, rows: int, columns: int, *, empty_message: Message) -> None:
+        super().__init__(rows, columns, empty_message=empty_message)
         self.setObjectName("imageDropReceiver")
         self.setAcceptDrops(True)
         self.setProperty("dropActive", False)
@@ -277,7 +284,8 @@ def _fit_columns(widget: QWidget, *samples: str) -> int:
 
 class ImagePreview(QLabel):
     def __init__(self) -> None:
-        super().__init__("No image selected")
+        super().__init__()
+        localize(self, text="preview.none")
         self._pixmap: QPixmap | None = None
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # A 320x240 (4:3 QVGA) floor keeps the preview genuinely useful: a
@@ -289,14 +297,17 @@ class ImagePreview(QLabel):
         if path is None:
             self._pixmap = None
             self.clear()
-            self.setText("No image selected")
+            localize(self, text="preview.none")
             return
         pixmap = QPixmap(str(path))
         self._pixmap = pixmap if not pixmap.isNull() else None
         if self._pixmap is None:
             self.clear()
-            self.setText("Preview unavailable")
+            localize(self, text="preview.unavailable")
             return
+        # The picture replaces the words, and a language change must not write
+        # them back over it.
+        unlocalize(self, "text")
         self.setText("")
         self._update_pixmap()
 
@@ -374,6 +385,9 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("PixelUp")
         self._build_ui()
+        # Everything a binding does not reach — rows, choices, headers, measured
+        # widths — is re-derived here when the language changes.
+        localizer.changed.connect(self._retranslate)
         self.model_manager.changed.connect(self._model_manager_changed)
         self.model_manager.cancelled.connect(self._model_install_cancelled)
         self.model_manager.idle.connect(self._close_when_workers_stop)
@@ -424,6 +438,28 @@ class MainWindow(QMainWindow):
             # blocking construction ahead of the first paint. Non-fatal: the app is
             # already running on freshly reset defaults; this only tells the user.
             QTimer.singleShot(0, self._notify_config_reset)
+
+    def _retranslate(self) -> None:
+        """Rewrite, after a language change, what the widget bindings do not reach."""
+        _set_headers(self.image_table, _IMAGE_COLUMNS)
+        _set_headers(self.queue_table, _QUEUE_COLUMNS)
+        for combo, choices in (
+            (self.alpha_mode, ALPHA_MODE_CHOICES),
+            (self.tile, TILE_CHOICES),
+            (self.device, DEVICE_CHOICES),
+            (self.target_profile, TARGET_PROFILE_CHOICES),
+        ):
+            retranslate_choices(combo, choices)
+        for path, row in self._image_rows.items():
+            size = self._images_by_path[path].input_size
+            self.image_table.item(row, 1).setText(localizer.of(_image_size_text(size)))
+        self._refresh_image_job_summaries_for(list(self._image_rows))
+        for job in self.jobs:
+            self._update_job(job)
+        # The numbers Qt formats itself, in the denoise and quality boxes, follow
+        # the language's locale; a window passes its locale down to its children.
+        self.setLocale(QLocale())
+        self._refresh_layout_metrics()
 
     def _notify_config_reset(self) -> None:
         if self._config_quarantined_to is not None:
@@ -522,23 +558,23 @@ class MainWindow(QMainWindow):
         selected: Path | None = None
         added: list[Path] = []
         duplicates: list[Path] = []
-        rejected: list[tuple[Path, str, bool]] = []
+        rejected: list[tuple[Path, Message, bool]] = []
         for path in paths:
             try:
                 input_path = absolute_user_path(path)
                 resolved = input_path.resolve()
                 if resolved.is_dir():
                     log.warning("open.ignored_directory", path=str(path), resolved=str(resolved))
-                    rejected.append((input_path, "folders are not supported", False))
+                    rejected.append((input_path, Message("images.reasonFolder"), False))
                     continue
                 if not resolved.is_file():
                     log.warning("open.ignored_non_file", path=str(path), resolved=str(resolved))
-                    rejected.append((input_path, "the file is unavailable", False))
+                    rejected.append((input_path, Message("images.reasonUnavailable"), False))
                     continue
                 image_size = _safe_image_size(resolved)
                 if image_size is None:
                     log.warning("open.ignored_non_image", path=str(path), resolved=str(resolved))
-                    rejected.append((input_path, "not a readable supported image", False))
+                    rejected.append((input_path, Message("images.reasonNotImage"), False))
                     continue
                 if input_path not in self._images_by_path:
                     entry = ImageEntry(input_path, image_size)
@@ -553,7 +589,7 @@ class MainWindow(QMainWindow):
                 selected = input_path
             except Exception:  # noqa: BLE001 - one bad offer must not escape the UI event loop.
                 log.exception("open.failed", path=str(path))
-                rejected.append((path, "could not be read", True))
+                rejected.append((path, Message("images.reasonUnreadable"), True))
         if selected is not None:
             self._select_image(selected)
         self._update_action_buttons()
@@ -563,23 +599,26 @@ class MainWindow(QMainWindow):
         self,
         added: list[Path],
         duplicates: list[Path],
-        rejected: list[tuple[Path, str, bool]],
+        rejected: list[tuple[Path, Message, bool]],
     ) -> None:
         if rejected:
-            parts = []
+            parts: list[Message] = []
             if added:
-                parts.append(f"Added {len(added)} image{'s' if len(added) != 1 else ''}")
+                parts.append(Message.of("images.added", count=len(added)))
             if duplicates:
-                parts.append(f"Already open: {', '.join(path.name for path in duplicates)}")
-            parts.extend(f"{path.name or path}: {reason}" for path, reason, _error in rejected)
+                parts.append(_already_open(duplicates))
+            parts.extend(
+                Message.of("images.rejected", name=path.name or str(path), reason=reason)
+                for path, reason, _error in rejected
+            )
             self._set_open_result(
-                "; ".join(parts) + ".",
+                join("common.sentences", parts),
                 severity="error" if any(error for _path, _reason, error in rejected) else "warning",
                 issue_paths=[*duplicates, *(path for path, _reason, _error in rejected)],
             )
         elif duplicates:
             self._set_open_result(
-                "Already open: " + ", ".join(path.name for path in duplicates) + ".",
+                _already_open(duplicates),
                 severity="information",
                 issue_paths=duplicates,
             )
@@ -588,7 +627,7 @@ class MainWindow(QMainWindow):
 
     def _set_open_result(
         self,
-        message: str,
+        message: Message,
         *,
         severity: Literal["information", "warning", "error"],
         issue_paths: list[Path],
@@ -623,18 +662,22 @@ class MainWindow(QMainWindow):
         layout = QGridLayout(row)
         use_regular_spacing(layout, margins=False)
 
-        self.logs_button = QPushButton("Reveal log")
+        self.logs_button = localize(QPushButton(), text="main.revealLog")
         self.logs_button.clicked.connect(self._reveal_log_file)
-        self.settings_button = QPushButton("Settings")
+        self.settings_button = localize(QPushButton(), text="main.settings")
         self.settings_button.clicked.connect(self._settings_dialog)
         settings_shortcut = QKeySequence("Ctrl+,")
         self.settings_button.setShortcut(settings_shortcut)
-        self.settings_button.setToolTip(
-            f"Settings ({settings_shortcut.toString(QKeySequence.SequenceFormat.NativeText)})"
+        localize(
+            self.settings_button,
+            tooltip=Message.of(
+                "main.settingsTooltip",
+                shortcut=settings_shortcut.toString(QKeySequence.SequenceFormat.NativeText),
+            ),
         )
-        self.shortcuts_button = QPushButton("Shortcuts")
+        self.shortcuts_button = localize(QPushButton(), text="main.shortcuts")
         self.shortcuts_button.clicked.connect(self._shortcuts_dialog)
-        self.about_button = QPushButton("About")
+        self.about_button = localize(QPushButton(), text="main.about")
         self.about_button.clicked.connect(self._about_dialog)
 
         start = Qt.AlignmentFlag.AlignLeft
@@ -668,17 +711,13 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_images_group(self) -> QWidget:
-        group = QGroupBox("Images")
+        group = localize(QGroupBox(), title="images.title")
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
 
-        self.image_table = ImageDropTable(
-            0,
-            3,
-            empty_text="No images yet. Open images or drop them here.",
-        )
+        self.image_table = ImageDropTable(0, 3, empty_message=Message("images.empty"))
         self.image_table.paths_dropped.connect(self.open_paths)
-        self.image_table.setHorizontalHeaderLabels(["Image", "Size", "Jobs"])
+        _set_headers(self.image_table, _IMAGE_COLUMNS)
         self.image_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.image_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.image_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -703,9 +742,9 @@ class MainWindow(QMainWindow):
         button_row = QWidget()
         button_layout = QHBoxLayout(button_row)
         use_regular_spacing(button_layout, margins=False)
-        self.open_images_button = QPushButton("Open")
+        self.open_images_button = localize(QPushButton(), text="images.open")
         self.open_images_button.clicked.connect(self._open_dialog)
-        self.remove_image_button = QPushButton("Remove")
+        self.remove_image_button = localize(QPushButton(), text="images.remove")
         # Taking images out of the collection is the destructive path's trigger, so
         # it is outlined rather than filled (theme.py carries the two roles).
         self.remove_image_button.setProperty("role", "danger")
@@ -749,7 +788,7 @@ class MainWindow(QMainWindow):
         return column
 
     def _build_selected_image_group(self) -> QWidget:
-        group = QGroupBox("Preview")
+        group = localize(QGroupBox(), title="preview.title")
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
         self.preview = ImagePreview()
@@ -757,7 +796,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_models_group(self) -> QWidget:
-        group = QGroupBox("Models")
+        group = localize(QGroupBox(), title="models.title")
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
         self.model_checks: dict[str, QCheckBox] = {}
@@ -766,7 +805,7 @@ class MainWindow(QMainWindow):
             checkbox.toggled.connect(self._update_action_buttons)
             self.model_checks[model] = checkbox
             layout.addWidget(checkbox)
-        self.manage_models_button = QPushButton("Managed models")
+        self.manage_models_button = localize(QPushButton(), text="models.manage")
         self.manage_models_button.clicked.connect(self._managed_models_dialog)
         layout.addWidget(self.manage_models_button, 0, Qt.AlignmentFlag.AlignLeft)
         # The models' state is a line of its own under the button that opens them:
@@ -779,7 +818,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_parameters_group(self) -> QWidget:
-        group = QGroupBox("Parameters")
+        group = localize(QGroupBox(), title="parameters.title")
         form = QFormLayout(group)
         use_regular_spacing(form)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
@@ -807,45 +846,39 @@ class MainWindow(QMainWindow):
         self.denoise_strength.setSingleStep(DENOISE_STRENGTH_STEP)
         self.denoise_strength.setDecimals(2)
 
-        self.alpha_mode = NoWheelComboBox()
-        for label, alpha_mode in ALPHA_MODE_CHOICES:
-            self.alpha_mode.addItem(label, alpha_mode)
+        self.alpha_mode = choice_combo(ALPHA_MODE_CHOICES)
 
         self.output_format = output_format_combo()
 
         self.quality = NoWheelSpinBox()
         self.quality.setRange(MIN_QUALITY, MAX_QUALITY)
 
-        self.tile = NoWheelComboBox()
-        for label, tile in TILE_CHOICES:
-            self.tile.addItem(label, tile)
+        self.tile = choice_combo(TILE_CHOICES)
 
         self.device = device_combo()
 
-        self.strip_metadata = QCheckBox("Strip metadata")
+        self.strip_metadata = localize(QCheckBox(), text="parameters.stripMetadata")
 
-        self.target_profile = NoWheelComboBox()
-        for label, profile in TARGET_PROFILE_CHOICES:
-            self.target_profile.addItem(label, profile)
+        self.target_profile = choice_combo(TARGET_PROFILE_CHOICES)
 
-        self.reset_parameters_button = QPushButton("Reset parameters")
+        self.reset_parameters_button = localize(QPushButton(), text="parameters.reset")
         self.reset_parameters_button.clicked.connect(self._reset_parameters_to_defaults)
 
         # Per-control captions live in the Parameters Help dialog, not the panel:
         # always-visible help text was the main driver of the window's minimum
         # width, which had outgrown small screens.
-        help_button = QPushButton("Help")
+        help_button = localize(QPushButton(), text="parameters.help")
         help_button.clicked.connect(self._parameters_help_dialog)
 
-        form.addRow("Scale", scale_row)
-        form.addRow("Denoise", self.denoise_strength)
-        form.addRow("Alpha mode", self.alpha_mode)
-        form.addRow("Output format", self.output_format)
-        form.addRow("Quality", self.quality)
-        form.addRow("Tile size", self.tile)
-        form.addRow("Device", self.device)
+        form.addRow(_form_label("parameters.scale"), scale_row)
+        form.addRow(_form_label("parameters.denoise"), self.denoise_strength)
+        form.addRow(_form_label("parameters.alphaMode"), self.alpha_mode)
+        form.addRow(_form_label("parameters.outputFormat"), self.output_format)
+        form.addRow(_form_label("parameters.quality"), self.quality)
+        form.addRow(_form_label("parameters.tileSize"), self.tile)
+        form.addRow(_form_label("parameters.device"), self.device)
         form.addRow("", self.strip_metadata)
-        form.addRow("Target profile", self.target_profile)
+        form.addRow(_form_label("parameters.targetProfile"), self.target_profile)
         # Reset and Help stack as two rows: side by side they would be the widest
         # field in the form and re-widen the group the Help dialog exists to slim.
         form.addRow("", self.reset_parameters_button)
@@ -874,10 +907,10 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_actions_group(self) -> QWidget:
-        group = QGroupBox("Queue actions")
+        group = localize(QGroupBox(), title="actions.title")
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
-        self.queue_selected_button = QPushButton("Queue selected image")
+        self.queue_selected_button = localize(QPushButton(), text="actions.queueSelected")
         # The one action this window is for: queue what is selected, with the
         # parameters beside it. It is set apart by its label's weight, not an accent
         # fill: the three queue buttons under it do the same job at another scope,
@@ -885,15 +918,21 @@ class MainWindow(QMainWindow):
         # have shown as a faded block. The accent is kept for a dialog's commit.
         self.queue_selected_button.setProperty("role", "main")
         self.queue_selected_button.clicked.connect(self._queue_selected_image)
-        self.queue_selected_all_models_button = QPushButton("Queue selected image with all models")
+        self.queue_selected_all_models_button = localize(
+            QPushButton(), text="actions.queueSelectedAllModels"
+        )
         self.queue_selected_all_models_button.clicked.connect(self._queue_selected_image_all_models)
-        self.queue_all_selected_models_button = QPushButton("Queue all images with selected models")
+        self.queue_all_selected_models_button = localize(
+            QPushButton(), text="actions.queueAllSelectedModels"
+        )
         self.queue_all_selected_models_button.clicked.connect(self._queue_all_images_selected_models)
-        self.queue_all_all_models_button = QPushButton("Queue all images with all models")
+        self.queue_all_all_models_button = localize(
+            QPushButton(), text="actions.queueAllAllModels"
+        )
         self.queue_all_all_models_button.clicked.connect(self._queue_all_images_all_models)
-        self.retry_button = QPushButton("Retry failed jobs")
+        self.retry_button = localize(QPushButton(), text="actions.retryFailed")
         self.retry_button.clicked.connect(self._retry_failed)
-        self.cancel_button = QPushButton("Cancel queue")
+        self.cancel_button = localize(QPushButton(), text="actions.cancelQueue")
         self.cancel_button.clicked.connect(self._cancel_queue)
 
         layout.addWidget(self.queue_selected_button, 0, Qt.AlignmentFlag.AlignLeft)
@@ -920,11 +959,11 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_queue_panel(self) -> QWidget:
-        group = QGroupBox("Queue")
+        group = localize(QGroupBox(), title="queue.title")
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
-        self.queue_table = EmptyStateTableWidget(0, 5, empty_text="No jobs queued yet.")
-        self.queue_table.setHorizontalHeaderLabels(["Image", "Model", "Scale", "Output", "Status"])
+        self.queue_table = EmptyStateTableWidget(0, 5, empty_message=Message("queue.empty"))
+        _set_headers(self.queue_table, _QUEUE_COLUMNS)
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         queue_header = self.queue_table.horizontalHeader()
@@ -933,10 +972,10 @@ class MainWindow(QMainWindow):
         queue_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         queue_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         queue_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        # Widths measured from worst-case content in the current UI font: Model
-        # shows the longest model name in full; Scale fits its header; Status holds
-        # "Cancelling...". "Image" elides a long filename to a readable floor (with a
-        # tooltip) and "Output" stretches.
+        # Widths measured from worst-case content in the current UI font and
+        # language: Model shows the longest model name in full; Scale fits its
+        # header; Status holds the longest status word. "Image" elides a long
+        # filename to a readable floor (with a tooltip) and "Output" stretches.
         self._fit_queue_table_columns()
         self.queue_table.setMinimumHeight(180)
 
@@ -962,17 +1001,32 @@ class MainWindow(QMainWindow):
 
     def _fit_image_table_columns(self) -> None:
         header = self.image_table.horizontalHeader()
-        size_width = _fit_columns(self.image_table, "Size", "99999 x 99999", "Unavailable")
-        jobs_width = _fit_columns(self.image_table, "Jobs", "12 done, 5 failed")
+        size_width = _fit_columns(
+            self.image_table,
+            localizer.t(_IMAGE_COLUMNS[1]),
+            localizer.of(_image_size_text((99999, 99999))),
+            localizer.t("images.sizeUnavailable"),
+        )
+        jobs_width = _fit_columns(
+            self.image_table,
+            localizer.t(_IMAGE_COLUMNS[2]),
+            localizer.of(job_status_summary(["succeeded"] * 12 + ["failed"] * 5)),
+        )
         header.resizeSection(1, size_width)
         header.resizeSection(2, jobs_width)
         self.image_table.setMinimumWidth(_NAME_MIN_WIDTH + size_width + jobs_width)
 
     def _fit_queue_table_columns(self) -> None:
         header = self.queue_table.horizontalHeader()
-        model_width = _fit_columns(self.queue_table, "Model", max(UPSCALE_MODELS, key=len))
-        scale_width = _fit_columns(self.queue_table, "Scale", "4x")
-        status_width = _fit_columns(self.queue_table, "Status", "Cancelling...")
+        model_width = _fit_columns(
+            self.queue_table, localizer.t(_QUEUE_COLUMNS[1]), max(UPSCALE_MODELS, key=len)
+        )
+        scale_width = _fit_columns(self.queue_table, localizer.t(_QUEUE_COLUMNS[2]), "4x")
+        status_width = _fit_columns(
+            self.queue_table,
+            localizer.t(_QUEUE_COLUMNS[4]),
+            *(localizer.t(key) for key in _STATUS_KEYS.values()),
+        )
         header.resizeSection(0, _NAME_MIN_WIDTH)
         header.resizeSection(1, model_width)
         header.resizeSection(2, scale_width)
@@ -1021,11 +1075,11 @@ class MainWindow(QMainWindow):
 
     def _open_dialog(self) -> None:
         try:
-            files, _ = QFileDialog.getOpenFileNames(self, "Open images")
+            files, _ = QFileDialog.getOpenFileNames(self, localizer.t("images.openDialogTitle"))
         except Exception:  # noqa: BLE001 - native picker failures belong to this action.
             log.exception("open.picker_failed")
             self.open_result.show_result(
-                "Could not open the image picker. Try again.",
+                Message("images.pickerFailed"),
                 severity="error",
             )
             return
@@ -1158,28 +1212,37 @@ class MainWindow(QMainWindow):
                 if operation_total <= 0
                 else min(100, completed * 100 // operation_total)
             )
-            self._show_model_status(f"Installing models — {progress}%", severity="")
-            self.manage_models_button.setAccessibleName(
-                f"Managed models, installing models, {progress} percent"
+            self._show_model_status(
+                Message.of("models.installing", progress=progress), severity=""
             )
-            self.manage_models_button.setToolTip("Model installation is in progress.")
+            localize(
+                self.manage_models_button,
+                accessible_name=Message.of("models.installingAccessible", progress=progress),
+                tooltip="models.installingTooltip",
+            )
             return
         if missing:
-            self._show_model_status("Some models are not installed.", severity="warning")
-            self.manage_models_button.setAccessibleName("Managed models, some models are missing")
-            self.manage_models_button.setToolTip(
-                "Some models are not installed. Open Managed models to install them."
+            self._show_model_status(Message("models.missing"), severity="warning")
+            localize(
+                self.manage_models_button,
+                accessible_name="models.missingAccessible",
+                tooltip="models.missingTooltip",
             )
         else:
-            self._show_model_status("", severity="")
-            self.manage_models_button.setAccessibleName(
-                "Managed models, all models installed"
+            self._show_model_status(None, severity="")
+            localize(
+                self.manage_models_button,
+                accessible_name="models.readyAccessible",
+                tooltip="models.readyTooltip",
             )
-            self.manage_models_button.setToolTip("All models are installed.")
 
-    def _show_model_status(self, text: str, *, severity: str) -> None:
-        self.model_status.setText(text)
-        self.model_status.setVisible(bool(text))
+    def _show_model_status(self, message: Message | None, *, severity: str) -> None:
+        if message is None:
+            unlocalize(self.model_status, "text")
+            self.model_status.clear()
+        else:
+            localize(self.model_status, text=message)
+        self.model_status.setVisible(message is not None)
         self.model_status.setProperty("severity", severity)
         # A dynamic property only restyles once the style is told to look again.
         self.model_status.style().unpolish(self.model_status)
@@ -1228,7 +1291,7 @@ class MainWindow(QMainWindow):
             self.log_action_result.clear_result()
         else:
             self.log_action_result.show_result(
-                "Could not reveal the log. Try again from this button.",
+                Message("main.revealLogFailed"),
                 severity="error",
             )
         # A quit that arrived while this ran was deferred behind it; retry it now.
@@ -1243,8 +1306,8 @@ class MainWindow(QMainWindow):
             0,
             _item(entry.input_path.name, tooltip=str(entry.input_path)),
         )
-        self.image_table.setItem(row, 1, _item(_image_size_text(entry.input_size)))
-        self.image_table.setItem(row, 2, _item("No jobs"))
+        self.image_table.setItem(row, 1, _item(localizer.of(_image_size_text(entry.input_size))))
+        self.image_table.setItem(row, 2, _item(localizer.t("images.noJobs")))
 
     def _select_image(self, path: Path) -> None:
         row = self._image_rows.get(path)
@@ -1290,7 +1353,7 @@ class MainWindow(QMainWindow):
             log.info("image.remove_blocked", input=str(path), reason="active_jobs")
             self._remove_result_path = path
             self.remove_result.show_result(
-                "This image cannot be removed while pending or running jobs still use it.",
+                Message("images.removeBlocked"),
                 severity="warning",
             )
             return
@@ -1413,8 +1476,7 @@ class MainWindow(QMainWindow):
             )
             if surface_failure:
                 self.parameters_result.show_result(
-                    "PixelUp could not save these parameters. Your changes are still shown; "
-                    "try again.",
+                    Message("parameters.saveFailed"),
                     severity="error",
                 )
             return False
@@ -1451,7 +1513,7 @@ class MainWindow(QMainWindow):
             log.info("enqueue.rejected", reason="no_images")
             self._queue_action_issue = "images"
             self.queue_action_result.show_result(
-                "Open or select at least one image before queueing.",
+                Message("actions.needImages"),
                 severity="warning",
             )
             return
@@ -1459,7 +1521,7 @@ class MainWindow(QMainWindow):
             log.info("enqueue.rejected", reason="no_models")
             self._queue_action_issue = "models"
             self.queue_action_result.show_result(
-                "Select at least one model before queueing.",
+                Message("actions.needModels"),
                 severity="warning",
             )
             return
@@ -1530,13 +1592,13 @@ class MainWindow(QMainWindow):
                 _item(job.input_path.name, tooltip=str(job.input_path)),
             )
             self.queue_table.setItem(row, 1, _item(job.model, tooltip=job.model))
-            self.queue_table.setItem(row, 2, _item(f"{job.settings.scale}x"))
+            self.queue_table.setItem(row, 2, _item(_scale_label(job.settings.scale)))
             self.queue_table.setItem(
                 row,
                 3,
                 _item(job.output_path.name, tooltip=str(job.output_path)),
             )
-            self.queue_table.setItem(row, 4, _item(_status_text(job.status)))
+            self.queue_table.setItem(row, 4, _item(localizer.of(_status_text(job.status))))
 
     def _cancel_queue(self) -> None:
         cancelled_pending: list[int] = []
@@ -1545,7 +1607,7 @@ class MainWindow(QMainWindow):
         for job in self.jobs:
             if job.status == "pending":
                 job.status = "cancelled"
-                job.message = "Cancelled"
+                job.message = Message("queue.statusCancelled")
                 self._update_job(job)
                 cancelled_pending.append(job.id)
                 touched_paths.append(job.input_path)
@@ -1605,8 +1667,8 @@ class MainWindow(QMainWindow):
             self._update_action_buttons()
             self.runner.schedule(self.config.max_concurrent_jobs)
 
-    @Slot(int, str)
-    def _job_progress(self, job_id: int, message: str) -> None:
+    @Slot(int, object)
+    def _job_progress(self, job_id: int, message: Message) -> None:
         job = self._find_job(job_id)
         if message != job.message:
             log.debug(
@@ -1615,17 +1677,17 @@ class MainWindow(QMainWindow):
                 input=str(job.input_path),
                 model=job.model,
                 output=str(job.output_path),
-                text=message,
+                text=localizer.english().of(message),
             )
         job.message = message
         self._update_job(job)
 
-    @Slot(int, bool, str, object, object)
+    @Slot(int, bool, object, object, object)
     def _job_finished(
         self,
         job_id: int,
         ok: bool,
-        message: str,
+        message: Message,
         result: object,
         warnings: object,
     ) -> None:
@@ -1653,11 +1715,16 @@ class MainWindow(QMainWindow):
         row = self._queue_rows[job.id]
         self.queue_table.item(row, 3).setText(job.output_path.name)
         self.queue_table.item(row, 3).setToolTip(str(job.output_path))
-        status_text = job.message or _status_text(job.status)
+        status = job.message or _status_text(job.status)
         if job.status == "cancelling":
-            status_text = _status_text("cancelling")
+            status = _status_text("cancelling")
+        status_text = localizer.of(status)
         self.queue_table.item(row, 4).setText(status_text)
-        tooltip = "\n".join(job.warnings) if job.warnings else status_text
+        tooltip = (
+            "\n".join(localizer.of(warning) for warning in job.warnings)
+            if job.warnings
+            else status_text
+        )
         self.queue_table.item(row, 4).setToolTip(tooltip)
 
     def _refresh_image_job_summaries_for(self, paths: Iterable[Path]) -> None:
@@ -1673,7 +1740,7 @@ class MainWindow(QMainWindow):
             if row is None:
                 continue
             statuses = [job.status for job in self._jobs_by_input_path.get(path, ())]
-            summary = job_status_summary(statuses)
+            summary = localizer.of(job_status_summary(statuses))
             item = self.image_table.item(row, 2)
             item.setText(summary)
             item.setToolTip(summary)
@@ -1712,14 +1779,15 @@ class MainWindow(QMainWindow):
         if failed_count == 0:
             self._queue_failure_count = 0
             self.queue_failure_result.hide()
+            unlocalize(self.queue_failure_label, "text")
+            unlocalize(self.queue_failure_result, "accessible_name")
             self.queue_failure_label.clear()
             self.queue_failure_result.setAccessibleName("")
             return
 
-        noun = "job has" if failed_count == 1 else "jobs have"
-        message = f"{failed_count} queue {noun} failed. Review the failed rows or retry them."
-        self.queue_failure_label.setText(message)
-        self.queue_failure_result.setAccessibleName(message)
+        message = Message.of("queue.failed", count=failed_count)
+        localize(self.queue_failure_label, text=message)
+        localize(self.queue_failure_result, accessible_name=message)
         self.queue_failure_result.show()
         if failed_count != self._queue_failure_count:
             self._queue_failure_count = failed_count
@@ -1733,15 +1801,44 @@ def _item(text: str, *, tooltip: str | None = None) -> QTableWidgetItem:
     return item
 
 
-def _status_text(status: str) -> str:
-    return {
-        "pending": "Pending",
-        "running": "Running",
-        "succeeded": "Done",
-        "failed": "Failed",
-        "cancelling": "Cancelling...",
-        "cancelled": "Cancelled",
-    }.get(status, status.replace("-", " ").replace("_", " ").capitalize())
+_STATUS_KEYS = {
+    "pending": "queue.statusPending",
+    "running": "queue.statusRunning",
+    "succeeded": "queue.statusDone",
+    "failed": "queue.statusFailed",
+    "cancelling": "queue.statusCancelling",
+    "cancelled": "queue.statusCancelled",
+}
+_IMAGE_COLUMNS = ("images.columnImage", "images.columnSize", "images.columnJobs")
+_QUEUE_COLUMNS = (
+    "queue.columnImage",
+    "queue.columnModel",
+    "queue.columnScale",
+    "queue.columnOutput",
+    "queue.columnStatus",
+)
+
+
+def _status_text(status: str) -> Message:
+    # A job's status is a stored word, shown as catalogue text (localization-conventions).
+    return Message(_STATUS_KEYS[status])
+
+
+def _set_headers(table: QTableWidget, keys: tuple[str, ...]) -> None:
+    table.setHorizontalHeaderLabels([localizer.t(key) for key in keys])
+
+
+def _scale_label(scale: int) -> str:
+    # The queue shows a job's scale as the panel offered it ("4x").
+    return next(localizer.display(label) for label, value in SCALE_CHOICES if value == scale)
+
+
+def _form_label(key: str) -> QLabel:
+    return localize(QLabel(), text=key)
+
+
+def _already_open(paths: list[Path]) -> Message:
+    return Message.of("images.alreadyOpen", names=tuple(path.name for path in paths))
 
 
 def _safe_image_size(path: Path) -> tuple[int, int] | None:
@@ -1751,17 +1848,13 @@ def _safe_image_size(path: Path) -> tuple[int, int] | None:
         return None
 
 
-def _image_size_text(size: tuple[int, int] | None) -> str:
+def _image_size_text(size: tuple[int, int] | None) -> Message:
     if size is None:
-        return "Unavailable"
+        return Message("images.sizeUnavailable")
     width, height = size
-    return f"{width} x {height}"
-
-
-def _plural(count: int, singular: str, plural: str | None = None) -> str:
-    if count == 1:
-        return singular
-    return plural if plural is not None else f"{singular}s"
+    # Pixel dimensions are passed as text: a width is a measurement read digit by
+    # digit, not a quantity to group ("4000 x 3000", never "4,000 x 3,000").
+    return Message.of("images.size", width=str(width), height=str(height))
 
 
 class _RevealWorker(QObject):
@@ -1836,6 +1929,7 @@ def build_app(
     resolved_log_file = configure_session_logging(log_file)
     resolved_runtime_dirs = runtime_dirs if runtime_dirs is not None else resolve_runtime_dirs()
     app = QApplication.instance() or QApplication(argv)
+    localizer.sync_qt_translation()
     if "Fusion" in QStyleFactory.keys():
         app.setStyle("Fusion")
     # PixelUp follows the OS light/dark theme; it owns no colours, only two
@@ -1936,16 +2030,12 @@ def main() -> int:
         app = QApplication.instance() or QApplication(sys.argv)
         app.setApplicationName("PixelUp")
         app.setApplicationDisplayName("PixelUp")
-        detail = (
-            exc.user_message
-            if isinstance(exc, PixelupError)
-            else "PixelUp could not read its storage or application state."
-        )
-        hint = exc.user_hint if isinstance(exc, PixelupError) else None
-        show_startup_failure(
-            detail,
-            hint,
-        )
+        localizer.sync_qt_translation()
+        if isinstance(exc, PixelupError) and isinstance(exc.message, Message):
+            detail, hint = exc.message, exc.hint
+        else:
+            detail, hint = Message("startup.storageUnreadable"), None
+        show_startup_failure(detail, hint)
         return 1
     return app.exec()
 

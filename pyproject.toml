@@ -42,7 +42,7 @@ pixelup = "pixelup.gui:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pixelup = ["resources/*.png"]
+pixelup = ["resources/*.png", "i18n/locales/*.json"]
 
 [tool.ruff]
 line-length = 100

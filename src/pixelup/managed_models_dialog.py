@@ -13,6 +13,9 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.dialog_shell import TABLE_WIDTH, DialogShell
+from pixelup.i18n import localizer
+from pixelup.i18n.localized import localize
+from pixelup.i18n.message import Message, join
 from pixelup.model_management import (
     MANAGED_ARTIFACT_NAMES,
     MANAGED_MODEL_BUNDLES,
@@ -25,6 +28,13 @@ from pixelup.ui_common import secondary_label
 from pixelup.widgets import OperationResult
 
 _MODEL_ROW_SPACING = 12
+_COLUMN_KEYS = (
+    "managedModels.columnModel",
+    "managedModels.columnUse",
+    "managedModels.columnSize",
+    "managedModels.columnStatus",
+    "managedModels.columnAction",
+)
 _COLUMN_TEXT_PADDING = 24
 
 
@@ -41,7 +51,7 @@ class ManagedModelsDialog(DialogShell):
     ) -> None:
         # The body holds this dialog's row buttons, so its scroll region takes no
         # focus of its own — the buttons are the keyboard owners.
-        super().__init__("Managed models", parent, width=TABLE_WIDTH)
+        super().__init__("managedModels.title", parent, width=TABLE_WIDTH)
         self._manager = manager
         self._required_artifacts = tuple(dict.fromkeys(required_artifacts))
         self._pending_job_count = pending_job_count
@@ -63,8 +73,8 @@ class ManagedModelsDialog(DialogShell):
         models_layout.setContentsMargins(14, 12, 14, 12)
         models_layout.setHorizontalSpacing(16)
         models_layout.setVerticalSpacing(_MODEL_ROW_SPACING)
-        for column, heading in enumerate(("Model", "Use", "Size", "Status", "Action")):
-            column_heading = QLabel(heading)
+        for column, heading in enumerate(_COLUMN_KEYS):
+            column_heading = localize(QLabel(), text=heading)
             column_heading.setStyleSheet("font-weight: 600;")
             models_layout.addWidget(column_heading, 0, column)
 
@@ -72,10 +82,10 @@ class ManagedModelsDialog(DialogShell):
         self.row_action_buttons: list[QPushButton] = []
         for index, bundle in enumerate(MANAGED_MODEL_BUNDLES):
             row = index + 1
-            models_layout.addWidget(QLabel(bundle.label), row, 0)
-            models_layout.addWidget(secondary_label(bundle.purpose), row, 1)
+            models_layout.addWidget(QLabel(localizer.display(bundle.label)), row, 0)
+            models_layout.addWidget(localize(secondary_label(""), text=bundle.purpose), row, 1)
             models_layout.addWidget(
-                secondary_label(_format_bytes(bundle_size_bytes(bundle))),
+                localize(secondary_label(""), text=format_bytes(bundle_size_bytes(bundle))),
                 row,
                 2,
             )
@@ -103,9 +113,9 @@ class ManagedModelsDialog(DialogShell):
         self.result_view = OperationResult(object_name="modelInstallResult")
         self.body_layout.addWidget(self.result_view)
 
-        self.dismiss_button = QPushButton("Close")
+        self.dismiss_button = localize(QPushButton(), text="managedModels.close")
         self.dismiss_button.clicked.connect(self.reject)
-        self.reveal_button = QPushButton("Reveal models folder")
+        self.reveal_button = localize(QPushButton(), text="managedModels.revealFolder")
         self.reveal_button.clicked.connect(self._reveal_models_folder)
         self.primary_button = QPushButton()
         self.primary_button.clicked.connect(self._install_all_or_cancel)
@@ -117,25 +127,23 @@ class ManagedModelsDialog(DialogShell):
         self._render()
         self.set_initial_focus(self.primary_button)
 
-    def _summary_text(self) -> str:
+    def _summary_text(self) -> Message:
         if not self._required_artifacts:
-            return (
-                "Install any model you want to use, or install every missing model at once. "
-                "PixelUp verifies each model and keeps it for later jobs. Closing this window "
-                "does not stop an installation."
-            )
+            return Message("managedModels.summary")
         missing = self._manager.missing(self._required_artifacts)
-        return (
-            f"This batch needs {len(missing)} model file{'' if len(missing) == 1 else 's'} "
-            f"({_format_bytes(artifact_size_bytes(missing))}) before "
-            f"{self._pending_job_count} job{'' if self._pending_job_count == 1 else 's'} can be "
-            "queued. No jobs will be created unless installation succeeds."
+        # Two counts in one sentence: each is its own counted message, so each
+        # keeps its own plural form (localization-conventions).
+        return Message.of(
+            "managedModels.batchSummary",
+            files=Message.of("managedModels.modelFiles", count=len(missing)),
+            size=format_bytes(artifact_size_bytes(missing)),
+            jobs=Message.of("managedModels.jobs", count=self._pending_job_count),
         )
 
     def _render(self) -> None:
         ready_names = self._manager.ready_names
         required = set(self._required_artifacts)
-        self.summary_label.setText(self._summary_text())
+        localize(self.summary_label, text=self._summary_text())
 
         for row, bundle in enumerate(MANAGED_MODEL_BUNDLES):
             bundle_operations = self._manager.operations_for(bundle.artifact_names)
@@ -154,8 +162,7 @@ class ManagedModelsDialog(DialogShell):
             ready = len(ready_names.intersection(bundle.artifact_names))
             total = len(bundle.artifact_names)
             status = _bundle_status(in_progress, failed, ready, total)
-            self.status_labels[row].setText(status)
-            self.status_labels[row].setToolTip(status)
+            localize(self.status_labels[row], text=status, tooltip=status)
             missing_required = bool(required.intersection(bundle.artifact_names)) and ready < total
             self.status_labels[row].setStyleSheet(
                 _required_missing_style(self.palette())
@@ -165,18 +172,23 @@ class ManagedModelsDialog(DialogShell):
 
             action = self.row_action_buttons[row]
             if in_progress is not None:
-                action.setText("Cancelling…" if in_progress.cancelling else "Cancel")
+                localize(
+                    action,
+                    text="managedModels.cancelling"
+                    if in_progress.cancelling
+                    else "managedModels.cancel",
+                )
                 action.setEnabled(not in_progress.cancelling and not self._required_artifacts)
             else:
-                action.setText("Reinstall" if ready == total else "Install")
+                localize(
+                    action,
+                    text="managedModels.reinstall" if ready == total else "managedModels.install",
+                )
                 # A queue-preflight surface has one exact authorization action in
                 # its footer. Its row actions remain visible only for orientation.
                 action.setEnabled(not self._required_artifacts)
-            action.setToolTip(
-                "Use Install and queue below for this batch."
-                if self._required_artifacts
-                else ""
-            )
+            if self._required_artifacts:
+                localize(action, tooltip="managedModels.rowTooltipBatch")
 
         self._render_primary_action()
         errors = tuple(
@@ -187,7 +199,7 @@ class ManagedModelsDialog(DialogShell):
             )
         )
         if errors:
-            self._show_error(" ".join(errors))
+            self._show_error(join("common.sentences", errors))
         else:
             self.result_view.clear_result()
 
@@ -200,16 +212,17 @@ class ManagedModelsDialog(DialogShell):
         if self._required_artifacts:
             active = self._manager.in_progress_for(self._required_artifacts)
             if active:
-                self.primary_button.setText(
-                    "Cancelling…"
+                localize(
+                    self.primary_button,
+                    text="managedModels.cancelling"
                     if all(item.cancelling for item in active)
-                    else "Cancel installation"
+                    else "managedModels.cancelInstallation",
                 )
                 self.primary_button.setEnabled(not all(item.cancelling for item in active))
                 return
-            count = self._pending_job_count
-            self.primary_button.setText(
-                f"Install and queue {count} job{'' if count == 1 else 's'}"
+            localize(
+                self.primary_button,
+                text=Message.of("managedModels.installAndQueue", count=self._pending_job_count),
             )
             missing = self._manager.missing(self._required_artifacts)
             self.primary_button.setEnabled(
@@ -217,7 +230,7 @@ class ManagedModelsDialog(DialogShell):
             )
             return
 
-        self.primary_button.setText("Install all")
+        localize(self.primary_button, text="managedModels.installAll")
         missing = self._manager.missing(MANAGED_ARTIFACT_NAMES)
         self.primary_button.setEnabled(bool(self._manager.available_to_install(missing)))
 
@@ -259,13 +272,13 @@ class ManagedModelsDialog(DialogShell):
             opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(models_dir)))
         except OSError as exc:
             log.warning("models.reveal_failed", models_dir=str(models_dir), reason=str(exc))
-            self._show_error("Could not open the models folder.")
+            self._show_error(Message("managedModels.revealFailed"))
             return
         if not opened:
             log.warning("models.reveal_failed", models_dir=str(models_dir))
-            self._show_error("Could not open the models folder.")
+            self._show_error(Message("managedModels.revealFailed"))
 
-    def _show_error(self, message: str) -> None:
+    def _show_error(self, message: Message) -> None:
         self.result_view.show_result(message, severity="error")
         # The banner is body content: the body just grew, so the bound is re-taken
         # over it. Reached both from _render and directly, hence here rather than
@@ -278,20 +291,23 @@ def _bundle_status(
     failed: ModelOperation | None,
     ready: int,
     total: int,
-) -> str:
+) -> Message:
     if in_progress is not None:
         if in_progress.kind == "queued":
-            return "Queued"
+            return Message("managedModels.statusQueued")
         if in_progress.cancelling:
-            return "Cancelling…"
-        return f"Installing {_percentage(in_progress.completed_bytes, in_progress.total_bytes)}%"
+            return Message("managedModels.cancelling")
+        return Message.of(
+            "managedModels.statusInstalling",
+            progress=_percentage(in_progress.completed_bytes, in_progress.total_bytes),
+        )
     if failed is not None:
-        return "Failed"
+        return Message("managedModels.statusFailed")
     if ready == total:
-        return "Installed"
+        return Message("managedModels.statusInstalled")
     if ready == 0:
-        return "Not installed"
-    return f"{ready} of {total} installed"
+        return Message("managedModels.statusNotInstalled")
+    return Message.of("managedModels.statusPartial", ready=ready, count=total)
 
 
 def _required_missing_style(palette: QPalette) -> str:
@@ -305,21 +321,47 @@ def _percentage(done: int, total: int) -> int:
 
 
 def _model_column_widths(metrics: QFontMetrics) -> tuple[int, ...]:
-    model_values = ("Model", *(bundle.label for bundle in MANAGED_MODEL_BUNDLES))
-    purpose_values = ("Use", *(bundle.purpose for bundle in MANAGED_MODEL_BUNDLES))
+    """Each column as wide as the widest thing it shows in the current language."""
+    of = localizer.of
+    model_values = (
+        localizer.t(_COLUMN_KEYS[0]),
+        *(localizer.display(bundle.label) for bundle in MANAGED_MODEL_BUNDLES),
+    )
+    purpose_values = (
+        localizer.t(_COLUMN_KEYS[1]),
+        *(of(bundle.purpose) for bundle in MANAGED_MODEL_BUNDLES),
+    )
     size_values = (
-        "Size",
-        *(_format_bytes(bundle_size_bytes(bundle)) for bundle in MANAGED_MODEL_BUNDLES),
+        localizer.t(_COLUMN_KEYS[2]),
+        *(of(format_bytes(bundle_size_bytes(bundle))) for bundle in MANAGED_MODEL_BUNDLES),
     )
     status_values = (
-        "Status",
-        "Installed",
-        "Not installed",
-        "3 of 3 installed",
-        "Cancelling…",
-        "Failed",
+        localizer.t(_COLUMN_KEYS[3]),
+        *(
+            localizer.t(key)
+            for key in (
+                "managedModels.statusQueued",
+                "managedModels.statusFailed",
+                "managedModels.statusInstalled",
+                "managedModels.statusNotInstalled",
+                "managedModels.cancelling",
+            )
+        ),
+        localizer.t("managedModels.statusInstalling", progress=100),
+        localizer.t("managedModels.statusPartial", ready=3, count=3),
     )
-    action_values = ("Action", "Install", "Reinstall", "Cancel", "Cancelling…")
+    action_values = (
+        localizer.t(_COLUMN_KEYS[4]),
+        *(
+            localizer.t(key)
+            for key in (
+                "managedModels.install",
+                "managedModels.reinstall",
+                "managedModels.cancel",
+                "managedModels.cancelling",
+            )
+        ),
+    )
     return tuple(
         _column_width(metrics, values)
         for values in (model_values, purpose_values, size_values, status_values, action_values)
@@ -330,11 +372,12 @@ def _column_width(metrics: QFontMetrics, values: Iterable[str]) -> int:
     return max(metrics.horizontalAdvance(value) for value in values) + _COLUMN_TEXT_PADDING
 
 
-def _format_bytes(value: int) -> str:
+def format_bytes(value: int) -> Message:
+    """A size in the largest binary unit that keeps it at or above 1, to one place."""
     if value >= 1024**3:
-        return f"{value / 1024**3:.1f} GB"
+        return Message.of("units.gigabytes", value=value / 1024**3)
     if value >= 1024**2:
-        return f"{value / 1024**2:.1f} MB"
+        return Message.of("units.megabytes", value=value / 1024**2)
     if value >= 1024:
-        return f"{value / 1024:.1f} KB"
-    return f"{value} B"
+        return Message.of("units.kilobytes", value=value / 1024)
+    return Message.of("units.bytes", value=value)

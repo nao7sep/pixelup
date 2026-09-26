@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
 
 from pixelup import __version__
 from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
+from pixelup.i18n.localized import localize
+from pixelup.i18n.message import Message
 from pixelup.session_log import log
 from pixelup.ui_common import open_url, secondary_label, title_label, use_regular_spacing
 from pixelup.widgets import OperationResult
@@ -27,25 +29,29 @@ class AboutDialog(DialogShell):
         *,
         opener: Callable[[str], None] = open_url,
     ) -> None:
-        super().__init__("About PixelUp", parent, width=NOTICE_WIDTH)
+        super().__init__("about.title", parent, width=NOTICE_WIDTH)
         self._opener = opener
 
         # The one heading a native dialog keeps. It does not repeat the window's
         # title — it names the product, which is what an about surface is for, and
         # carries the version beside it (modal-dialog-conventions).
         name = title_label("PixelUp")
-        version = secondary_label(f"Version {__version__}")
-        copy = QLabel("Upscale local images with Real-ESRGAN in a simple desktop workflow.")
+        version = localize(
+            secondary_label(""), text=Message.of("about.version", version=__version__)
+        )
+        copy = localize(QLabel(), text="about.description")
         copy.setWordWrap(True)
 
         links = QWidget()
         links_layout = QHBoxLayout(links)
         use_regular_spacing(links_layout, margins=False)
-        github_button = QPushButton("GitHub")
-        github_button.clicked.connect(lambda: self._open_external(PROJECT_URL, "GitHub"))
-        issues_button = QPushButton("Report issue")
+        github_button = localize(QPushButton(), text="about.github")
+        github_button.clicked.connect(
+            lambda: self._open_external(PROJECT_URL, Message("about.openGitHubFailed"))
+        )
+        issues_button = localize(QPushButton(), text="about.reportIssue")
         issues_button.clicked.connect(
-            lambda: self._open_external(ISSUES_URL, "the issue tracker")
+            lambda: self._open_external(ISSUES_URL, Message("about.openIssuesFailed"))
         )
         links_layout.addWidget(github_button)
         links_layout.addWidget(issues_button)
@@ -56,7 +62,7 @@ class AboutDialog(DialogShell):
             dismissible=True,
         )
 
-        meta = secondary_label("© 2026 Yoshinao Inoguchi · GNU GPL v3 or later")
+        meta = localize(secondary_label(""), text="about.copyright")
 
         # A graduated rhythm rather than the body's uniform spacing: the heading
         # groups with its version and the sections below stay distinct.
@@ -80,14 +86,11 @@ class AboutDialog(DialogShell):
         self.set_initial_focus(buttons.button(QDialogButtonBox.StandardButton.Close))
         self.fit()
 
-    def _open_external(self, url: str, destination: str) -> None:
+    def _open_external(self, url: str, failure: Message) -> None:
         try:
             self._opener(url)
         except Exception:  # noqa: BLE001 - native URL handlers can fail arbitrarily.
             log.exception("about.external_open_failed", url=url)
-            self.launch_result.show_result(
-                f"Could not open {destination}. Check the log and try again.",
-                severity="error",
-            )
+            self.launch_result.show_result(failure, severity="error")
             return
         self.launch_result.clear_result()

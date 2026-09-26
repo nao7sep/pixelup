@@ -16,6 +16,7 @@ from urllib.request import HTTPRedirectHandler, build_opener
 from filelock import FileLock, Timeout
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 from pixelup.model_registry import (  # noqa: F401 - preserve the existing public imports
     ALL_MODELS,
     KNOWN_MODELS,
@@ -65,11 +66,8 @@ def require_model_present(
     if not _model_file_present(path):
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
-            f"Model '{name}' is not present in the models directory.",
-            user_hint=(
-                "Open Managed models to install it, or place the .pth file in the "
-                "models directory."
-            ),
+            Message.of("error.modelMissing", model=name),
+            hint=Message("error.hintInstallModel"),
             details={"model": name, "models_dir": str(models_dir), "path": str(path)},
         )
     # A present model is trusted: it was verified once when PixelUp downloaded it (or
@@ -103,7 +101,7 @@ def download_model(
     if info is None or info.url is None:
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
-            f"Model '{name}' is not known to PixelUp's downloader.",
+            Message.of("error.modelUnknown", model=name),
             details={"model": name},
         )
     return download_model_info(
@@ -130,13 +128,13 @@ def download_model_info(
     force: bool = False,
 ) -> dict[str, object]:
     if download_timeout <= 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Download timeout must be positive.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.downloadTimeoutInvalid"))
     if lock_timeout < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "Lock timeout must be 0 or greater.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.lockTimeoutInvalid"))
     if info.url is None:
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
-            f"Model '{info.name}' does not have a download URL.",
+            Message.of("error.modelNoUrl", model=info.name),
             details={"model": info.name},
         )
 
@@ -145,7 +143,7 @@ def download_model_info(
     except OSError as exc:
         raise PixelupError(
             ErrorCode.MODEL_DOWNLOAD_FAILED,
-            "Could not create the models directory.",
+            Message("error.modelsDirCreateFailed"),
             details={"models_dir": str(models_dir), "reason": str(exc)},
         ) from exc
     target = models_dir / info.filename
@@ -158,7 +156,7 @@ def download_model_info(
     except OSError as exc:
         raise PixelupError(
             ErrorCode.MODEL_DOWNLOAD_FAILED,
-            "Could not create the model lock directory.",
+            Message("error.modelLockDirFailed"),
             details={"locks_dir": str(locks_dir), "reason": str(exc)},
         ) from exc
 
@@ -219,7 +217,7 @@ def download_model_info(
                         model=info.name,
                         url=info.url,
                         code=exc.code.value,
-                        reason=exc.user_message,
+                        reason=str(exc),
                     )
                 raise
             except (HTTPError, URLError, TimeoutError, OSError) as exc:
@@ -231,7 +229,7 @@ def download_model_info(
                 )
                 raise PixelupError(
                     ErrorCode.MODEL_DOWNLOAD_FAILED,
-                    f"Could not download model '{info.name}'.",
+                    Message.of("error.modelDownloadFailed", model=info.name),
                     details={"model": info.name, "url": info.url, "reason": str(exc)},
                 ) from exc
         finally:
@@ -254,7 +252,7 @@ def verify_model_file(
     if not path.is_file():
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
-            "Model file is missing.",
+            Message("error.modelFileMissing"),
             details={"path": str(path)},
         )
     size = path.stat().st_size
@@ -290,7 +288,7 @@ def verify_model_file(
     if not ok:
         raise PixelupError(
             ErrorCode.MODEL_CORRUPT,
-            "Model file failed verification.",
+            Message("error.modelVerificationFailed"),
             details={"model": result},
         )
     return result
@@ -317,7 +315,7 @@ def _download_to_temp(
         ):
             raise PixelupError(
                 ErrorCode.MODEL_DOWNLOAD_FAILED,
-                "Model download exceeds its pinned size.",
+                Message("error.modelTooLarge"),
                 details={
                     "model": info.name,
                     "expected_size_bytes": info.expected_size,
@@ -331,7 +329,7 @@ def _download_to_temp(
                 if info.expected_size is not None and next_bytes_done > info.expected_size:
                     raise PixelupError(
                         ErrorCode.MODEL_DOWNLOAD_FAILED,
-                        "Model download exceeded its pinned size while streaming.",
+                        Message("error.modelTooLargeStreaming"),
                         details={
                             "model": info.name,
                             "expected_size_bytes": info.expected_size,
@@ -372,7 +370,7 @@ def _open_download_response(
                 exc.close()
                 raise PixelupError(
                     ErrorCode.MODEL_DOWNLOAD_FAILED,
-                    "Model download followed too many redirects.",
+                    Message("error.tooManyRedirects"),
                     details={"url": url},
                 ) from exc
             location = exc.headers.get("Location")
@@ -380,7 +378,7 @@ def _open_download_response(
             if not location:
                 raise PixelupError(
                     ErrorCode.MODEL_DOWNLOAD_FAILED,
-                    "Model download redirect did not include a Location header.",
+                    Message("error.redirectNoLocation"),
                     details={"url": current_url},
                 ) from exc
             current_url = urljoin(current_url, location)
@@ -526,7 +524,7 @@ def _assert_safe_download_url(url: str, *, allow_file: bool) -> None:
         return
     raise PixelupError(
         ErrorCode.MODEL_DOWNLOAD_FAILED,
-        "Refusing an insecure model download URL; HTTPS is required.",
+        Message("error.insecureUrl"),
         details={"url": url},
     )
 
@@ -612,7 +610,7 @@ def _acquire_download_lock(
         except Timeout as exc:
             raise PixelupError(
                 ErrorCode.MODEL_DOWNLOAD_FAILED,
-                f"Timed out waiting for model download lock for '{model}'.",
+                Message.of("error.modelLockTimeout", model=model),
                 details={"model": model, "lock_timeout": lock_timeout},
             ) from exc
     while True:
@@ -623,7 +621,7 @@ def _acquire_download_lock(
         if remaining <= 0:
             raise PixelupError(
                 ErrorCode.MODEL_DOWNLOAD_FAILED,
-                f"Timed out waiting for model download lock for '{model}'.",
+                Message.of("error.modelLockTimeout", model=model),
                 details={"model": model, "lock_timeout": lock_timeout},
             )
         try:

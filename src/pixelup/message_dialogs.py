@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
-
-_APP = "PixelUp"
+from pixelup.i18n.localized import localize
+from pixelup.i18n.message import Message
 
 
 class MessageDialog(DialogShell):
@@ -21,20 +21,22 @@ class MessageDialog(DialogShell):
 
     def __init__(
         self,
-        title: str,
-        user_message: str,
-        user_hint: str | None = None,
+        title_key: str,
+        message: Message,
+        hint: Message | None = None,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(title, parent, width=NOTICE_WIDTH)
+        super().__init__(title_key, parent, width=NOTICE_WIDTH)
 
-        self.message_label = QLabel(user_message)
+        self.message_label = localize(QLabel(), text=message)
         self.message_label.setWordWrap(True)
         self.body_layout.addWidget(self.message_label)
 
-        self.hint_label = QLabel(user_hint or "")
+        self.hint_label = QLabel()
+        if hint is not None:
+            localize(self.hint_label, text=hint)
         self.hint_label.setWordWrap(True)
-        self.hint_label.setVisible(bool(user_hint))
+        self.hint_label.setVisible(hint is not None)
         self.body_layout.addWidget(self.hint_label)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -44,24 +46,16 @@ class MessageDialog(DialogShell):
         self.fit()
 
 
-def _show_message(parent: QWidget | None, text: str) -> None:
-    MessageDialog(_APP, text, parent=parent).exec()
+def _show_message(parent: QWidget | None, message: Message) -> None:
+    MessageDialog("app.name", message, parent=parent).exec()
 
 
 def warn_config_reset(parent: QWidget | None) -> None:
-    _show_message(
-        parent,
-        "Your settings file was unreadable and has been reset to defaults.\n\n"
-        "A preserved copy remains available, and its location is recorded in the log.",
-    )
+    _show_message(parent, Message("notice.configReset"))
 
 
 def warn_jobs_stopping(parent: QWidget | None) -> None:
-    _show_message(
-        parent,
-        "PixelUp is still stopping active work. "
-        "It will close as soon as everything has stopped safely.",
-    )
+    _show_message(parent, Message("notice.stopping"))
 
 
 class StartupFailureDialog(MessageDialog):
@@ -72,13 +66,9 @@ class StartupFailureDialog(MessageDialog):
     and a window the shell does not list is one the user cannot bring back.
     """
 
-    def __init__(self, user_message: str, user_hint: str | None) -> None:
-        super().__init__(
-            "PixelUp could not start",
-            user_message,
-            user_hint,
-        )
+    def __init__(self, message: Message, hint: Message | None) -> None:
+        super().__init__("startup.title", message, hint)
 
 
-def show_startup_failure(user_message: str, user_hint: str | None) -> None:
-    StartupFailureDialog(user_message, user_hint).exec()
+def show_startup_failure(message: Message, hint: Message | None) -> None:
+    StartupFailureDialog(message, hint).exec()

@@ -3,13 +3,14 @@ from __future__ import annotations
 from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
+from pixelup.i18n.localized import localize
+from pixelup.i18n.message import Message
 
 
-def quit_confirmation_text(active: int) -> str:
+def quit_confirmation_text(active: int) -> Message:
     if not active:
-        return "Open images will be closed. Quit PixelUp?"
-    noun = "active job" if active == 1 else "active jobs"
-    return f"{active} {noun} will be abandoned. Quit PixelUp?"
+        return Message("quit.openImages")
+    return Message.of("quit.activeJobs", count=active)
 
 
 class QuitConfirmDialog(DialogShell):
@@ -23,17 +24,17 @@ class QuitConfirmDialog(DialogShell):
     """
 
     def __init__(self, active: int, parent: QWidget | None = None) -> None:
-        super().__init__("Quit PixelUp?", parent, width=NOTICE_WIDTH)
+        super().__init__("quit.title", parent, width=NOTICE_WIDTH)
 
-        message = QLabel(quit_confirmation_text(active))
+        message = localize(QLabel(), text=quit_confirmation_text(active))
         message.setWordWrap(True)
         self.body_layout.addWidget(message)
 
-        cancel_button = QPushButton("Cancel")
+        cancel_button = localize(QPushButton(), text="quit.cancel")
         cancel_button.setDefault(True)
         cancel_button.clicked.connect(self.reject)
 
-        quit_button = QPushButton("Quit")
+        quit_button = localize(QPushButton(), text="quit.quit")
         quit_button.setProperty("role", "danger-confirm")
         quit_button.clicked.connect(self.accept)
 

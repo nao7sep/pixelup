@@ -34,6 +34,8 @@ _VERSION = tomllib.loads(
 # bundle's .icns/Assets.car pair and must not receive a Qt application icon.
 datas = [
     ("src/pixelup/resources/icon-win.png", "pixelup/resources"),
+    # The interface catalogues, read beside pixelup/i18n/catalogue.py at runtime.
+    ("src/pixelup/i18n/locales/*.json", "pixelup/i18n/locales"),
 ]
 hiddenimports = [
     # urllib asks the codec registry for this name only when an HTTPS hostname is

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.dialog_shell import FORM_WIDTH, DialogShell
+from pixelup.i18n.localized import localize
 from pixelup.ui_common import REGULAR_SPACING, secondary_label
 
 # This dialog is one long manual, and opening at the height of the whole thing
@@ -15,57 +16,20 @@ from pixelup.ui_common import REGULAR_SPACING, secondary_label
 # on a smaller screen anyway.
 _BODY_HEIGHT = 480
 
-# One entry per Parameters-panel control, in the panel's own order. This dialog is
-# the single home for parameter explanations — the panel itself carries none, so
-# it stays narrow enough for the window to fit small screens.
+# One entry per Parameters-panel control, in the panel's own order: the control's
+# own label and its explanation. This dialog is the single home for parameter
+# explanations — the panel itself carries none, so it stays narrow enough for the
+# window to fit small screens.
 _ENTRIES: tuple[tuple[str, str], ...] = (
-    (
-        "Scale",
-        "How much the image is enlarged: 2x or 4x. The available models are trained "
-        "for 4x (the x2 model is the one 2x-native exception); a scale/model "
-        "mismatch is surfaced as a queue warning, not an error.",
-    ),
-    (
-        "Denoise",
-        "Denoising strength from 0.0 (strongest denoise) to 1.0 (none). Only "
-        "realesr-general-x4v3 supports it; every other model ignores the value.",
-    ),
-    (
-        "Alpha mode",
-        "How a transparent image's alpha channel is upscaled: through Real-ESRGAN "
-        "itself, or with plain bicubic scaling (faster, slightly softer edges).",
-    ),
-    (
-        "Output format",
-        "PNG, JPG, or WebP. JPG has no transparency, so alpha is flattened onto a "
-        "background color.",
-    ),
-    (
-        "Quality",
-        "Compression quality (0-100) used for JPG and WebP. Ignored for PNG.",
-    ),
-    (
-        "Tile size",
-        "Images are processed in tiles; peak memory grows with the tile's area, so "
-        "smaller tiles use less memory. \"Whole image\" disables tiling — the "
-        "fastest path, but it can exhaust GPU memory on large inputs.",
-    ),
-    (
-        "Device",
-        "Where inference runs. Auto prefers MPS, then CUDA, then CPU; an "
-        "explicitly chosen backend is validated as actually available.",
-    ),
-    (
-        "Strip metadata",
-        "Removes the source image's metadata (EXIF and similar) from the output. "
-        "If the source carried a color profile, colors are converted to sRGB "
-        "before the profile is dropped, so they still display correctly.",
-    ),
-    (
-        "Target profile",
-        "Converts the output to the chosen color profile (sRGB, Display P3, or "
-        "Adobe RGB). Default keeps the source's own profile untouched.",
-    ),
+    ("parameters.scale", "help.scale"),
+    ("parameters.denoise", "help.denoise"),
+    ("parameters.alphaMode", "help.alphaMode"),
+    ("parameters.outputFormat", "help.outputFormat"),
+    ("parameters.quality", "help.quality"),
+    ("parameters.tileSize", "help.tileSize"),
+    ("parameters.device", "help.device"),
+    ("parameters.stripMetadata", "help.stripMetadata"),
+    ("parameters.targetProfile", "help.targetProfile"),
 )
 
 
@@ -74,7 +38,7 @@ class ParametersHelpDialog(DialogShell):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
-            "Parameters help",
+            "help.title",
             parent,
             width=FORM_WIDTH,
             body_height_limit=_BODY_HEIGHT,
@@ -84,14 +48,14 @@ class ParametersHelpDialog(DialogShell):
         # so they go straight in. Tighter than the body's default rhythm, because a
         # term and its description are one entry rather than two sections.
         self.body_layout.setSpacing(REGULAR_SPACING)
-        for index, (name, text) in enumerate(_ENTRIES):
+        for index, (name_key, text_key) in enumerate(_ENTRIES):
             if index > 0:
                 self.body_layout.addSpacing(8)
-            term = QLabel(name)
+            term = localize(QLabel(), text=name_key)
             font = term.font()
             font.setBold(True)
             term.setFont(font)
-            description = secondary_label(text)
+            description = localize(secondary_label(""), text=text_key)
             description.setWordWrap(True)
             self.body_layout.addWidget(term)
             self.body_layout.addWidget(description)

@@ -7,6 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 
 
 class OutputFormat(StrEnum):
@@ -48,7 +49,7 @@ def resolve_output_path(context: OutputContext) -> Path:
     if "{" in context.output_arg or "}" in context.output_arg:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Output filename templates are not supported by the GUI app.",
+            Message("error.outputTemplate"),
             details={"output": context.output_arg},
         )
     return absolute_user_path(output)
@@ -68,8 +69,8 @@ def infer_output_format(output_arg: str, forced: OutputFormat | None) -> OutputF
     except ValueError as exc:
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "Output format could not be inferred from the output path.",
-            user_hint="Choose png, jpg, or webp.",
+            Message("error.outputFormatUnknown"),
+            hint=Message("error.hintChooseFormat"),
             details={"output": output_arg},
         ) from exc
 
@@ -111,7 +112,7 @@ def collision_safe_path(
             return numbered
     raise PixelupError(
         ErrorCode.OUTPUT_EXISTS,
-        "Could not find an unused output filename.",
+        Message("error.noUnusedName"),
         details={"output": str(path)},
     )
 

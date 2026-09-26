@@ -5,6 +5,8 @@ from PIL import Image
 
 from pixelup.config import RuntimeDirs
 from pixelup.errors import PixelupError
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.paths import OutputFormat
 from pixelup.upscale import UpscaleOptions, build_plan
 
@@ -212,7 +214,7 @@ def test_run_upscale_warns_for_forced_format_extension_mismatch(
     temp_dir.mkdir()
     (models_dir / "custom-model.pth").write_bytes(b"weights")
     Image.new("RGB", (1, 1), "white").save(input_path)
-    warnings: list[str] = []
+    warnings: list[Message] = []
     _stub_successful_inference(monkeypatch)
 
     run_upscale(
@@ -226,7 +228,7 @@ def test_run_upscale_warns_for_forced_format_extension_mismatch(
         on_warning=warnings.append,
     )
 
-    assert warnings == [
+    assert [english().of(warning) for warning in warnings] == [
         "Output path extension '.png' does not match requested format 'jpg'."
     ]
 
@@ -245,7 +247,7 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
     temp_dir.mkdir()
     (models_dir / "RealESRGAN_x2plus.pth").write_bytes(b"weights")
     Image.new("RGB", (1, 1), "white").save(input_path)
-    warnings: list[str] = []
+    warnings: list[Message] = []
     _stub_successful_inference(monkeypatch)
     monkeypatch.setattr(upscale_module, "require_model_present", lambda *args, **kwargs: None)
 
@@ -260,7 +262,7 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
         on_warning=warnings.append,
     )
 
-    assert warnings == [
+    assert [english().of(warning) for warning in warnings] == [
         "Model 'RealESRGAN_x2plus' is trained for 2x, but the selected scale is 4x; "
         "Real-ESRGAN will rescale the output."
     ]

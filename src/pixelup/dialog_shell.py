@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pixelup.i18n.localized import localize
 from pixelup.ui_common import DIALOG_MARGIN, DIALOG_SPACING, REGULAR_SPACING
 
 # The share of the screen's working area a whole dialog may take — the title bar
@@ -52,7 +53,7 @@ class DialogShell(QDialog):
 
     def __init__(
         self,
-        title: str,
+        title_key: str,
         parent: QWidget | None = None,
         *,
         width: int,
@@ -63,7 +64,7 @@ class DialogShell(QDialog):
         # title bar and traffic-light controls — and that title bar is this
         # layout's header.
         super().__init__(parent, Qt.WindowType.Dialog)
-        self.setWindowTitle(title)
+        localize(self, title=title_key)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._width = width
         self._body_height_limit = body_height_limit

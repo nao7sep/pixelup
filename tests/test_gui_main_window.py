@@ -18,6 +18,8 @@ from pixelup import gui, theme
 from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.jobs import JobSettings
 from pixelup.model_registry import ALL_MODELS
 from pixelup.models import model_file
@@ -32,6 +34,12 @@ from pixelup.session_log import configure_session_logging
 # tests drive it with the offscreen QApplication, with JobRunner.schedule stubbed
 # so enqueueing never starts a real worker thread or touches inference. Job
 # completion is simulated by calling the real _job_finished handler directly.
+
+
+DONE = Message("queue.statusDone")
+CANCELLED = Message("queue.statusCancelled")
+FAILED = Message("jobs.failedFallback")
+DISK_WARNING = Message.of("warning.extensionMismatch", extension="png", format="jpg")
 
 
 def _png(tmp_path: Path, name: str, size: tuple[int, int] = (8, 6)) -> Path:
@@ -413,7 +421,7 @@ def test_image_in_use_failure_stays_with_remove_and_clears_when_work_finishes(
     assert "cannot be removed" in window.remove_result.message_label.text()
 
     job = window.jobs[0]
-    window._job_finished(job.id, True, "Done", {"ok": True}, [])
+    window._job_finished(job.id, True, DONE, {"ok": True}, [])
 
     assert window.remove_result.isHidden()
 
@@ -490,17 +498,17 @@ def test_job_finished_maps_outcomes_and_updates_summary(
     window._queue_selected_image()
     job = window.jobs[0]
 
-    window._job_finished(job.id, True, "Done", {"ok": True}, [])
+    window._job_finished(job.id, True, DONE, {"ok": True}, [])
     assert job.status == "succeeded"
     assert _summary(window, image) == "1 done"
 
-    window._job_finished(job.id, False, "boom", {}, ["disk almost full"])
+    window._job_finished(job.id, False, FAILED, {}, [DISK_WARNING])
     assert job.status == "failed"
-    assert job.warnings == ["disk almost full"]
+    assert job.warnings == [DISK_WARNING]
     assert window.retry_button.isEnabled() is True
     assert _summary(window, image) == "1 failed"
 
-    window._job_finished(job.id, False, "Cancelled", {"cancelled": True}, [])
+    window._job_finished(job.id, False, CANCELLED, {"cancelled": True}, [])
     assert job.status == "cancelled"
     assert _summary(window, image) == "1 cancelled"
 
@@ -528,7 +536,7 @@ def test_job_finished_recomputes_only_its_own_images_summary(
 
     monkeypatch.setattr("pixelup.gui.job_status_summary", _counting_summary)
 
-    window._job_finished(job_a.id, True, "Done", {"ok": True}, [])
+    window._job_finished(job_a.id, True, DONE, {"ok": True}, [])
 
     # Exactly one image's summary was recomputed — image_a's — not both.
     assert calls == [["succeeded"]]
@@ -564,17 +572,17 @@ def test_failed_jobs_keep_a_queue_local_accessible_summary_until_retry(
     window._queue_selected_image()
 
     first, second = window.jobs
-    window._job_finished(first.id, False, "model failed", {}, [])
+    window._job_finished(first.id, False, FAILED, {}, [])
 
     assert window.queue_failure_result.isVisibleTo(window) is True
     assert window.queue_failure_label.text() == (
-        "1 queue job has failed. Review the failed rows or retry them."
+        "1 queue job has failed. Review the failed row or retry it."
     )
     assert window.queue_failure_result.accessibleName() == window.queue_failure_label.text()
     assert announced == [window.queue_failure_result]
 
     # An unrelated success does not erase the unresolved failure.
-    window._job_finished(second.id, True, "Done", {"ok": True}, [])
+    window._job_finished(second.id, True, DONE, {"ok": True}, [])
     assert window.queue_failure_result.isVisibleTo(window) is True
     assert "1 queue job has failed" in window.queue_failure_label.text()
     assert announced == [window.queue_failure_result]
@@ -686,7 +694,7 @@ def test_remove_is_blocked_while_jobs_active_then_allowed(
     # A pending job still uses this image, so Remove is disabled.
     assert window.remove_image_button.isEnabled() is False
 
-    window._job_finished(window.jobs[0].id, True, "Done", {"ok": True}, [])
+    window._job_finished(window.jobs[0].id, True, DONE, {"ok": True}, [])
     assert window.remove_image_button.isEnabled() is True
 
     window._remove_selected_image()
@@ -702,13 +710,13 @@ def test_retry_failed_requeues_jobs(make_window, tmp_path: Path) -> None:
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
     job = window.jobs[0]
-    window._job_finished(job.id, False, "boom", {}, [])
+    window._job_finished(job.id, False, FAILED, {}, [])
     assert window.retry_button.isEnabled() is True
 
     window._retry_failed()
 
     assert job.status == "pending"
-    assert job.message == ""
+    assert job.message is None
     assert window.retry_button.isEnabled() is False
     assert _summary(window, image) == "1 queued"
 
@@ -982,7 +990,7 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
     window._queue_selected_image()
     job = window.jobs[0]
     job.status = "failed"
-    job.message = "Model was removed"
+    job.message = Message("error.modelFileMissing")
     window._update_job(job)
     model_file(window.runtime_dirs.models_dir, job.model).unlink()
 
@@ -994,7 +1002,7 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
 
     assert window._pending_model_work is None
     assert job.status == "failed"
-    assert job.message == "Model was removed"
+    assert job.message == Message("error.modelFileMissing")
 
 
 def _run_reveal(window: MainWindow, qapp: QApplication) -> None:
@@ -1376,11 +1384,11 @@ def test_main_surfaces_startup_storage_failure(
     qapp: QApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shown: list[tuple[str, str | None]] = []
+    shown: list[tuple[Message, Message | None]] = []
     error = gui.PixelupError(
         ErrorCode.OUTPUT_UNWRITABLE,
-        "Could not open PixelUp home.",
-        user_hint="Choose a writable PIXELUP_HOME.",
+        Message("error.storageCreateFailed"),
+        hint=Message.of("error.hintHomeWritableLocation", variable="PIXELUP_HOME"),
     )
     monkeypatch.setattr("pixelup.gui.build_app", lambda argv: (_ for _ in ()).throw(error))
     monkeypatch.setattr(
@@ -1389,14 +1397,14 @@ def test_main_surfaces_startup_storage_failure(
     )
 
     assert gui.main() == 1
-    assert shown == [("Could not open PixelUp home.", "Choose a writable PIXELUP_HOME.")]
+    assert shown == [(error.message, error.hint)]
 
 
 def test_main_does_not_surface_an_unexpected_startup_exception(
     qapp: QApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shown: list[tuple[str, str | None]] = []
+    shown: list[tuple[Message, Message | None]] = []
     diagnostic_sentinel = "EACCES Error invoking remote method /private/var/tmp/pixelup"
     monkeypatch.setattr(
         "pixelup.gui.build_app",
@@ -1408,8 +1416,8 @@ def test_main_does_not_surface_an_unexpected_startup_exception(
     )
 
     assert gui.main() == 1
-    assert shown == [("PixelUp could not read its storage or application state.", None)]
-    assert diagnostic_sentinel not in shown[0][0]
+    assert shown == [(Message("startup.storageUnreadable"), None)]
+    assert diagnostic_sentinel not in english().of(shown[0][0])
 
 
 def test_scale_edit_persists_to_config_json(make_window) -> None:

@@ -3,13 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 
 # Single source of truth for the compute backends PixelUp understands. Ordered
 # (label, value) pairs: labels are for UI display, values are what the inference
 # engine validates and what config persistence stores. Keep this the only place
-# the device set is enumerated.
-DEVICE_CHOICES: tuple[tuple[str, str], ...] = (
-    ("Auto", "auto"),
+# the device set is enumerated. A label that is a Message is interface text; a
+# plain string is a backend's own name, the same in every language.
+DEVICE_CHOICES: tuple[tuple[Message | str, str], ...] = (
+    (Message("parameters.deviceAuto"), "auto"),
     ("MPS", "mps"),
     ("CUDA", "cuda"),
     ("CPU", "cpu"),
@@ -19,7 +21,7 @@ DEVICE_VALUES: tuple[str, ...] = tuple(value for _label, value in DEVICE_CHOICES
 
 DEFAULT_DEVICE = "auto"
 
-_INVALID_DEVICE_MESSAGE = "Device must be one of Auto, MPS, CUDA, or CPU."
+_INVALID_DEVICE_MESSAGE = Message("error.deviceInvalid")
 
 
 def resolve_device(device: str, gpu_id: int | None = None) -> str:
@@ -48,15 +50,15 @@ def resolve_device(device: str, gpu_id: int | None = None) -> str:
         return "cpu"
     if device == "mps":
         if not mps_available:
-            raise PixelupError(ErrorCode.INVALID_ARGUMENT, "MPS is not available.")
+            raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.mpsUnavailable"))
         return "mps"
     # device == "cuda"
     if not cuda_available:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, "CUDA is not available.")
+        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.cudaUnavailable"))
     if gpu_id is not None and gpu_id >= torch.cuda.device_count():
         raise PixelupError(
             ErrorCode.INVALID_ARGUMENT,
-            "CUDA GPU index is not available.",
+            Message("error.cudaIndexUnavailable"),
             details={"gpu_id": gpu_id, "device_count": torch.cuda.device_count()},
         )
     return "cuda"

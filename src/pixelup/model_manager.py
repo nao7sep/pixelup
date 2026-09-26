@@ -8,12 +8,16 @@ from typing import Literal
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from pixelup.errors import ErrorCode, PixelupError, user_text
+from pixelup.i18n.localizer import english
+from pixelup.i18n.message import Message
 from pixelup.model_management import MANAGED_ARTIFACT_NAMES, artifact_size_bytes
 from pixelup.models import download_model, model_is_ready
 from pixelup.session_log import log
 
 _DOWNLOAD_TIMEOUT_SECONDS = 600
 _LOCK_TIMEOUT_SECONDS = 600
+
+INSTALL_FAILED = Message("modelInstall.failedFallback")
 
 # Unlike the job queue's own configurable cap, this one has no UI: "Install all" is
 # the only path that can start several downloads in the same pass (a lone row
@@ -31,14 +35,15 @@ class ModelOperation:
     current_artifact: str | None = None
     completed_bytes: int = 0
     total_bytes: int = 0
-    error: str = ""
+    # Why the operation failed, rendered by the dialog in the reader's language.
+    error: Message | None = None
     cancelling: bool = False
 
 
 class ModelInstallWorker(QObject):
     progress = Signal(int, str, int, int)
     waiting = Signal(int, str)
-    finished = Signal(int, bool, bool, str)
+    finished = Signal(int, bool, bool, object)
 
     def __init__(
         self,
@@ -113,21 +118,13 @@ class ModelInstallWorker(QObject):
                     code=exc.code.value,
                     error_details=exc.details,
                 )
-            message = user_text(
-                exc,
-                internal_fallback="The models could not be installed. Try again.",
-            )
+            message = user_text(exc, internal_fallback=INSTALL_FAILED)
             self.finished.emit(self._operation_id, False, cancelled, message)
         except Exception:  # noqa: BLE001 - every worker outcome must settle.
             log.exception("models.install_failed_unexpectedly")
-            self.finished.emit(
-                self._operation_id,
-                False,
-                False,
-                "The models could not be installed. Try again.",
-            )
+            self.finished.emit(self._operation_id, False, False, INSTALL_FAILED)
         else:
-            self.finished.emit(self._operation_id, True, False, "")
+            self.finished.emit(self._operation_id, True, False, None)
 
 
 class ModelManager(QObject):
@@ -145,7 +142,7 @@ class ModelManager(QObject):
         self._operations: dict[int, ModelOperation] = {}
         self._threads: dict[int, QThread] = {}
         self._workers: dict[int, ModelInstallWorker] = {}
-        self._install_results: dict[int, tuple[bool, bool, str]] = {}
+        self._install_results: dict[int, tuple[bool, bool, Message | None]] = {}
         # Artifact groups waiting for a free install slot, in request order;
         # each has an already-visible "queued" operation in self._operations.
         self._pending: dict[int, tuple[tuple[str, ...], bool]] = {}
@@ -371,13 +368,13 @@ class ModelManager(QObject):
         self._operations[operation_id] = replace(operation, current_artifact=name)
         self.changed.emit()
 
-    @Slot(int, bool, bool, str)
+    @Slot(int, bool, bool, object)
     def _worker_finished(
         self,
         operation_id: int,
         succeeded: bool,
         cancelled: bool,
-        message: str,
+        message: Message | None,
     ) -> None:
         self._install_results[operation_id] = (succeeded, cancelled, message)
         log.info(
@@ -385,7 +382,7 @@ class ModelManager(QObject):
             operation_id=operation_id,
             succeeded=succeeded,
             cancelled=cancelled,
-            reason=message,
+            reason=english().of(message) if message is not None else "",
         )
         thread = self._threads.get(operation_id)
         if thread is not None:
@@ -415,7 +412,7 @@ class ModelManager(QObject):
                 self._operations[operation_id] = replace(
                     operation,
                     kind="failed",
-                    error="Installation stopped.",
+                    error=Message("modelInstall.stopped"),
                     cancelling=False,
                 )
             else:
@@ -431,7 +428,7 @@ class ModelManager(QObject):
                     self._operations[operation_id] = replace(
                         operation,
                         kind="cancelled",
-                        error="",
+                        error=None,
                         cancelling=False,
                     )
                 else:

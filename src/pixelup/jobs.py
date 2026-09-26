@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from pixelup.devices import DEFAULT_DEVICE
+from pixelup.i18n.message import Message, join
 from pixelup.model_management import effective_denoise_strength
 from pixelup.parameters import DEFAULT_SCALE, DEFAULT_TILE
 from pixelup.paths import OutputFormat, default_output_path
@@ -55,8 +56,10 @@ class Job:
     output_path: Path
     settings: JobSettings
     status: str = "pending"
-    message: str = ""
-    warnings: list[str] = field(default_factory=list)
+    # What the queue row says beyond the bare status (progress, the reason it
+    # failed), held as a Message so the row follows a language change.
+    message: Message | None = None
+    warnings: list[Message] = field(default_factory=list)
 
 
 def settings_for_model(settings: JobSettings, model: str) -> JobSettings:
@@ -137,7 +140,7 @@ def retry_failed_jobs(
         )
         _reserve_output_bundle(reserved, job.output_path)
         job.status = "pending"
-        job.message = ""
+        job.message = None
         job.warnings = []
         retried.append(job.id)
     return retried
@@ -196,25 +199,25 @@ def job_settings_log_payload(settings: JobSettings) -> dict[str, object]:
     }
 
 
-def job_status_summary(statuses: Iterable[str]) -> str:
+def job_status_summary(statuses: Iterable[str]) -> Message:
     counts: dict[str, int] = defaultdict(int)
     total = 0
     for status in statuses:
         total += 1
         counts[status] += 1
     if total == 0:
-        return "No jobs"
+        return Message("images.noJobs")
     queued = counts["pending"] + counts["running"] + counts["cancelling"]
-    parts: list[str] = []
-    if counts["succeeded"]:
-        parts.append(f"{counts['succeeded']} done")
-    if counts["failed"]:
-        parts.append(f"{counts['failed']} failed")
-    if counts["cancelled"]:
-        parts.append(f"{counts['cancelled']} cancelled")
-    if queued:
-        parts.append(f"{queued} queued")
-    return ", ".join(parts)
+    parts: list[Message] = []
+    for key, count in (
+        ("images.jobsDone", counts["succeeded"]),
+        ("images.jobsFailed", counts["failed"]),
+        ("images.jobsCancelled", counts["cancelled"]),
+        ("images.jobsQueued", queued),
+    ):
+        if count:
+            parts.append(Message.of(key, count=count))
+    return join("images.jobsJoin", parts)
 
 
 def job_log_payload(job: Job) -> dict[str, object]:
