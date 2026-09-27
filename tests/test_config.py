@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -66,6 +68,30 @@ def test_pixelup_home_relocates_root(
     assert (root / "logs").is_dir()
     assert (root / "models").is_dir()
     assert (root / "temp").is_dir()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission model")
+def test_fresh_root_is_created_owner_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "relocated"
+    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    resolve_state_dir()
+    mode = stat.S_IMODE(root.stat().st_mode)
+    assert mode == 0o700
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission model")
+def test_existing_broader_root_is_tightened_on_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "relocated"
+    root.mkdir()
+    root.chmod(0o755)
+    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    resolve_state_dir()
+    mode = stat.S_IMODE(root.stat().st_mode)
+    assert mode == 0o700
 
 
 def test_pixelup_home_relocates_window_settings(

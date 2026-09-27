@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -149,7 +151,31 @@ def _ensure_state_root(root: Path) -> Path:
             hint=Message.of("error.hintHomeWritableDirectory", variable=HOME_ENV),
             details={"path": str(root)},
         )
+    _tighten_root_permissions(root)
     return root
+
+
+def _tighten_root_permissions(root: Path) -> None:
+    """Enforce an owner-only (0700) storage root on POSIX.
+
+    Per the storage-path-conventions, the root is created owner-only and
+    tightened at each launch when an existing root is broader, because
+    derived data and logs must never be readable by accounts that cannot
+    read their sources. Windows uses its own permission model and is
+    unaffected. A failure to tighten is logged and does not stop the app —
+    only the root itself is touched, never its contents.
+    """
+    if sys.platform == "win32":
+        return
+    try:
+        mode = stat.S_IMODE(root.stat().st_mode)
+        if mode & 0o077:
+            root.chmod(0o700)
+    except OSError as exc:
+        print(
+            f"pixelup: could not tighten permissions on storage root {root}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _ensure_dir(path: Path, code: ErrorCode, message: Message) -> Path:
