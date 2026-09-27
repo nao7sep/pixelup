@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
@@ -10,6 +10,7 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPalette,
     QPen,
+    QResizeEvent,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
@@ -31,6 +32,7 @@ from pixelup.i18n import localizer
 from pixelup.i18n.localized import localize, unlocalize
 from pixelup.i18n.message import Message
 from pixelup.paths import OutputFormat
+from pixelup.session_log import log
 
 ResultSeverity = Literal["information", "warning", "error"]
 
@@ -102,6 +104,76 @@ class OperationResult(QFrame):
             self.dismiss_button.hide()
         self.hide()
 
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override name
+        super().resizeEvent(event)
+        self._sync_dismiss_position()
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt override name
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange:
+            self._sync_dismiss_position()
+
+    def _sync_dismiss_position(self) -> None:
+        """Keep the dismiss X centered on the message's first line, without
+        changing the banner's height or the message's own position.
+
+        A short, single-line message is already centered on the button: Qt
+        stretches the label to the button's height and centers the one line
+        within it (both AlignVCenter by default), so their centers coincide
+        with no help needed. Wrapped copy is the case that needs one: once
+        the label's own natural (wrapped) height exceeds the button's, there
+        is no more slack for Qt to center within, so the text block renders
+        flush against the label's top instead, and the still-AlignTop button
+        is left centered on the whole block rather than the first line.
+        Rather than resize anything to fix that, the button is nudged by the
+        leftover half-difference so it overlaps into the row's own margin
+        (matching the reference Qt guidance in scratchpad/xalign.md); only if
+        it would not fit inside that margin does this widen the margin, and
+        it says so, since a caller relying on a fixed banner height may want
+        to know.
+        """
+        label = self.message_label
+        button = self.dismiss_button
+        if button.isHidden():
+            return
+        layout = self.layout()
+        if not isinstance(layout, QHBoxLayout):
+            return
+        # Forces the row to lay out for the current size/text right now,
+        # rather than relying on an event loop iteration this method's own
+        # callers (show_result, in particular) cannot guarantee has run yet.
+        layout.activate()
+        if label.height() <= button.height():
+            return  # Qt's own centering already lands the X on the first line
+        line_height = label.fontMetrics().lineSpacing()
+        # > 0: the button is taller than one line, so it must move UP to
+        # reach the first line's center (the common case with a fixed-size
+        # icon button and ordinary body text).
+        shift = round((button.height() - line_height) / 2)
+        if shift == 0:
+            return
+        margins = layout.contentsMargins()
+        available = margins.top() if shift > 0 else margins.bottom()
+        if abs(shift) > available:
+            grown = abs(shift) - available
+            if shift > 0:
+                margins.setTop(margins.top() + grown)
+            else:
+                margins.setBottom(margins.bottom() + grown)
+            layout.setContentsMargins(margins)
+            log.warning(
+                "operation_result.dismiss_button_overflow",
+                object_name=self.objectName(),
+                shift=shift,
+                available_margin=available,
+                grown_by=grown,
+            )
+            layout.activate()
+        # The layout just placed the button at its normal AlignTop position
+        # for this size; move it from there rather than accumulating deltas
+        # across repeated resize/font-change calls.
+        button.move(button.x(), button.y() - shift)
+
     def show_result(
         self,
         message: Message,
@@ -115,6 +187,7 @@ class OperationResult(QFrame):
         localize(self, accessible_name=message)
         self._apply_severity_style(severity)
         self.show()
+        self._sync_dismiss_position()
 
         self._remeasure_owner()
 

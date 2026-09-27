@@ -63,6 +63,67 @@ def test_operation_result_keeps_dismiss_at_the_upper_end_of_wrapping_copy(
         result.deleteLater()
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Model ready.",
+        "Select at least one model before queueing this batch, since nothing "
+        "has been chosen yet, so no work can start.",
+    ],
+    ids=["one-line", "wrapped"],
+)
+def test_operation_result_centers_dismiss_on_the_first_line_not_the_block(
+    qapp: QApplication, text: str
+) -> None:
+    """The X sits on the message's first line, one line or wrapped alike —
+    never drifting toward the middle of a taller, wrapped block — and doing so
+    never changes the banner's height or the message's own (unmoved) position.
+    See scratchpad/redesign/xalign/pixelup for real-render screenshots and
+    measured offsets (both within 1px)."""
+    result = OperationResult(object_name="xalignResult", dismissible=True)
+    try:
+        result.show_result(text, severity="warning")
+        result.resize(360, result.sizeHint().height())
+        result.show()
+        qapp.processEvents()
+        qapp.processEvents()
+
+        label = result.message_label
+        button = result.dismiss_button
+        layout = result.layout()
+        assert layout is not None
+        margins = layout.contentsMargins()
+
+        # The fix never touches the label's own alignment/margins or the
+        # row's margins (for ordinary body text the button fits inside the
+        # existing 7px top margin) -- only the button moves.
+        assert label.alignment() == (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        assert label.contentsMargins().top() == 0
+        assert (margins.top(), margins.bottom()) == (7, 7)
+
+        # The banner's height is exactly what the label/button would need on
+        # their own (Qt's own heightForWidth, the same input the layout used
+        # to size the label) -- nothing was grown to make room for the button.
+        fm = label.fontMetrics()
+        block_h = label.heightForWidth(label.width())
+        # +2: the severity style's 1px top/bottom border (outside the layout's
+        # own margins, via the stylesheet rather than QFrame's frameWidth).
+        expected_height = margins.top() + margins.bottom() + max(button.height(), block_h) + 2
+        assert result.height() == expected_height
+
+        # And the X is on the message's first line, not the wrapped block's
+        # middle: same slack-splitting math QLabel itself uses to center a
+        # short line, applied here to find that first line's own center.
+        line_height = fm.lineSpacing()
+        content_h = label.height()
+        slack = max(0, content_h - block_h)
+        first_line_center = label.y() + slack / 2 + line_height / 2
+        button_center = button.y() + button.height() / 2
+        assert abs(button_center - first_line_center) <= 1
+    finally:
+        result.deleteLater()
+
+
 def test_dialog_remeasures_when_a_hidden_result_appears(qapp: QApplication) -> None:
     class CountingDialog(QDialog):
         def __init__(self) -> None:
