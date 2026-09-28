@@ -232,20 +232,18 @@ class OperationResult(QFrame):
         owner.adjustSize()
 
     def _apply_severity_style(self, severity: ResultSeverity) -> None:
-        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        color = {
-            "error": "#ff766a" if dark else "#b3261e",
-            "warning": "#f2c14e" if dark else "#8a5a00",
-            "information": "palette(mid)",
-        }[severity]
-        object_name = self.objectName()
-        self.setStyleSheet(
-            f"QFrame#{object_name} {{"
-            f" border: 1px solid {color};"
-            " border-radius: 5px;"
-            " background: palette(base);"
-            "}"
-        )
+        # The banner is a panel, drawn by the app sheet (theme.py), which tints its
+        # edge by severity; the property changed, so the sheet is re-applied.
+        self.setProperty("surface", "panel")
+        self.setProperty("severity", severity)
+        repolish(self)
+
+
+def repolish(widget: QWidget) -> None:
+    """Re-apply the app sheet after a property it selects on has changed."""
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
 
 
 class NoWheelComboBox(QComboBox):

@@ -982,13 +982,9 @@ class MainWindow(QMainWindow):
 
         self.queue_failure_result = QFrame()
         self.queue_failure_result.setObjectName("queueFailureResult")
-        self.queue_failure_result.setStyleSheet(
-            "QFrame#queueFailureResult {"
-            " border: 1px solid #c0392b;"
-            " border-radius: 5px;"
-            " background: palette(base);"
-            "}"
-        )
+        # An error banner: the app sheet draws it as a panel with a red edge.
+        self.queue_failure_result.setProperty("surface", "panel")
+        self.queue_failure_result.setProperty("severity", "error")
         failure_layout = QHBoxLayout(self.queue_failure_result)
         failure_layout.setContentsMargins(10, 7, 10, 7)
         failure_layout.setSpacing(8)

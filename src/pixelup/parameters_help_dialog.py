@@ -42,6 +42,7 @@ class ParametersHelpDialog(DialogShell):
             parent,
             width=FORM_WIDTH,
             body_height_limit=_BODY_HEIGHT,
+            content_body=True,
         )
 
         # The shell's body is the sole scroll region and the entries are all of it,

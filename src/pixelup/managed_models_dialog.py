@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices, QFontMetrics, QPalette
+from PySide6.QtGui import QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QWidget,
@@ -24,8 +25,9 @@ from pixelup.model_management import (
 )
 from pixelup.model_manager import ModelManager, ModelOperation
 from pixelup.session_log import log
+from pixelup.theme import COLLECTION_INSET
 from pixelup.ui_common import secondary_label
-from pixelup.widgets import OperationResult
+from pixelup.widgets import OperationResult, repolish
 
 _MODEL_ROW_SPACING = 12
 _COLUMN_KEYS = (
@@ -62,46 +64,51 @@ class ManagedModelsDialog(DialogShell):
 
         self.models_panel = QFrame()
         self.models_panel.setObjectName("managedModelsList")
-        self.models_panel.setStyleSheet(
-            "QFrame#managedModelsList {"
-            " border: 1px solid palette(mid);"
-            " border-radius: 7px;"
-            " background: palette(base);"
-            "}"
-        )
+        # The app sheet draws a panel on the tables' own surface and edge.
+        self.models_panel.setProperty("surface", "panel")
+        # The columns sit between two empty gutter columns, so the column gap
+        # also pads the panel's sides and the header line can span the gutters —
+        # edge to edge at the tables' own inset, as their header line is.
         models_layout = QGridLayout(self.models_panel)
-        models_layout.setContentsMargins(14, 12, 14, 12)
+        models_layout.setContentsMargins(0, 12, 0, 12)
         models_layout.setHorizontalSpacing(16)
         models_layout.setVerticalSpacing(_MODEL_ROW_SPACING)
-        for column, heading in enumerate(_COLUMN_KEYS):
+        first, last = 1, len(_COLUMN_KEYS)
+        for column, heading in enumerate(_COLUMN_KEYS, start=first):
             column_heading = localize(QLabel(), text=heading)
-            column_heading.setStyleSheet("font-weight: 600;")
+            column_heading.setProperty("emphasis", "strong")
             models_layout.addWidget(column_heading, 0, column)
+        models_layout.addWidget(_header_line(), 1, 0, 1, last + 2)
 
         self.status_labels: list[QLabel] = []
         self.row_action_buttons: list[QPushButton] = []
         for index, bundle in enumerate(MANAGED_MODEL_BUNDLES):
-            row = index + 1
-            models_layout.addWidget(QLabel(localizer.display(bundle.label)), row, 0)
-            models_layout.addWidget(localize(secondary_label(""), text=bundle.purpose), row, 1)
+            row = index + 2
+            models_layout.addWidget(QLabel(localizer.display(bundle.label)), row, first)
+            models_layout.addWidget(
+                localize(secondary_label(""), text=bundle.purpose), row, first + 1
+            )
             models_layout.addWidget(
                 localize(secondary_label(""), text=format_bytes(bundle_size_bytes(bundle))),
                 row,
-                2,
+                first + 2,
             )
             status_label = QLabel()
             self.status_labels.append(status_label)
-            models_layout.addWidget(status_label, row, 3)
+            models_layout.addWidget(status_label, row, first + 3)
             action = QPushButton()
             action.clicked.connect(
                 lambda _checked=False, bundle_index=index: self._install_bundle(bundle_index)
             )
             self.row_action_buttons.append(action)
-            models_layout.addWidget(action, row, 4)
+            models_layout.addWidget(action, row, first + 4)
 
         self.column_minimum_widths = _model_column_widths(self.fontMetrics())
-        for column, width in enumerate(self.column_minimum_widths):
+        for column, width in enumerate(self.column_minimum_widths, start=first):
             models_layout.setColumnMinimumWidth(column, width)
+            # Spare width goes to the columns, never to the empty gutters the
+            # header line spans.
+            models_layout.setColumnStretch(column, 1)
 
         # The panel goes straight into the body: the shell's body is the sole
         # scroll region, so the list no longer nests a scroll area of its own — and
@@ -164,11 +171,12 @@ class ManagedModelsDialog(DialogShell):
             status = _bundle_status(in_progress, failed, ready, total)
             localize(self.status_labels[row], text=status, tooltip=status)
             missing_required = bool(required.intersection(bundle.artifact_names)) and ready < total
-            self.status_labels[row].setStyleSheet(
-                _required_missing_style(self.palette())
-                if missing_required and in_progress is None and failed is None
-                else ""
-            )
+            # Attention styling from the app sheet, without changing the factual
+            # status the label states.
+            attention = missing_required and in_progress is None and failed is None
+            self.status_labels[row].setProperty("severity", "warning" if attention else None)
+            self.status_labels[row].setProperty("emphasis", "strong" if attention else None)
+            repolish(self.status_labels[row])
 
             action = self.row_action_buttons[row]
             if in_progress is not None:
@@ -286,6 +294,18 @@ class ManagedModelsDialog(DialogShell):
         self.fit()
 
 
+def _header_line() -> QWidget:
+    """The line under the column headings: the sheet's separator, in the theme's
+    hairline, kept in from the panel's rounded edge by the collections' inset."""
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    holder = QWidget()
+    layout = QHBoxLayout(holder)
+    layout.setContentsMargins(COLLECTION_INSET, 0, COLLECTION_INSET, 0)
+    layout.addWidget(line)
+    return holder
+
+
 def _bundle_status(
     in_progress: ModelOperation | None,
     failed: ModelOperation | None,
@@ -308,12 +328,6 @@ def _bundle_status(
     if ready == 0:
         return Message("managedModels.statusNotInstalled")
     return Message.of("managedModels.statusPartial", ready=ready, count=total)
-
-
-def _required_missing_style(palette: QPalette) -> str:
-    """Use attention styling without changing a factual model status label."""
-    dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
-    return f"color: {'#f2c14e' if dark else '#8a5a00'}; font-weight: 600;"
 
 
 def _percentage(done: int, total: int) -> int:

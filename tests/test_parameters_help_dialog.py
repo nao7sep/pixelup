@@ -59,3 +59,12 @@ def test_the_manual_opens_at_a_reading_height_and_scrolls(qapp: QApplication) ->
     finally:
         dialog.close()
         dialog.deleteLater()
+
+
+def test_the_manual_reads_on_the_content_surface(qapp: QApplication) -> None:
+    """Its body is the same surface as the lists and the models panel."""
+    dialog = ParametersHelpDialog()
+    try:
+        assert dialog.body.property("surface") == "content"
+    finally:
+        dialog.deleteLater()

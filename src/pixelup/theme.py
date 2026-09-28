@@ -46,6 +46,11 @@ ARROW_HEIGHT = 6
 # column of checkboxes and radios lines up on one edge.
 INDICATOR_SIZE = 14
 BORDER_WIDTH = 1
+# How far a rounded collection keeps its square contents (header, rows, scroll
+# bar) in from its border: a square corner clears a RADIUS curve drawn inside a
+# BORDER_WIDTH edge only once it sits (RADIUS - BORDER_WIDTH) * (1 - 1/sqrt 2)
+# inside it, 1.5px at 6 and 1, so 2.
+COLLECTION_INSET = 2
 # The app's text and a group heading one step above it. The heading's space is its
 # own line plus a short gap, so it sits close above the section it names.
 TEXT_SIZE = DEFAULT_UI_FONT_SIZE
@@ -93,19 +98,22 @@ ACCENT_INK = "#ffffff"
 def surfaces(palette: QPalette) -> dict[str, str]:
     """The neutral surfaces the app owns, one set per theme.
 
-    A field, a list and a popup take ``field`` behind a visible ``field_edge``; a
+    A field and a popup take ``field`` behind a visible ``field_edge``. Content a
+    surface holds — a list, a panel, a reference body — takes ``content``, one role
+    for all of them so every such surface reads as the same kind of place; it
+    matches the field today, and is named apart so the two can move alone. A
     button takes ``button`` and steps one way through ``button_hover`` to
     ``button_pressed``, deepening in light and lifting in dark, the direction each
     theme's hover already moves. ``hairline`` separates, ``chip`` holds a key.
     """
     if is_dark(palette):
         return {
-            "field": "#2a2a2a", "field_edge": "#505050",
+            "field": "#2a2a2a", "field_edge": "#505050", "content": "#2a2a2a",
             "button": "#464646", "button_hover": "#505050", "button_pressed": "#5b5b5b",
             "button_edge": "#5c5c5c", "hairline": "#4a4a4a", "chip": "#3c3c3c",
         }
     return {
-        "field": "#ffffff", "field_edge": "#c4c4c4",
+        "field": "#ffffff", "field_edge": "#c4c4c4", "content": "#ffffff",
         "button": "#ffffff", "button_hover": "#f1f1f1", "button_pressed": "#e3e3e3",
         "button_edge": "#c4c4c4", "hairline": "#d3d3d3", "chip": "#f6f6f6",
     }
@@ -579,17 +587,24 @@ QGroupBox * {{
     font-weight: normal;
 }}
 
-/* Collections take the field surface and the palette's selection, with no grid:
-   rows read as rows, not as cells of a spreadsheet. */
+/* Collections take the content surface and the palette's selection, with no
+   grid: rows read as rows, not as cells of a spreadsheet. The padding keeps the
+   square header, rows and scroll bar inside the rounded edge — at the frame's
+   own inset their corners poked through the curve — and the header draws no fill
+   of its own, so the frame's rounded surface shows behind it. */
 QTableWidget, QTableView {{
     border: {BORDER_WIDTH}px solid {tone["field_edge"]};
     border-radius: {RADIUS}px;
-    background-color: {tone["field"]};
+    padding: {COLLECTION_INSET}px;
+    background-color: {tone["content"]};
     selection-background-color: palette(highlight);
     selection-color: palette(highlighted-text);
 }}
+QHeaderView {{
+    background-color: transparent;
+}}
 QHeaderView::section {{
-    background-color: {tone["field"]};
+    background-color: transparent;
     color: palette(text);
     border: none;
     border-bottom: 1px solid {tone["hairline"]};
@@ -600,10 +615,38 @@ QTableWidget::item, QTableView::item {{
     padding: 4px 8px;
 }}
 
+/* A panel holds content a surface lays out itself — the models list, a result
+   banner — on the same field surface, edge and corners as the tables, so it reads
+   as one of the app's collections rather than the palette's base, which in the
+   dark theme is all but black. A result's severity tints only the edge, in the
+   app's own red and amber. */
+QFrame[surface="panel"] {{
+    border: {BORDER_WIDTH}px solid {tone["field_edge"]};
+    border-radius: {RADIUS}px;
+    background-color: {tone["content"]};
+}}
+QFrame[surface="panel"][severity="error"] {{
+    border-color: {danger["text"]};
+}}
+QFrame[surface="panel"][severity="warning"] {{
+    border-color: {warning_text(palette)};
+}}
+
+/* A reference surface's whole body — the Parameters help — is content, on the
+   same surface as the lists and the models panel. */
+QWidget[surface="content"] {{
+    background-color: {tone["content"]};
+}}
+
 /* A standing warning is amber letters, not a filled control: a fill read as a
    button beside the button it was about. */
 QLabel[severity="warning"] {{
     color: {warning_text(palette)};
+}}
+/* Weight, not size, sets a label apart: a panel's column headings, as the table
+   headers are, and a value that needs the reader's attention. */
+QLabel[emphasis="strong"] {{
+    font-weight: 600;
 }}
 
 /* A key in a reference list: the one mark on the surface is the key itself. */

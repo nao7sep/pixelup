@@ -115,7 +115,8 @@ def test_queue_install_only_changes_manager_state(
         ]
         assert required_statuses
         assert all("Required" not in label.text() for label in required_statuses)
-        assert all("color:" in label.styleSheet() for label in required_statuses)
+        assert all(label.property("severity") == "warning" for label in required_statuses)
+        assert all(label.styleSheet() == "" for label in required_statuses)
         dialog._install_all_or_cancel()
         _finish_manager(manager, qapp)
 
@@ -496,5 +497,23 @@ def test_dynamic_result_grows_dialog_without_compressing_rows_or_footer(
         assert dialog.dismiss_button.height() >= close_height
         assert dialog.dismiss_button.isVisibleTo(dialog)
         assert dialog.primary_button.isVisibleTo(dialog)
+    finally:
+        dialog.deleteLater()
+
+
+def test_the_models_panel_separates_its_headings_with_the_sheets_line(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    from PySide6.QtWidgets import QFrame
+
+    dialog = ManagedModelsDialog(ModelManager(tmp_path))
+    try:
+        lines = [
+            frame
+            for frame in dialog.models_panel.findChildren(QFrame)
+            if frame.frameShape() == QFrame.Shape.HLine
+        ]
+        assert len(lines) == 1
+        assert lines[0].styleSheet() == ""
     finally:
         dialog.deleteLater()

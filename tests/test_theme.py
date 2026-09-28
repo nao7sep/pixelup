@@ -384,3 +384,37 @@ def test_a_switched_off_primary_still_reads_as_a_filled_button(
     assert not _near(fill, window, tolerance=8), f"the disabled fill is the window: {fill.name()}"
     # And it is still the accent, receded — not a grey that could be any button.
     assert QColor(fill).saturation() > 0
+
+
+def test_lists_panels_and_reference_bodies_share_one_content_surface() -> None:
+    """The main-window lists, the models panel and the help body are one kind of
+    surface, drawn from one role — never the palette's near-black base."""
+    for palette in (LIGHT, DARK):
+        tone = theme.surfaces(palette)
+        sheet = theme.build_stylesheet(palette)
+        for selector in (
+            "QTableWidget, QTableView {",
+            'QFrame[surface="panel"] {',
+            'QWidget[surface="content"] {',
+        ):
+            rule = sheet.split(selector, 1)[1].split("}", 1)[0]
+            assert f"background-color: {tone['content']};" in rule, selector
+        panel = sheet.split('QFrame[surface="panel"] {', 1)[1].split("}", 1)[0]
+        assert f"solid {tone['field_edge']};" in panel
+        assert f"border-radius: {theme.RADIUS}px;" in panel
+
+
+def test_a_collection_keeps_its_square_contents_inside_its_rounded_edge() -> None:
+    """The header drew its own square fill over the list's rounded top corners,
+    and rows and the scroll bar sat at the frame's inset, where a square corner
+    pokes through a RADIUS curve. The header now draws no fill and the contents
+    sit far enough in to clear the curve."""
+    import math
+
+    sheet = theme.build_stylesheet(LIGHT)
+    table = sheet.split("QTableWidget, QTableView {", 1)[1].split("}", 1)[0]
+    assert f"padding: {theme.COLLECTION_INSET}px;" in table
+    section = sheet.split("QHeaderView::section {", 1)[1].split("}", 1)[0]
+    assert "background-color: transparent;" in section
+    inner_radius = theme.RADIUS - theme.BORDER_WIDTH
+    assert theme.COLLECTION_INSET >= inner_radius * (1 - 1 / math.sqrt(2))

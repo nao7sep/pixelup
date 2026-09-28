@@ -60,6 +60,7 @@ class DialogShell(QDialog):
         *,
         width: int,
         body_height_limit: int | None = None,
+        content_body: bool = False,
     ) -> None:
         # Dialog + exec() produces an ordinary titled native window on macOS.
         # QDialog.open() chooses the sheet presentation instead, hiding the native
@@ -78,6 +79,10 @@ class DialogShell(QDialog):
         outer.setSpacing(0)
 
         self._body = QWidget()
+        # A reference surface reads as content, on the surface the lists use; the
+        # app sheet draws it (theme.py).
+        if content_body:
+            self._body.setProperty("surface", "content")
         self.body_layout = QVBoxLayout(self._body)
         self.body_layout.setContentsMargins(
             DIALOG_MARGIN, DIALOG_MARGIN, DIALOG_MARGIN, DIALOG_MARGIN
@@ -99,10 +104,11 @@ class DialogShell(QDialog):
 
         self._footer_line = QFrame()
         self._footer_line.setObjectName("dialogFooterLine")
+        # A separator, so the app sheet draws it in the theme's own hairline, as
+        # every other band line is; the palette's mid sat darker than the window
+        # in the dark theme and heavier than the other lines in the light one.
+        self._footer_line.setFrameShape(QFrame.Shape.HLine)
         self._footer_line.setFixedHeight(1)
-        self._footer_line.setStyleSheet(
-            "QFrame#dialogFooterLine { background: palette(mid); }"
-        )
         outer.addWidget(self._footer_line)
 
         self._footer = QWidget()
