@@ -659,11 +659,12 @@ QLabel#shortcutKey {{
 }}
 
 {indicators}
-/* A separator is the app's own hairline, so it stays visible in both themes —
-   the band lines in dialogs are drawn with these. */
+/* A dialog's band lines are drawn with these. They take the button/field
+   border tone rather than the fainter hairline: never fainter than the app's
+   own control borders in either theme (modal-dialog-conventions). */
 QFrame[frameShape="4"], QFrame[frameShape="5"] {{
-    color: {tone["hairline"]};
-    background-color: {tone["hairline"]};
+    color: {tone["button_edge"]};
+    background-color: {tone["button_edge"]};
     border: none;
     max-height: 1px;
 }}

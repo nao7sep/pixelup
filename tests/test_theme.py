@@ -404,6 +404,24 @@ def test_lists_panels_and_reference_bodies_share_one_content_surface() -> None:
         assert f"border-radius: {theme.RADIUS}px;" in panel
 
 
+def test_dialog_band_lines_are_no_fainter_than_a_controls_own_border() -> None:
+    """The line that closes a dialog's header band and opens its footer band
+    (dialog_shell.py's ``_footer_line``, drawn by the shared QFrame[frameShape]
+    rule) must read no fainter than the app's own control borders in either
+    theme (modal-dialog-conventions). It is pinned to ``button_edge``, the same
+    token buttons and fields use for their own border, rather than the fainter
+    ``hairline`` token, so a future retint can't quietly fade it again."""
+    for palette in (LIGHT, DARK):
+        tone = theme.surfaces(palette)
+        sheet = theme.build_stylesheet(palette)
+        rule = sheet.split('QFrame[frameShape="4"], QFrame[frameShape="5"] {', 1)[1].split("}", 1)[0]
+        assert f"background-color: {tone['button_edge']};" in rule
+        window = palette.color(QPalette.ColorRole.Window)
+        line_contrast = _contrast(QColor(tone["button_edge"]), window)
+        hairline_contrast = _contrast(QColor(tone["hairline"]), window)
+        assert line_contrast >= hairline_contrast
+
+
 def test_a_collection_keeps_its_square_contents_inside_its_rounded_edge() -> None:
     """The header drew its own square fill over the list's rounded top corners,
     and rows and the scroll bar sat at the frame's inset, where a square corner
