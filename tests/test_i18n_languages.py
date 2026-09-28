@@ -13,6 +13,7 @@ from PySide6.QtCore import QLibraryInfo, QLocale
 from pixelup.app_config import AppConfig, load_app_config, save_app_config
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n import bootstrap, languages, localizer, plural
+from pixelup.i18n.bootstrap import read_computer_languages as _real_read_computer_languages
 from pixelup.i18n.message import Message, join
 from pixelup.i18n.translator import Translator
 
@@ -203,6 +204,64 @@ def test_the_language_setting_round_trips_and_an_unknown_value_means_system(
     )
     loaded = load_app_config(path)
     assert (loaded.language, loaded.max_concurrent_jobs) == ("system", 3)
+
+
+def test_computer_languages_prefer_apple_languages_over_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A .command script or Terminal often leaves LANG unset or at en_US no matter
+    # what the reader's Mac is actually set to, so Qt's own QLocale.system() -
+    # which on macOS answers from LANG/LC_* rather than AppleLanguages - cannot be
+    # trusted for System. AppleLanguages, read straight from the reader's
+    # defaults, is the ordered list that must win instead.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.setattr(bootstrap, "read_apple_languages", lambda: ("ja-JP", "en-US"))
+    assert _real_read_computer_languages() == ("ja-JP", "en-US")
+
+
+def test_computer_languages_fall_back_to_qt_when_apple_languages_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(bootstrap, "read_apple_languages", lambda: ())
+    computer = _real_read_computer_languages()
+    assert computer == tuple(QLocale.system().uiLanguages()) or computer == (
+        QLocale.system().bcp47Name(),
+    )
+
+
+def test_computer_languages_are_not_consulted_for_apple_languages_off_darwin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    called: list[None] = []
+    monkeypatch.setattr(bootstrap, "read_apple_languages", lambda: called.append(None) or ())
+    _real_read_computer_languages()
+    assert called == []
+
+
+def test_apple_languages_parses_the_defaults_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Result:
+        stdout = '(\n    "ja-JP",\n    "en-US"\n)\n'
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Result())
+    assert bootstrap.read_apple_languages() == ("ja-JP", "en-US")
+
+
+def test_apple_languages_is_empty_when_defaults_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise subprocess.CalledProcessError(1, "defaults")
+
+    monkeypatch.setattr(subprocess, "run", _raise)
+    assert bootstrap.read_apple_languages() == ()
+
+
+def test_system_resolves_ja_when_the_ui_list_starts_with_ja_even_though_lang_is_en_us() -> None:
+    # The scenario the bug report described: LANG says en_US, but the ordered
+    # preferred-UI-language list (what AppleLanguages/uiLanguages actually holds)
+    # starts with Japanese, so System must speak Japanese, not English.
+    assert languages.resolve("system", ["ja-JP", "en-US"]) == "ja"
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="AppKit is macOS only")

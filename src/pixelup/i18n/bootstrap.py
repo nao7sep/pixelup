@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import json
+import subprocess
 import sys
 
 from PySide6.QtCore import QLocale
@@ -34,12 +35,41 @@ def read_computer_languages() -> tuple[str, ...]:
     """The languages the computer is set to, most preferred first.
 
     Read once, at launch, so System cannot mean one language now and another an
-    hour later. Qt answers from NSLocale's preferred languages on macOS and from
-    GetUserPreferredUILanguages on Windows, which are ordered lists; the order is
-    what decides which interface language a reader gets.
+    hour later. On Windows, Qt answers from GetUserPreferredUILanguages, which is
+    the ordered list that decides which interface language a reader gets. On
+    macOS, Qt answers from LANG and LC_* instead of AppleLanguages when nothing
+    has set up NSApplication's own locale machinery, which is exactly the case
+    for a process started from a .command script or Terminal: LANG there is
+    often unset, or stuck at "en_US.UTF-8" no matter what the reader actually
+    prefers. So AppleLanguages, the ordered list AppKit itself uses, is read
+    straight from the reader's defaults there instead.
     """
+    if sys.platform == "darwin":
+        apple_languages = read_apple_languages()
+        if apple_languages:
+            return apple_languages
     system = QLocale.system()
     return tuple(system.uiLanguages()) or (system.bcp47Name(),)
+
+
+def read_apple_languages() -> tuple[str, ...]:
+    """The reader's own AppleLanguages, most preferred first, or empty if unreadable."""
+    try:
+        output = subprocess.run(
+            ["defaults", "read", "-g", "AppleLanguages"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        ).stdout
+    except Exception:  # noqa: BLE001 - any failure here just falls back to Qt.
+        return ()
+    tags = []
+    for line in output.splitlines():
+        text = line.strip().rstrip(",")
+        if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+            tags.append(text[1:-1])
+    return tuple(tags)
 
 
 def saved_preference() -> str:
