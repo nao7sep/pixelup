@@ -27,13 +27,21 @@ _FOOTER_MARGIN_Y = 16
 
 # One chosen width per surface rather than one that follows its content, so the
 # same dialog keeps its shape whatever it happens to be saying
-# (modal-dialog-conventions). Three roles, three widths: a column of prose, a
-# form or reference, and the one table. The table's width is the one its columns
-# need in the language whose words are longest (German), measured by the
-# label-fit test in all ten (localization-conventions).
+# (modal-dialog-conventions). A column of prose, a form or reference, and the
+# one table. The table's width is the one its columns need in the language
+# whose words are longest (German), measured by the label-fit test in all ten
+# (localization-conventions).
 NOTICE_WIDTH = 440
 FORM_WIDTH = 560
 TABLE_WIDTH = 880
+# About's own width: the one at which the Japanese introduction line lands at
+# about 2.5 lines (2, the second nearly full) reads as a comfortable card in
+# every language, with no line stranding a single short fragment, and is wide
+# enough that the longest copyright line (German) never wraps — measured with
+# the real Qt fonts (about-size rule). Its own constant rather than
+# NOTICE_WIDTH because the two dialogs' content no longer calls for the same
+# width.
+ABOUT_WIDTH = 390
 
 
 class DialogShell(QDialog):

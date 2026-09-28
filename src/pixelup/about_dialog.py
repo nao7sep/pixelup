@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup import __version__
-from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
+from pixelup.dialog_shell import ABOUT_WIDTH, DialogShell
 from pixelup.i18n.localized import localize
 from pixelup.i18n.message import Message
 from pixelup.session_log import log
@@ -29,7 +29,7 @@ class AboutDialog(DialogShell):
         *,
         opener: Callable[[str], None] = open_url,
     ) -> None:
-        super().__init__("about.title", parent, width=NOTICE_WIDTH)
+        super().__init__("about.title", parent, width=ABOUT_WIDTH)
         self._opener = opener
 
         # The one heading a native dialog keeps. It does not repeat the window's

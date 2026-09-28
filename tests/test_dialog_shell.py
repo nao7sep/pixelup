@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import AppConfig
 from pixelup.dialog_shell import (
+    ABOUT_WIDTH,
     DIALOG_HEIGHT_FRACTION,
     FORM_WIDTH,
     NOTICE_WIDTH,
@@ -92,7 +93,7 @@ def test_a_dialog_is_fixed_and_takes_a_chosen_width(dialog: DialogShell) -> None
     # an edge to drag; what replaces the handle is a width that was chosen rather
     # than inherited from whatever the content happened to measure.
     assert dialog.minimumSize() == dialog.maximumSize()
-    assert dialog.width() in {NOTICE_WIDTH, FORM_WIDTH, TABLE_WIDTH}
+    assert dialog.width() in {ABOUT_WIDTH, NOTICE_WIDTH, FORM_WIDTH, TABLE_WIDTH}
 
 
 def test_the_bound_is_applied_before_the_window_is_shown(
