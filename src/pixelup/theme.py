@@ -108,14 +108,14 @@ def surfaces(palette: QPalette) -> dict[str, str]:
     """
     if is_dark(palette):
         return {
-            "field": "#2a2a2a", "field_edge": "#505050", "content": "#2a2a2a",
+            "field": "#2a2a2a", "field_edge": "#636363", "content": "#2a2a2a",
             "button": "#464646", "button_hover": "#505050", "button_pressed": "#5b5b5b",
-            "button_edge": "#5c5c5c", "hairline": "#4a4a4a", "chip": "#3c3c3c",
+            "button_edge": "#737373", "hairline": "#4a4a4a", "chip": "#3c3c3c",
         }
     return {
-        "field": "#ffffff", "field_edge": "#c4c4c4", "content": "#ffffff",
-        "button": "#ffffff", "button_hover": "#f1f1f1", "button_pressed": "#e3e3e3",
-        "button_edge": "#c4c4c4", "hairline": "#d3d3d3", "chip": "#f6f6f6",
+        "field": "#ffffff", "field_edge": "#b3b3b3", "content": "#ffffff",
+        "button": "#f8f8f8", "button_hover": "#eaeaea", "button_pressed": "#dcdcdc",
+        "button_edge": "#b3b3b3", "hairline": "#d3d3d3", "chip": "#f6f6f6",
     }
 
 
