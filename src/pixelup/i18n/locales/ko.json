@@ -1,6 +1,6 @@
 {
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 이상",
-  "about.description": "Real-ESRGAN으로 로컬 이미지를 간단한 데스크톱 작업 흐름에서 업스케일합니다.",
+  "about.description": "Real-ESRGAN으로 로컬 이미지를 일괄 업스케일하고, 같은 이미지에 여러 모델을 실행하여 비교하세요.",
   "about.github": "GitHub",
   "about.openGitHubFailed": "GitHub을 열 수 없습니다. 로그를 확인하고 다시 시도하십시오.",
   "about.openIssuesFailed": "문제 추적 페이지를 열 수 없습니다. 로그를 확인하고 다시 시도하십시오.",

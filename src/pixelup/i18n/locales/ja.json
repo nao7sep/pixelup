@@ -1,6 +1,6 @@
 {
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 以降",
-  "about.description": "ローカルの画像を Real-ESRGAN でシンプルにアップスケールするデスクトップアプリです。",
+  "about.description": "ローカルの画像を Real-ESRGAN でまとめてアップスケールし、同じ画像に複数のモデルを実行して比較しましょう。",
   "about.github": "GitHub",
   "about.openGitHubFailed": "GitHub を開けませんでした。ログを確認して、もう一度お試しください。",
   "about.openIssuesFailed": "問題の報告ページを開けませんでした。ログを確認して、もう一度お試しください。",

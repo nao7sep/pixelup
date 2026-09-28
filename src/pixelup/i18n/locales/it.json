@@ -1,6 +1,6 @@
 {
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 o successiva",
-  "about.description": "Ingrandisci le immagini locali con Real-ESRGAN in un semplice flusso di lavoro sul computer.",
+  "about.description": "Ingrandisci le immagini locali a gruppi con Real-ESRGAN, ed esegui più modelli sulle stesse immagini per confrontarli.",
   "about.github": "GitHub",
   "about.openGitHubFailed": "Impossibile aprire GitHub. Controlla il registro e riprova.",
   "about.openIssuesFailed": "Impossibile aprire il sistema di segnalazione dei problemi. Controlla il registro e riprova.",

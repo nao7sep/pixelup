@@ -1,6 +1,6 @@
 {
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 oder neuer",
-  "about.description": "Lokale Bilder mit Real-ESRGAN in einem einfachen Desktop-Ablauf hochskalieren.",
+  "about.description": "Skalieren Sie lokale Bilder mit Real-ESRGAN stapelweise hoch, und lassen Sie mehrere Modelle über dieselben Bilder laufen, um sie zu vergleichen.",
   "about.github": "GitHub",
   "about.openGitHubFailed": "GitHub konnte nicht geöffnet werden. Prüfen Sie das Protokoll und versuchen Sie es erneut.",
   "about.openIssuesFailed": "Der Issue-Tracker konnte nicht geöffnet werden. Prüfen Sie das Protokoll und versuchen Sie es erneut.",

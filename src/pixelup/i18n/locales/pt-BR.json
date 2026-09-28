@@ -1,6 +1,6 @@
 {
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 ou posterior",
-  "about.description": "Amplie imagens locais com Real-ESRGAN em um fluxo de trabalho simples no computador.",
+  "about.description": "Amplie imagens locais em lotes com Real-ESRGAN, e execute vários modelos nas mesmas imagens para compará-los.",
   "about.github": "GitHub",
   "about.openGitHubFailed": "Não foi possível abrir o GitHub. Verifique o registro e tente novamente.",
   "about.openIssuesFailed": "Não foi possível abrir o rastreador de problemas. Verifique o registro e tente novamente.",

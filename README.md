@@ -1,6 +1,6 @@
 # PixelUp
 
-PixelUp is a small PySide6 desktop app for upscaling local images with Real-ESRGAN. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and installs its pinned model files through Managed models when you choose them. 0.x.
+Upscale local images in batches with Real-ESRGAN, and run several models over the same images to compare. Drag images in, pick models and parameters, and a global queue processes them — each output is written beside its source with a sidecar JSON recording the settings, so a result can be reproduced. It runs on your own machine (macOS and Windows) with optional GPU/MPS/CUDA acceleration, and installs its pinned model files through Managed models when you choose them. 0.x.
 
 ## Download
 

@@ -1,6 +1,6 @@
 {
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 ou ultérieure",
-  "about.description": "Agrandissez vos images locales avec Real-ESRGAN dans un flux de travail simple sur votre ordinateur.",
+  "about.description": "Agrandissez vos images locales par lots avec Real-ESRGAN, et exécutez plusieurs modèles sur les mêmes images pour les comparer.",
   "about.github": "GitHub",
   "about.openGitHubFailed": "Impossible d’ouvrir GitHub. Consultez le journal et réessayez.",
   "about.openIssuesFailed": "Impossible d’ouvrir le suivi des problèmes. Consultez le journal et réessayez.",

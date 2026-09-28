@@ -1,6 +1,6 @@
 {
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 or later",
-  "about.description": "Upscale local images with Real-ESRGAN in a simple desktop workflow.",
+  "about.description": "Upscale local images in batches with Real-ESRGAN, and run several models over the same images to compare.",
   "about.github": "GitHub",
   "about.openGitHubFailed": "Could not open GitHub. Check the log and try again.",
   "about.openIssuesFailed": "Could not open the issue tracker. Check the log and try again.",
