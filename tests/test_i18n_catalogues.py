@@ -193,6 +193,16 @@ def test_the_shipped_catalogue_parses(tag: str) -> None:
     assert catalogue(tag).keys() == _raw("en").keys()
 
 
+@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+def test_the_in_window_about_button_matches_the_about_dialogs_own_title(tag: str) -> None:
+    # Every control that opens About reads exactly "About <App>" in the
+    # interface language — here, the same string as the About dialog's own
+    # title, since PixelUp has no native macOS About menu item of its own
+    # (app-chrome-conventions, App identity).
+    data = _raw(tag)
+    assert data["main.about"] == data["about.title"]
+
+
 def test_the_macos_bundle_declares_every_language() -> None:
     spec = (ROOT / "pixelup.spec").read_text(encoding="utf-8")
     declared = re.findall(r'"CFBundleLocalizations":\s*\[(.*?)\]', spec, flags=re.S)

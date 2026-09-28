@@ -135,7 +135,7 @@
   "images.sizeUnavailable": "Unavailable",
   "images.title": "Images",
   "jobs.failedFallback": "The image could not be upscaled. Retry the job.",
-  "main.about": "About",
+  "main.about": "About PixelUp",
   "main.revealLog": "Reveal log",
   "main.revealLogFailed": "Could not reveal the log. Try again from this button.",
   "main.settings": "Settings",

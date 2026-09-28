@@ -130,7 +130,7 @@
   "images.sizeUnavailable": "取得できません",
   "images.title": "画像",
   "jobs.failedFallback": "画像をアップスケールできませんでした。ジョブを再試行してください。",
-  "main.about": "情報",
+  "main.about": "PixelUp について",
   "main.revealLog": "ログを表示",
   "main.revealLogFailed": "ログを表示できませんでした。このボタンからもう一度お試しください。",
   "main.settings": "設定",

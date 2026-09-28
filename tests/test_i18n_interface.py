@@ -320,7 +320,7 @@ def test_a_closed_dialog_is_left_alone_by_a_language_change(qapp: QApplication) 
     kept.close()
     with localizer.speaking("ru"):
         qapp.processEvents()
-        assert kept.windowTitle() == "О PixelUp"
+        assert kept.windowTitle() == "О программе PixelUp"
     kept.deleteLater()
 
 
