@@ -56,7 +56,7 @@ class SettingsDialog(DialogShell):
     so this dialog deliberately holds only the leftovers: the interface language, the
     UI font and the concurrent job count. It carries no reset button — no setting here
     is a stale-able built-in or a tuned, interacting set worth returning to, so there
-    is no default worth a control (config-seeding-conventions).
+    is no default worth a control (config-sets-conventions).
 
     The widgets hold a draft; the incoming config is never mutated. The commit
     (OK) button stays disabled until the draft differs from the config the
@@ -157,7 +157,11 @@ class SettingsDialog(DialogShell):
         return replace(
             self._initial,
             max_concurrent_jobs=self.concurrent.value(),
-            font_family=normalize_font_family(self.font_family.text(), DEFAULT_UI_FONT_FAMILY),
+            font_family=(
+                self._initial.font_family
+                if self.font_family.text() == self._initial.font_family
+                else normalize_font_family(self.font_family.text(), DEFAULT_UI_FONT_FAMILY)
+            ),
             language=self.language.currentData(),
         )
 

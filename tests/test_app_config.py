@@ -9,10 +9,8 @@ from filelock import FileLock
 from pixelup.app_config import (
     AppConfig,
     config_log_payload,
-    ensure_app_config,
     load_app_config,
     load_app_config_result,
-    save_app_config,
     save_app_config_merged,
 )
 from pixelup.errors import PixelupError
@@ -26,7 +24,7 @@ def test_app_config_round_trips_json(tmp_path: Path) -> None:
         max_concurrent_jobs=3,
     )
 
-    save_app_config(config, path)
+    save_app_config_merged(config, AppConfig(), path)
 
     assert load_app_config(path) == config
 
@@ -50,7 +48,7 @@ def test_app_config_round_trips_the_parameters_panel(tmp_path: Path) -> None:
     )
     config = AppConfig(parameters=parameters)
 
-    save_app_config(config, path)
+    save_app_config_merged(config, AppConfig(), path)
     loaded = load_app_config(path)
 
     assert loaded.parameters == parameters
@@ -66,7 +64,7 @@ def test_app_config_round_trips_a_deliberate_zero_tile(tmp_path: Path) -> None:
     # so it is exactly the value a truthiness bug in the loader would quietly replace
     # with 256. It must survive the round trip.
     path = tmp_path / "config.json"
-    save_app_config(AppConfig(parameters=JobSettings(tile=0)), path)
+    save_app_config_merged(AppConfig(parameters=JobSettings(tile=0)), AppConfig(), path)
 
     assert load_app_config(path).parameters.tile == 0
 
@@ -79,7 +77,9 @@ def test_fresh_config_carries_the_built_in_parameters(tmp_path: Path) -> None:
 
 
 def test_missing_app_config_uses_defaults(tmp_path: Path) -> None:
-    assert load_app_config(tmp_path / "missing.json") == AppConfig()
+    path = tmp_path / "missing.json"
+    assert load_app_config(path) == AppConfig()
+    assert not path.exists()
 
 
 def test_obsolete_auto_download_key_is_ignored(tmp_path: Path) -> None:
@@ -92,72 +92,101 @@ def test_obsolete_auto_download_key_is_ignored(tmp_path: Path) -> None:
     assert result.quarantined_to is None
 
 
-def test_ensure_app_config_writes_defaults_on_first_run(tmp_path: Path) -> None:
+def test_unchanged_defaults_write_no_file(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
+    assert save_app_config_merged(AppConfig(), AppConfig(), path) == AppConfig()
     assert not path.exists()
 
-    created = ensure_app_config(path)
 
-    assert created is True
-    assert path.exists()
-    # Written through save_app_config, so it round-trips back to the defaults.
-    assert load_app_config(path) == AppConfig()
-
-
-def test_ensure_app_config_never_overwrites_an_existing_file(tmp_path: Path) -> None:
+def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    save_app_config(AppConfig(parameters=JobSettings(quality=55)), path)
-    before = path.read_text(encoding="utf-8")
+    candidate = AppConfig(parameters=JobSettings(quality=55))
+    save_app_config_merged(candidate, AppConfig(), path)
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert set(stored) == {"parameters"}
+    assert len(stored["parameters"]) == 9
+    assert load_app_config(path) == candidate
 
-    created = ensure_app_config(path)
 
-    assert created is False
-    # Absence is the single trigger, so an existing file is left byte-for-byte as it was.
-    assert path.read_text(encoding="utf-8") == before
-    assert load_app_config(path).parameters.quality == 55
+def test_one_stored_set_uses_built_ins_for_every_other_set(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text('{"font_family": "Menlo"}', encoding="utf-8")
+    assert load_app_config(path) == AppConfig(font_family="Menlo")
+
+
+def test_next_edit_drops_version_and_other_unknown_keys(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text('{"version": 99, "future": true, "language": "ja"}', encoding="utf-8")
+    previous = load_app_config(path)
+    save_app_config_merged(replace(previous, max_concurrent_jobs=3), previous, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "language": "ja", "max_concurrent_jobs": 3,
+    }
+
+
+def test_reset_parameters_deletes_only_that_set(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    previous = AppConfig(language="ja", parameters=JobSettings(quality=55))
+    save_app_config_merged(previous, AppConfig(), path)
+    reset = save_app_config_merged(
+        replace(previous, parameters=JobSettings()), previous, path, reset_parameters=True,
+    )
+    assert json.loads(path.read_text(encoding="utf-8")) == {"language": "ja"}
+    assert reset == AppConfig(language="ja")
+
+
+def test_reset_deletes_a_stored_copy_equal_to_the_built_ins(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    save_app_config_merged(AppConfig(parameters=JobSettings(quality=55)), AppConfig(), path)
+    previous = load_app_config(path)
+    save_app_config_merged(AppConfig(), previous, path)
+    assert "parameters" in json.loads(path.read_text(encoding="utf-8"))
+    save_app_config_merged(AppConfig(), AppConfig(), path, reset_parameters=True)
+    assert json.loads(path.read_text(encoding="utf-8")) == {}
 
 
 def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     config = AppConfig(font_family="Courier New, monospace")
 
-    save_app_config(config, path)
+    save_app_config_merged(config, AppConfig(), path)
 
     assert load_app_config(path).font_family == "Courier New, monospace"
 
 
-def test_load_app_config_normalizes_font_family(tmp_path: Path) -> None:
+def test_load_app_config_preserves_font_family(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"font_family": "  Arial  "}), encoding="utf-8")
 
-    assert load_app_config(path).font_family == "Arial"
+    assert load_app_config(path).font_family == "  Arial  "
 
 
-def test_load_app_config_accepts_blank_font_family_as_builtin_default(tmp_path: Path) -> None:
+def test_load_app_config_preserves_whitespace_font_family(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"font_family": "   "}), encoding="utf-8")
 
-    assert load_app_config(path).font_family == ""
+    assert load_app_config(path).font_family == "   "
 
 
-def test_load_app_config_collapses_the_legacy_default_font_stack(tmp_path: Path) -> None:
+def test_load_app_config_preserves_the_legacy_font_stack(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(
         json.dumps({"font_family": "Helvetica Neue, Segoe UI, Roboto, Arial"}),
         encoding="utf-8",
     )
 
-    assert load_app_config(path).font_family == ""
+    assert load_app_config(path).font_family == "Helvetica Neue, Segoe UI, Roboto, Arial"
 
 
-def test_load_app_config_quarantines_unusable_font_family(tmp_path: Path) -> None:
+def test_load_app_config_ignores_unusable_font_family(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"font_family": 42}), encoding="utf-8")
 
     result = load_app_config_result(path)
 
     assert result.config == AppConfig()
-    assert result.quarantined_to is not None
+    assert result.quarantined_to is None
+    assert path.exists()
 
 
 def test_corrupt_config_is_quarantined_then_reset(tmp_path: Path) -> None:
@@ -178,8 +207,8 @@ def test_corrupt_config_is_quarantined_then_reset(tmp_path: Path) -> None:
     assert result.quarantined_to.name.startswith("config-")
     assert result.quarantined_to.suffix == ".invalid"
     assert result.quarantined_to.read_text(encoding="utf-8") == "{ this is not valid json"
-    # config.json was reset on disk through the normal save path, so the next load is clean.
-    assert path.exists()
+    # Recovery continues as a fresh install, without materializing defaults.
+    assert not path.exists()
     assert load_app_config_result(path).quarantined_to is None
     assert load_app_config(path) == AppConfig()
 
@@ -242,7 +271,7 @@ def test_corrupt_config_lets_window_open(
         # The corrupt original was quarantined next to the (now reset) config.json.
         assert window._config_quarantined_to.suffix == ".invalid"
         assert window._config_quarantined_to.read_text(encoding="utf-8") == "{ broken"
-        assert (home / "config.json").exists()
+        assert not (home / "config.json").exists()
         # The deferred non-fatal notice fires once the event loop turns.
         QApplication.processEvents()
         assert notices == ["shown"]
@@ -253,19 +282,24 @@ def test_corrupt_config_lets_window_open(
         QApplication.processEvents()
 
 
+def _parameter_map(**updates: object) -> dict[str, object]:
+    defaults = JobSettings()
+    return {
+        "scale": defaults.scale,
+        "denoise_strength": defaults.denoise_strength,
+        "alpha_mode": defaults.alpha_mode,
+        "device": defaults.device,
+        "output_format": defaults.output_format.value,
+        "quality": defaults.quality,
+        "tile": defaults.tile,
+        "strip_metadata": defaults.strip_metadata,
+        "target_profile": defaults.target_profile,
+        **updates,
+    }
+
+
 def _write(path: Path, **parameters: object) -> None:
-    path.write_text(json.dumps({"parameters": parameters}), encoding="utf-8")
-
-
-def _assert_invalid_config_is_quarantined(path: Path) -> None:
-    original = path.read_text(encoding="utf-8")
-
-    result = load_app_config_result(path)
-
-    assert result.config == AppConfig()
-    assert result.quarantined_to is not None
-    assert result.quarantined_to.read_text(encoding="utf-8") == original
-    assert load_app_config(path) == AppConfig()
+    path.write_text(json.dumps({"parameters": _parameter_map(**parameters)}), encoding="utf-8")
 
 
 def test_invalid_utf8_config_is_quarantined_then_reset(tmp_path: Path) -> None:
@@ -308,32 +342,39 @@ def test_config_read_oserror_propagates_without_touching_the_store(
         {"max_concurrent_jobs": "4"},
         {"max_concurrent_jobs": True},
         {"parameters": "nope"},
-        {"parameters": {"strip_metadata": "false"}},
-        {"parameters": {"quality": 250}},
-        {"parameters": {"quality": "80"}},
-        {"parameters": {"denoise_strength": 9.5}},
-        {"parameters": {"denoise_strength": "0.25"}},
-        {"parameters": {"denoise_strength": 10**1000}},
-        {"parameters": {"scale": 2.0}},
-        {"parameters": {"scale": "2"}},
-        {"parameters": {"scale": 3}},
-        {"parameters": {"tile": 9999}},
-        {"parameters": {"tile": "512"}},
-        {"parameters": {"device": "CPU"}},
-        {"parameters": {"device": "gpu"}},
-        {"parameters": {"output_format": "WEBP"}},
-        {"parameters": {"output_format": "gif"}},
-        {"parameters": {"alpha_mode": "nearest"}},
-        {"parameters": {"target_profile": "cmyk"}},
+        {"parameters": _parameter_map(strip_metadata="false")},
+        {"parameters": _parameter_map(quality=250)},
+        {"parameters": _parameter_map(quality="80")},
+        {"parameters": _parameter_map(denoise_strength=9.5)},
+        {"parameters": _parameter_map(denoise_strength="0.25")},
+        {"parameters": _parameter_map(denoise_strength=10**1000)},
+        {"parameters": _parameter_map(scale=2.0)},
+        {"parameters": _parameter_map(scale="2")},
+        {"parameters": _parameter_map(scale=3)},
+        {"parameters": _parameter_map(tile=9999)},
+        {"parameters": _parameter_map(tile="512")},
+        {"parameters": _parameter_map(device="CPU")},
+        {"parameters": _parameter_map(device="gpu")},
+        {"parameters": _parameter_map(output_format="WEBP")},
+        {"parameters": _parameter_map(output_format="gif")},
+        {"parameters": _parameter_map(alpha_mode="nearest")},
+        {"parameters": _parameter_map(target_profile="cmyk")},
     ],
 )
-def test_present_malformed_field_quarantines_the_whole_config(
-    tmp_path: Path, data: dict[str, object]
+def test_present_malformed_set_falls_back_without_costing_other_sets(
+    tmp_path: Path, data: dict[str, object], caplog: pytest.LogCaptureFixture
 ) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps(data), encoding="utf-8")
-
-    _assert_invalid_config_is_quarantined(path)
+    path.write_text(json.dumps({"font_family": "Menlo", **data}), encoding="utf-8")
+    original = path.read_bytes()
+    result = load_app_config_result(path)
+    assert result.config == AppConfig(font_family="Menlo")
+    assert result.quarantined_to is None
+    assert path.read_bytes() == original
+    load_app_config(path)
+    warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
+    assert len(warnings) == 1
+    assert warnings[0].fields["key"] == next(iter(data))
 
 
 def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: Path) -> None:
@@ -343,7 +384,7 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
             {
                 "max_concurrent_jobs": 4,
                 "future_setting": {"future": True},
-                "parameters": {"scale": 2, "future_parameter": "ignored"},
+                "parameters": _parameter_map(scale=2, future_parameter="ignored"),
             }
         ),
         encoding="utf-8",
@@ -362,7 +403,7 @@ def test_obsolete_face_enhance_field_is_ignored(tmp_path: Path) -> None:
     path.write_text(
         json.dumps(
             {
-                "parameters": {"face_enhance": True, "strip_metadata": False},
+                "parameters": _parameter_map(face_enhance=True, strip_metadata=False),
             }
         ),
         encoding="utf-8",
@@ -429,9 +470,9 @@ def test_save_app_config_merged_keeps_a_sibling_windows_untouched_field(
     # Parameters-panel edit. B's save must not carry A's field back to its stale value.
     path = tmp_path / "config.json"
     opened = AppConfig()
-    save_app_config(opened, path)
+    save_app_config_merged(opened, AppConfig(), path)
 
-    save_app_config(replace(opened, max_concurrent_jobs=4), path)  # window A
+    save_app_config_merged(replace(opened, max_concurrent_jobs=4), AppConfig(), path)  # window A
 
     b_candidate = replace(opened, parameters=JobSettings(quality=42))  # window B
     merged = save_app_config_merged(b_candidate, opened, path)
@@ -446,7 +487,7 @@ def test_save_app_config_merged_is_a_no_op_when_candidate_matches_previous(
 ) -> None:
     path = tmp_path / "config.json"
     opened = AppConfig(max_concurrent_jobs=3)
-    save_app_config(opened, path)
+    save_app_config_merged(opened, AppConfig(), path)
     written_at = path.stat().st_mtime_ns
 
     merged = save_app_config_merged(opened, opened, path)
@@ -457,7 +498,7 @@ def test_save_app_config_merged_is_a_no_op_when_candidate_matches_previous(
 
 def test_save_app_config_merged_times_out_behind_another_holder(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    save_app_config(AppConfig(), path)
+    save_app_config_merged(AppConfig(), AppConfig(), path)
     lock = FileLock(str(path.with_name(f"{path.name}.lock")))
     lock.acquire()
     try:
@@ -477,7 +518,7 @@ def test_save_app_config_merged_serializes_two_concurrent_savers(tmp_path: Path)
     # other rather than one silently overwriting the other's.
     path = tmp_path / "config.json"
     opened = AppConfig()
-    save_app_config(opened, path)
+    save_app_config_merged(opened, AppConfig(), path)
     ready = threading.Barrier(2)
     results: list[AppConfig] = []
     errors: list[Exception] = []
@@ -517,4 +558,29 @@ def test_config_log_payload_shape() -> None:
         "font_family": AppConfig().font_family,
         "language": "system",
         "parameters": job_settings_log_payload(config.parameters),
+    }
+
+
+def test_partial_parameters_are_absent_as_a_whole_and_warn_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text('{"language": "ja", "parameters": {"scale": 2}}', encoding="utf-8")
+    result = load_app_config_result(path)
+    assert result.config == AppConfig(language="ja")
+    assert result.quarantined_to is None
+    load_app_config(path)
+    warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
+    assert len(warnings) == 1
+    assert warnings[0].fields["key"] == "parameters"
+
+
+def test_edit_preserves_the_whole_untouched_user_set(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    stored_parameters = _parameter_map(quality=42, future_parameter="untouched")
+    path.write_text(json.dumps({"parameters": stored_parameters}), encoding="utf-8")
+    previous = load_app_config(path)
+    save_app_config_merged(replace(previous, language="ja"), previous, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "parameters": stored_parameters, "language": "ja",
     }

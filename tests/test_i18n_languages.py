@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QLibraryInfo, QLocale
 
-from pixelup.app_config import AppConfig, load_app_config, save_app_config
+from pixelup.app_config import AppConfig, load_app_config, save_app_config_merged
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n import bootstrap, languages, localizer, plural
 from pixelup.i18n.bootstrap import read_computer_languages as _real_read_computer_languages
@@ -195,7 +195,7 @@ def test_the_language_setting_round_trips_and_an_unknown_value_means_system(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.json"
-    save_app_config(AppConfig(language="zh-Hans"), path)
+    save_app_config_merged(AppConfig(language="zh-Hans"), AppConfig(), path)
     assert json.loads(path.read_text(encoding="utf-8"))["language"] == "zh-Hans"
     assert load_app_config(path).language == "zh-Hans"
     # Unknown to this build is not corruption: the rest of the settings survive.

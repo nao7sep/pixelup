@@ -10,10 +10,6 @@ if TYPE_CHECKING:
 # system's own UI font" without exposing that implementation detail in Settings.
 DEFAULT_UI_FONT_FAMILY = ""
 
-# The built-in stack earlier versions resolved, and stored as the setting's value.
-# A saved copy of it reads as the blank default.
-LEGACY_UI_FONT_FAMILY_STACK = "Helvetica Neue, Segoe UI, Roboto, Arial"
-
 # The UI font size is deliberate and fixed, not user-configurable. Per the
 # app-chrome-conventions the UI font is family-only — a base-size knob breaks
 # Qt's pixel-based layouts. The application owns one inherited 13-logical-pixel
@@ -23,20 +19,17 @@ DEFAULT_UI_FONT_SIZE = 13
 
 
 def normalize_font_family(value: Any, default: str = DEFAULT_UI_FONT_FAMILY) -> str:
-    """Normalize a persisted or entered family string.
+    """Normalize an entered family string.
 
     The stored value is free text (possibly a comma-separated stack). This only
     trims it and substitutes the user-facing default when it is missing or empty;
-    it does not touch the font database, so it stays usable at config-load time
-    with no running QApplication. The former built-in stack is collapsed to blank
-    because it has the same effective behavior and should not remain exposed in
-    settings written before this distinction existed. Matching an entered family
-    to an installed one happens later, at apply time, in resolve_ui_font_family.
+    it does not touch the font database. Matching an entered family to an
+    installed one happens later, at apply time, in resolve_ui_font_family.
     """
     if not isinstance(value, str):
         return default
     text = value.strip()
-    if not text or text == LEGACY_UI_FONT_FAMILY_STACK:
+    if not text:
         return default
     return text
 

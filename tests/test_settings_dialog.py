@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
-from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig
+from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig, save_app_config_merged
 from pixelup.jobs import JobSettings
 from pixelup.settings_dialog import SettingsDialog
 
@@ -208,5 +211,33 @@ def test_successful_retry_accepts_after_an_inline_failure(qapp: QApplication) ->
 
         dialog.ok_button.click()
         assert dialog.result() == int(dialog.DialogCode.Accepted)
+    finally:
+        dialog.deleteLater()
+
+
+def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    initial = AppConfig()
+
+    def save(candidate: AppConfig) -> bool:
+        save_app_config_merged(candidate, initial, path)
+        return True
+
+    dialog = SettingsDialog(initial, try_save=save)
+    try:
+        dialog.concurrent.setValue(4)
+        dialog.ok_button.click()
+        assert json.loads(path.read_text(encoding="utf-8")) == {"max_concurrent_jobs": 4}
+    finally:
+        dialog.deleteLater()
+
+
+def test_untouched_saved_font_text_does_not_become_a_dialog_edit(qapp: QApplication) -> None:
+    initial = AppConfig(font_family="  Arial  ")
+    dialog = SettingsDialog(initial)
+    try:
+        assert dialog.is_dirty() is False
+        dialog.concurrent.setValue(4)
+        assert dialog.config().font_family == initial.font_family
     finally:
         dialog.deleteLater()

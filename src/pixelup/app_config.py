@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -10,8 +10,8 @@ from filelock import FileLock, Timeout
 from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_managed_text
 from pixelup.devices import DEVICE_VALUES
 from pixelup.errors import ErrorCode, PixelupError
-from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
-from pixelup.i18n.languages import SYSTEM, normalize_preference
+from pixelup.fonts import DEFAULT_UI_FONT_FAMILY
+from pixelup.i18n.languages import SYSTEM, TAGS
 from pixelup.jobs import (
     JobSettings,
     job_settings_log_payload,
@@ -27,6 +27,7 @@ from pixelup.parameters import (
     TILE_VALUES,
 )
 from pixelup.paths import OutputFormat
+from pixelup.session_log import log
 
 
 def config_path() -> Path:
@@ -60,7 +61,7 @@ MAX_CONCURRENT_JOBS = 8
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
-    """Everything PixelUp persists in ``config.json``.
+    """Effective settings; only changed sets are persisted in ``config.json``.
 
     Two kinds of thing, one home each. The scalars are the Settings modal's whole
     content — what the main window does not show. ``parameters`` is the main
@@ -75,6 +76,10 @@ class AppConfig:
     # (localization-conventions).
     language: str = SYSTEM
     parameters: JobSettings = field(default_factory=JobSettings)
+
+
+_CONFIG_SET_KEYS = tuple(item.name for item in fields(AppConfig))
+_warned_invalid_sets: set[tuple[Path, str]] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,57 +110,38 @@ def load_app_config(path: Path | None = None) -> AppConfig:
 
 
 def load_app_config_result(path: Path | None = None) -> ConfigLoadResult:
-    """Load ``config.json``, quarantining-then-resetting a corrupt file rather than crashing.
+    """Load effective sets, preserving unreadable JSON through quarantine.
 
-    A present-but-corrupt settings file must never take the app down at startup: the
-    storage-path conventions require the load path to *halt or quarantine-then-reset*,
-    and for ``config.json`` — pure, disposable preferences — quarantine-then-reset is
-    the right choice, because being unable to launch over a bad settings file is the
-    worse failure. So on unreadable JSON or a non-object shape, the corrupt file is
-    moved aside to ``<stem>-<ms-utc>.invalid`` (bytes preserved via
-    :func:`quarantine_corrupt_file`), the built-in defaults are written back through
-    the normal save path, and the result records where the original went so the caller
-    can surface a non-fatal notice. A missing file is the normal first run: defaults,
-    no quarantine.
+    Missing files and quarantined files both leave the store absent. A malformed
+    set falls back on its own; it does not cost the user the other settings.
+    Access failures propagate without moving or overwriting the file.
     """
     if path is None:
         path = config_path()
+    data, quarantined_to = _read_config_map(path)
+    return ConfigLoadResult(_decode_app_config(data, path), quarantined_to)
+
+
+def _read_config_map(path: Path) -> tuple[dict[str, Any], Path | None]:
     if not path.exists():
-        return ConfigLoadResult(AppConfig())
-    # Only unreadable-as-JSON content is treated as corrupt-and-resettable. A read
-    # that fails with an OSError (a permission or I/O problem) is a transient access
-    # failure, not corruption, and must not cost the user their real settings, so it
-    # is left to propagate rather than quarantining a file we simply could not read.
+        return {}, None
     try:
-        text = path.read_text(encoding="utf-8")
-        data = json.loads(text)
-        config = _decode_app_config(data)
+        data = _object(json.loads(path.read_text(encoding="utf-8")), "config")
     except ValueError:
-        quarantined_to = quarantine_corrupt_file(path)
-        defaults = AppConfig()
-        save_app_config(defaults, path)
-        return ConfigLoadResult(defaults, quarantined_to=quarantined_to)
-    return ConfigLoadResult(config)
-
-
-def save_app_config(config: AppConfig, path: Path | None = None) -> None:
-    """Persist the settings through the single managed-text atomic-write choke point.
-
-    ``config.json`` is PixelUp's one managed text store, and the write goes through
-    :func:`pixelup.config.write_managed_text` — the atomic temp-then-rename that is
-    both the durability floor and the exact point the data-backup layer records the
-    bytes just written. This is the app's RECORD write site: every save of
-    ``config.json`` is captured (deduped) in ``backups.sqlite3`` (data-backup-conventions).
-    """
-    if path is None:
-        path = config_path()
-    write_managed_text(path, json.dumps(_to_json(config), indent=2, sort_keys=True) + "\n")
+        # Keep the rename outside the read-failure handler: a failed quarantine
+        # must propagate rather than overwrite bytes it exists to preserve.
+        pass
+    else:
+        return data, None
+    return {}, quarantine_corrupt_file(path)
 
 
 def save_app_config_merged(
     candidate: AppConfig,
     previous: AppConfig,
     path: Path | None = None,
+    *,
+    reset_parameters: bool = False,
 ) -> AppConfig:
     """Save an edit to ``config.json`` without discarding a sibling window's own edit.
 
@@ -184,86 +170,62 @@ def save_app_config_merged(
             details={"path": str(path), "lock_timeout": _CONFIG_LOCK_TIMEOUT_SECONDS},
         ) from exc
     try:
-        current = load_app_config(path)
-        merged = _merge_app_config(current=current, previous=previous, candidate=candidate)
-        if merged != current:
-            save_app_config(merged, path)
-        return merged
+        stored, _quarantined_to = _read_config_map(path)
+        updates = {
+            key: value
+            for key, value in _to_json(candidate).items()
+            if getattr(candidate, key) != getattr(previous, key)
+        }
+        if reset_parameters:
+            updates.pop("parameters", None)
+        data = {key: value for key, value in stored.items() if key in _CONFIG_SET_KEYS}
+        data.update(updates)
+        if reset_parameters:
+            data.pop("parameters", None)
+        # No edit means no write, even if unknown keys could be dropped. An
+        # explicit reset still deletes a stored copy equal to today's built-in.
+        if (updates or reset_parameters) and data != stored:
+            write_managed_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        return _decode_app_config(data, path)
     finally:
         lock.release()
 
 
-def _merge_app_config(
-    *, current: AppConfig, previous: AppConfig, candidate: AppConfig
-) -> AppConfig:
-    """Apply onto ``current`` only the fields ``candidate`` changed from ``previous``.
-
-    A field of ``candidate`` that still equals ``previous`` was never touched by this
-    edit, so ``current``'s value for it — possibly written by another window after
-    ``previous`` was loaded — is kept rather than clobbered.
-    """
-    updates: dict[str, Any] = {}
-    if candidate.max_concurrent_jobs != previous.max_concurrent_jobs:
-        updates["max_concurrent_jobs"] = candidate.max_concurrent_jobs
-    if candidate.font_family != previous.font_family:
-        updates["font_family"] = candidate.font_family
-    if candidate.language != previous.language:
-        updates["language"] = candidate.language
-    if candidate.parameters != previous.parameters:
-        updates["parameters"] = candidate.parameters
-    return replace(current, **updates) if updates else current
-
-
-def ensure_app_config(path: Path | None = None) -> bool:
-    """Create ``config.json`` from the built-in defaults on first run, only when it is absent.
-
-    So the settings file exists on disk immediately rather than only after the first save
-    (storage-path conventions, "Materializing settings on first run"). The single trigger is
-    absence: an existing file is never inspected or overwritten, so a good or hand-edited file is
-    never at risk. It is written through :func:`save_app_config` — the same serializer the normal
-    save path uses — not a hand-built literal. Returns ``True`` when a file was created.
-    """
-    if path is None:
-        path = config_path()
-    if path.exists():
-        return False
-    save_app_config(AppConfig(), path)
-    return True
-
-
-def _decode_app_config(value: Any) -> AppConfig:
-    """Decode consumed fields without coercing malformed persisted data.
-
-    Missing fields retain their built-ins and unknown fields are inert. A present
-    field must have the exact type and domain the serializer writes; otherwise the
-    caller treats the entire store as unreadable and quarantines it.
-    """
-    data = _object(value, "config")
+def _decode_app_config(data: dict[str, Any], path: Path) -> AppConfig:
     defaults = AppConfig()
-    return AppConfig(
-        max_concurrent_jobs=_optional_int_range(
-            data,
-            "max_concurrent_jobs",
-            defaults.max_concurrent_jobs,
-            MIN_CONCURRENT_JOBS,
-            MAX_CONCURRENT_JOBS,
-        ),
-        font_family=_optional_font_family(data, defaults.font_family),
-        # Deliberately lenient where the rest is strict: a missing or unknown
-        # language means System (localization-conventions), so a value this build
-        # does not know never costs the user the rest of their settings.
-        language=normalize_preference(data.get("language")),
-        parameters=(
-            _decode_parameters(data["parameters"])
-            if "parameters" in data
-            else defaults.parameters
-        ),
+    decoded: dict[str, Any] = {}
+    for key in _CONFIG_SET_KEYS:
+        if key not in data:
+            continue
+        try:
+            decoded[key] = _decode_set(key, data[key], defaults)
+        except ValueError as exc:
+            warning_key = (path, key)
+            if warning_key not in _warned_invalid_sets:
+                _warned_invalid_sets.add(warning_key)
+                log.warning("config.invalid_set", path=str(path), key=key, reason=str(exc))
+    return AppConfig(**decoded)
+
+
+def _decode_set(key: str, value: Any, defaults: AppConfig) -> Any:
+    if key == "parameters":
+        return _decode_parameters(value)
+    if key == "font_family":
+        if not isinstance(value, str):
+            raise ValueError("font_family is not a string")
+        return value
+    if key == "language":
+        return _optional_choice({key: value}, key, defaults.language, (SYSTEM, *TAGS))
+    return _optional_int_range(
+        {key: value}, key, defaults.max_concurrent_jobs, MIN_CONCURRENT_JOBS, MAX_CONCURRENT_JOBS
     )
 
 
 def _decode_parameters(value: Any) -> JobSettings:
     data = _object(value, "parameters")
     defaults = JobSettings()
+    if not _parameters_to_json(defaults).keys() <= data.keys():
+        raise ValueError("parameters is missing a member")
     output_format = _optional_choice(
         data,
         "output_format",
@@ -367,15 +329,6 @@ def _optional_choice(
     if not isinstance(value, str) or value not in choices:
         raise ValueError(f"{key} is not a recognized string choice")
     return value
-
-
-def _optional_font_family(data: dict[str, Any], default: str) -> str:
-    if "font_family" not in data:
-        return default
-    value = data["font_family"]
-    if not isinstance(value, str):
-        raise ValueError("font_family is not a string")
-    return normalize_font_family(value, default)
 
 
 def _to_json(config: AppConfig) -> dict[str, Any]:

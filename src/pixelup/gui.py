@@ -70,7 +70,6 @@ from pixelup.app_config import (
     AppConfig,
     config_log_payload,
     config_path,
-    ensure_app_config,
     load_app_config_result,
     save_app_config_merged,
 )
@@ -332,11 +331,6 @@ class MainWindow(QMainWindow):
 
     def __init__(self, *, log_file: Path, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
-        # Create config.json from the built-in defaults on first run so the settings file exists
-        # on disk immediately, not only after the first save (storage-path conventions).
-        # Create-if-absent — never overwrites an existing file — and before the config is
-        # loaded below.
-        ensure_app_config()
         # A corrupt config.json quarantines-then-resets rather than crashing startup
         # (storage-path conventions); the loader returns where the corrupt file went so
         # the notice below can tell the user. It is surfaced only after the window is
@@ -379,6 +373,7 @@ class MainWindow(QMainWindow):
         # Coalesces the Parameters panel's edits into one save (see
         # _PARAMETERS_SAVE_DELAY_MS). Built before the UI, because building the panel
         # connects the widget-change signals that start it.
+        self._parameters_reset_pending = False
         self._parameters_save_timer = QTimer(self)
         self._parameters_save_timer.setSingleShot(True)
         self._parameters_save_timer.setInterval(_PARAMETERS_SAVE_DELAY_MS)
@@ -1420,6 +1415,7 @@ class MainWindow(QMainWindow):
         self._update_reset_button()
 
     def _parameters_edited(self) -> None:
+        self._parameters_reset_pending = False
         self._parameters_save_timer.start()
         self._update_reset_button()
 
@@ -1443,12 +1439,17 @@ class MainWindow(QMainWindow):
         the startup apply, from close, and from the settings dialog.
         """
         parameters = self.current_job_settings()
-        if parameters == self.config.parameters:
+        if parameters == self.config.parameters and not self._parameters_reset_pending:
             self.parameters_result.clear_result()
             return True
         candidate = replace(self.config, parameters=parameters)
-        if not self._save_config_candidate(candidate, surface_failure=surface_failure):
+        if not self._save_config_candidate(
+            candidate,
+            surface_failure=surface_failure,
+            reset_parameters=self._parameters_reset_pending,
+        ):
             return False
+        self._parameters_reset_pending = False
         log.info(
             "parameters.saved",
             path=str(config_path()),
@@ -1462,12 +1463,16 @@ class MainWindow(QMainWindow):
         candidate: AppConfig,
         *,
         surface_failure: bool = True,
+        reset_parameters: bool = False,
     ) -> bool:
         try:
             # previous=self.config: only the fields this candidate actually changed
             # from it are written, so a sibling PixelUp window's own saved change to
             # some other field is never clobbered (PU-3).
-            merged = save_app_config_merged(candidate, self.config)
+            if reset_parameters:
+                merged = save_app_config_merged(candidate, self.config, reset_parameters=True)
+            else:
+                merged = save_app_config_merged(candidate, self.config)
         except Exception as exc:  # noqa: BLE001 - persistence failure must remain in the UI.
             log.warning(
                 "config.save_failed",
@@ -1488,11 +1493,12 @@ class MainWindow(QMainWindow):
 
         ``JobSettings()`` is the built-ins, and the only source of them — not the
         user's persisted config, which is what the reset exists to get *away* from.
-        The restored values are then persisted like any other panel edit: pressing
-        reset is a decision, so it is flushed rather than left to the debounce.
+        Delete the stored set through the same locked save path. Keep that intent
+        if saving fails, so the next retry still deletes rather than copying defaults.
         """
         defaults = JobSettings()
         self._apply_job_settings(defaults)
+        self._parameters_reset_pending = True
         log.info("parameters.reset", defaults=job_settings_log_payload(defaults))
         self._flush_parameters_save()
 

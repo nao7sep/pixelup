@@ -7,7 +7,6 @@ from PySide6.QtWidgets import QApplication
 from pixelup.fonts import (
     DEFAULT_UI_FONT_FAMILY,
     DEFAULT_UI_FONT_SIZE,
-    LEGACY_UI_FONT_FAMILY_STACK,
     apply_ui_font,
     build_ui_font,
     normalize_font_family,
@@ -25,7 +24,8 @@ def test_normalize_font_family_uses_blank_for_the_builtin_default() -> None:
     assert normalize_font_family("   ", DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
     assert normalize_font_family(None, DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
     assert normalize_font_family(42, DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
-    assert normalize_font_family(LEGACY_UI_FONT_FAMILY_STACK) == DEFAULT_UI_FONT_FAMILY
+    legacy = "Helvetica Neue, Segoe UI, Roboto, Arial"
+    assert normalize_font_family(legacy) == legacy
 
 
 def test_parse_font_families_splits_strips_quotes_and_drops_empties() -> None:

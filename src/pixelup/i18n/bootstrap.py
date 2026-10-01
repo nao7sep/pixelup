@@ -94,7 +94,10 @@ def saved_preference() -> str:
         return languages.SYSTEM
     if not isinstance(data, dict):
         return languages.SYSTEM
-    return languages.normalize_preference(data.get("language"))
+    value = data.get("language")
+    if isinstance(value, str) and value in (languages.SYSTEM, *languages.TAGS):
+        return value
+    return languages.SYSTEM
 
 
 def align_appkit(tag: str) -> None:
