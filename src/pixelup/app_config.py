@@ -90,8 +90,8 @@ class ConfigLoadResult:
     ``quarantined_to`` is the path the corrupt original was moved aside to
     (``<stem>-<ms-utc>.invalid``) when the file was unreadable, else ``None``. It
     exists so the startup shell can surface a *non-fatal* user-facing notice — the
-    corrupt file held only disposable preferences, so resetting to defaults is safe,
-    and the user should know their tweaks were replaced and where the old file went.
+    settings fall back to built-ins in memory without writing a replacement file,
+    and the user should know their tweaks are inactive and where the old file went.
     The quarantine-vs-notice decision stays here, out of the GUI: the window merely
     reports what this pure loader already decided.
     """
@@ -101,7 +101,7 @@ class ConfigLoadResult:
 
 
 def load_app_config(path: Path | None = None) -> AppConfig:
-    """Load the settings, resetting a corrupt file to defaults.
+    """Load effective settings, quarantining a corrupt file without writing a replacement.
 
     Thin accessor over :func:`load_app_config_result` for the many callers that only
     need the ``AppConfig`` and not the quarantine event.
