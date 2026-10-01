@@ -210,7 +210,7 @@ def test_missing_config_is_not_treated_as_corrupt(tmp_path: Path) -> None:
 def test_corrupt_config_lets_window_open(
     qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # End-to-end pin: a corrupt config.json under a redirected PIXELUP_HOME must let
+    # End-to-end pin: a corrupt config.json under a redirected PIXELUP_DATA_DIR must let
     # MainWindow construct (the frozen-app failure the finding is about was the window
     # never opening), running on freshly reset defaults and surfacing the reset to the
     # user rather than crashing.
@@ -222,7 +222,7 @@ def test_corrupt_config_lets_window_open(
 
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("PIXELUP_HOME", str(home))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     (home / "config.json").write_text("{ broken", encoding="utf-8")
 
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)

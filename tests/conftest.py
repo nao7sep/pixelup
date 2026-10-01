@@ -84,7 +84,7 @@ def _reset_backup_store():
     """Close the write-through backup store after every test.
 
     The store is a process-wide singleton opened lazily against whatever
-    PIXELUP_HOME resolves to at first use. Tests redirect PIXELUP_HOME to a
+    PIXELUP_DATA_DIR resolves to at first use. Tests redirect PIXELUP_DATA_DIR to a
     throwaway root; without this teardown the singleton would stay bound to the
     first test's root (and hold that file handle open) for the whole session. This
     closes it and resets the singleton so the next test's first save re-opens the
@@ -145,7 +145,7 @@ def heavy_models_dir(
     """
     models_dir = request.config.cache.mkdir("pixelup-heavy-models")
     with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("PIXELUP_HOME", str(tmp_path_factory.mktemp("model-install-home")))
+        patch.setenv("PIXELUP_DATA_DIR", str(tmp_path_factory.mktemp("model-install-home")))
         manager = ModelManager(models_dir)
         missing = manager.missing(MANAGED_ARTIFACT_NAMES)
         if missing:

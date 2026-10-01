@@ -61,7 +61,7 @@ _KEY_SHAPE = re.compile(
 # key tokens, and the languages' own names in the picker.
 _LITERAL_WORDS = (
     *sorted(UPSCALE_MODELS, key=len, reverse=True),
-    "PIXELUP_HOME",
+    "PIXELUP_DATA_DIR",
     "PixelUp",
     "GitHub",
     "Real-ESRGAN",
@@ -110,7 +110,7 @@ def _png(directory: Path, name: str) -> Path:
 def window(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[MainWindow]:
-    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig())
@@ -183,7 +183,7 @@ def _dialogs(manager: ModelManager) -> list[QDialog]:
         MessageDialog("app.name", Message("notice.configReset")),
         StartupFailureDialog(
             Message("error.storageCreateFailed"),
-            Message.of("error.hintHomeWritableLocation", variable="PIXELUP_HOME"),
+            Message.of("error.hintHomeWritableLocation", variable="PIXELUP_DATA_DIR"),
         ),
         batch,
         library,

@@ -13,7 +13,7 @@ from pixelup.nanoid import nanoid
 from pixelup.timestamps import utc_now_stamp_ms
 
 APP_NAME = "pixelup"
-HOME_ENV = "PIXELUP_HOME"
+HOME_ENV = "PIXELUP_DATA_DIR"
 MODELS_ENV = "PIXELUP_MODELS_DIR"
 TEMP_ENV = "PIXELUP_TEMP_DIR"
 
@@ -84,10 +84,10 @@ def _resolve_dir(
 
 
 def _default_state_dir(env: dict[str, str] | None = None) -> Path:
-    """Resolve the storage root: ``PIXELUP_HOME`` when set, else ``~/.pixelup``.
+    """Resolve the storage root: ``PIXELUP_DATA_DIR`` when set, else ``~/.pixelup``.
 
     Resolution is lazy on purpose — every call reads the environment afresh — so
-    ``PIXELUP_HOME`` set before launch is honored and tests can vary it without a
+    ``PIXELUP_DATA_DIR`` set before launch is honored and tests can vary it without a
     private setter. The override is expanded (leading ``~``, ``$VAR``/``%VAR%``)
     and made absolute against the *home* directory, never the working directory,
     so the override can never reintroduce a cwd dependence. There is exactly one
@@ -105,7 +105,7 @@ def _default_state_dir(env: dict[str, str] | None = None) -> Path:
 
 
 def _expand_home_override(raw: str) -> Path:
-    """Expand ``~`` and environment references in a raw ``PIXELUP_HOME`` value.
+    """Expand ``~`` and environment references in a raw ``PIXELUP_DATA_DIR`` value.
 
     An unset variable referenced in the value (``$FOO``, ``${FOO}``, ``%FOO%``)
     is left literal by ``os.path.expandvars`` rather than raising, and a

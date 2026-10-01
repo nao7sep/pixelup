@@ -1,7 +1,7 @@
 """The write-through data-backup store (data-backup-conventions).
 
 It owns one add-only SQLite file, ``backups.sqlite3``, directly under PixelUp's
-storage root (``PIXELUP_HOME`` or ``~/.pixelup``, resolved in one place by
+storage root (``PIXELUP_DATA_DIR`` or ``~/.pixelup``, resolved in one place by
 :func:`resolve_state_dir` — never a hardcoded path). Every managed *text* save
 records the exact bytes it just wrote here, strictly AFTER its atomic rename
 lands, so the history is always as current as the last save. There is no startup
@@ -64,7 +64,7 @@ _record_gate = threading.Lock()
 
 def _store_file() -> Path:
     """The store file under the resolved storage root. Computed lazily (not frozen
-    into a module constant at import time) so ``PIXELUP_HOME`` is read after the
+    into a module constant at import time) so ``PIXELUP_DATA_DIR`` is read after the
     environment is set, per the storage-path convention's caution against
     import-time resolution."""
     return resolve_state_dir() / STORE_FILE_NAME
@@ -170,7 +170,7 @@ def close_backup_store() -> None:
     """Close the store (best-effort). For tests that need to release the file handle
     between throwaway roots; the app itself lets the process exit close it. Resets
     the singleton so the next :func:`record` re-opens against the current
-    ``PIXELUP_HOME``.
+    ``PIXELUP_DATA_DIR``.
     """
     global _connection, _initialized
     with _record_gate:

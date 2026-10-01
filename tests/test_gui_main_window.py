@@ -55,11 +55,11 @@ def make_window(
     monkeypatch: pytest.MonkeyPatch,
 ):
     # No real scheduling (no threads / inference), and a clean in-memory config
-    # rather than the developer's real ~/.pixelup/config.json. PIXELUP_HOME is
+    # rather than the developer's real ~/.pixelup/config.json. PIXELUP_DATA_DIR is
     # redirected as well as the load stubbed, because the window now *writes*:
     # ensure_app_config() and the Parameters panel's save both resolve config.json
     # through the storage root, and neither may land in the real one.
-    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     log_file = tmp_path / "logs" / "session.log"
@@ -144,7 +144,7 @@ def test_build_app_wires_application_and_opens_argv_paths(
     # build_app is everything main() does except the blocking app.exec(); driving it headlessly
     # is the whole point of extracting it (main() is then a 3-line untestable shell). log_file and
     # runtime_dirs are injected at a temp location so nothing touches the real ~/.pixelup.
-    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     image = _png(tmp_path, "a.png")
     log_file = tmp_path / "logs" / "session.log"
@@ -181,7 +181,7 @@ def test_build_app_assigns_runtime_icon_only_on_windows(
     platform: str,
     expected_icon: str | None,
 ) -> None:
-    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     monkeypatch.setattr(gui.sys, "platform", platform)
     assigned_icons: list[str] = []
@@ -1388,7 +1388,7 @@ def test_main_surfaces_startup_storage_failure(
     error = gui.PixelupError(
         ErrorCode.OUTPUT_UNWRITABLE,
         Message("error.storageCreateFailed"),
-        hint=Message.of("error.hintHomeWritableLocation", variable="PIXELUP_HOME"),
+        hint=Message.of("error.hintHomeWritableLocation", variable="PIXELUP_DATA_DIR"),
     )
     monkeypatch.setattr("pixelup.gui.build_app", lambda argv: (_ for _ in ()).throw(error))
     monkeypatch.setattr(
@@ -1446,7 +1446,7 @@ def test_window_seeds_the_panel_from_the_persisted_parameters(
 ) -> None:
     # Startup reads the persisted panel, not a defaults factory: whatever the user
     # left behind is what the panel opens on.
-    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     parameters = JobSettings(
         scale=2, quality=42, tile=512, alpha_mode="bicubic", target_profile="p3"
@@ -1545,7 +1545,7 @@ def test_a_stray_persisted_tile_is_quarantined_before_the_panel_is_seeded(
         json.dumps({"max_concurrent_jobs": 1, "auto_download": True,
                     "font_family": "", "parameters": {"tile": 9999}})
     )
-    monkeypatch.setenv("PIXELUP_HOME", str(home))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     notices: list[str] = []
     monkeypatch.setattr(

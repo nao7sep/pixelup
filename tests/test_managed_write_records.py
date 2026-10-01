@@ -13,7 +13,7 @@ from pixelup.jobs import JobSettings
 
 def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "home"
-    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
     close_backup_store()
     from pixelup.config import resolve_state_dir
 

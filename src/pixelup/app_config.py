@@ -34,8 +34,8 @@ def config_path() -> Path:
 
     The root is resolved here rather than frozen into a module-level constant at
     import time: import-time resolution captures a half-set environment and
-    freezes ``PIXELUP_HOME`` for the life of the process. Resolving on first use
-    means a ``PIXELUP_HOME`` set before launch is honored and tests can vary it.
+    freezes ``PIXELUP_DATA_DIR`` for the life of the process. Resolving on first use
+    means a ``PIXELUP_DATA_DIR`` set before launch is honored and tests can vary it.
     """
     return resolve_state_dir() / "config.json"
 

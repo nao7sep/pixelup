@@ -704,7 +704,7 @@ def test_every_upscale_model_enlarges_a_corpus_photo_faithfully(
     process_until,
     corpus_file,
 ) -> None:
-    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     source = tmp_path / "input" / "apartment-cat.png"
     source.parent.mkdir()
     with Image.open(corpus_file("photos/similarity/apartment-cat/reference.jpg")) as photo:

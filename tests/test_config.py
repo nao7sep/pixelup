@@ -62,7 +62,7 @@ def test_pixelup_home_relocates_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "relocated"
-    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
     assert resolve_state_dir() == root.resolve()
     # The root and its standard subdirectories are created on first use.
     assert (root / "logs").is_dir()
@@ -75,7 +75,7 @@ def test_fresh_root_is_created_owner_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "relocated"
-    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
     resolve_state_dir()
     mode = stat.S_IMODE(root.stat().st_mode)
     assert mode == 0o700
@@ -88,7 +88,7 @@ def test_existing_broader_root_is_tightened_on_launch(
     root = tmp_path / "relocated"
     root.mkdir()
     root.chmod(0o755)
-    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
     resolve_state_dir()
     mode = stat.S_IMODE(root.stat().st_mode)
     assert mode == 0o700
@@ -98,14 +98,14 @@ def test_pixelup_home_relocates_window_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "relocated"
-    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
     assert window_settings_path() == (root / "window.ini").resolve()
 
 
 def test_default_root_is_dot_pixelup_when_home_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("PIXELUP_HOME", raising=False)
+    monkeypatch.delenv("PIXELUP_DATA_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     assert resolve_state_dir() == (tmp_path / ".pixelup").resolve()
 
@@ -114,14 +114,14 @@ def test_pixelup_home_resolution_is_lazy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # app_config is imported at the top of this module; the root must still be
-    # resolved on first use, so a PIXELUP_HOME set *after* import takes effect
+    # resolved on first use, so a PIXELUP_DATA_DIR set *after* import takes effect
     # (it was never frozen into a module-level constant).
     from pixelup.app_config import config_path
 
-    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "first"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "first"))
     assert config_path() == (tmp_path / "first" / "config.json").resolve()
 
-    monkeypatch.setenv("PIXELUP_HOME", str(tmp_path / "second"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "second"))
     assert config_path() == (tmp_path / "second" / "config.json").resolve()
 
 
@@ -131,7 +131,7 @@ def test_pixelup_home_relative_value_anchors_to_home_not_cwd(
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
-    monkeypatch.setenv("PIXELUP_HOME", "pixelup-data")
+    monkeypatch.setenv("PIXELUP_DATA_DIR", "pixelup-data")
     # A relative override resolves against home, never the working directory.
     assert resolve_state_dir() == (fake_home / "pixelup-data").resolve()
 
@@ -141,7 +141,7 @@ def test_unusable_pixelup_home_is_a_reported_error(
 ) -> None:
     blocker = tmp_path / "blocker"
     blocker.write_text("not a directory", encoding="utf-8")
-    monkeypatch.setenv("PIXELUP_HOME", str(blocker / "root"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(blocker / "root"))
     with pytest.raises(PixelupError) as exc_info:
         resolve_state_dir()
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
@@ -153,7 +153,7 @@ def test_pixelup_home_with_unset_env_reference_is_a_reported_error(
     # An unset $VAR is left literal by os.path.expandvars rather than raising;
     # that must not silently become a directory literally named "$PIXELUP_NOPE".
     monkeypatch.delenv("PIXELUP_NOPE", raising=False)
-    monkeypatch.setenv("PIXELUP_HOME", "$PIXELUP_NOPE/data")
+    monkeypatch.setenv("PIXELUP_DATA_DIR", "$PIXELUP_NOPE/data")
     with pytest.raises(PixelupError) as exc_info:
         resolve_state_dir()
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
@@ -165,7 +165,7 @@ def test_pixelup_home_with_empty_env_reference_is_a_reported_error(
     # A variable that is set but empty must not silently collapse the
     # storage root onto bare $HOME.
     monkeypatch.setenv("PIXELUP_EMPTY", "")
-    monkeypatch.setenv("PIXELUP_HOME", "$PIXELUP_EMPTY")
+    monkeypatch.setenv("PIXELUP_DATA_DIR", "$PIXELUP_EMPTY")
     with pytest.raises(PixelupError) as exc_info:
         resolve_state_dir()
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE

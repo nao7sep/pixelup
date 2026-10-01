@@ -53,14 +53,14 @@ class _RecordingConnection:
 
 
 def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect PIXELUP_HOME to a throwaway root and return the resolved root.
+    """Redirect PIXELUP_DATA_DIR to a throwaway root and return the resolved root.
 
     The autouse conftest fixture closes the store singleton after each test, so it
     re-opens under this root; belt-and-suspenders, close it here too before the
     first record so we never inherit a prior test's open handle.
     """
     root = tmp_path / "home"
-    monkeypatch.setenv("PIXELUP_HOME", str(root))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
     close_backup_store()
     from pixelup.config import resolve_state_dir
 
