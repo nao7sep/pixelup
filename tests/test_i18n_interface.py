@@ -49,7 +49,7 @@ from pixelup.parameters_help_dialog import ParametersHelpDialog
 from pixelup.quit_dialog import QuitConfirmDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
-from pixelup.settings_dialog import SettingsDialog
+from pixelup.settings_dialog import DiscardChangesDialog, SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.widgets import EmptyStateTableWidget
 
@@ -181,6 +181,7 @@ def _dialogs(manager: ModelManager) -> list[QDialog]:
         ParametersHelpDialog(),
         QuitConfirmDialog(0),
         QuitConfirmDialog(3),
+        DiscardChangesDialog(),
         MessageDialog("app.name", Message("notice.configReset")),
         StartupFailureDialog(
             Message("error.storageCreateFailed"),

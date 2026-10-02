@@ -493,10 +493,12 @@ class MainWindow(QMainWindow):
         QApplication.instance().screenAdded.connect(self._watch_layout_screen)
         self._update_native_minimum()
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def _is_session_shutdown(self) -> bool:
         app = QGuiApplication.instance()
-        is_saving_session = app.isSavingSession() if app is not None else False
-        session_shutdown = self._session_shutdown or is_saving_session
+        return self._session_shutdown or (app is not None and app.isSavingSession())
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        session_shutdown = self._is_session_shutdown()
         if self._quit_when_workers_idle:
             if self._workers_clean_for_quit():
                 self._accept_close(event)
@@ -1092,6 +1094,7 @@ class MainWindow(QMainWindow):
                 candidate,
                 surface_failure=False,
             ),
+            session_shutdown=self._is_session_shutdown,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Re-apply the UI font so a changed family takes effect immediately,

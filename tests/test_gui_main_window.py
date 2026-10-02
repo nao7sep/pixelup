@@ -659,7 +659,7 @@ def test_saved_font_change_refreshes_live_layout_metrics(
     candidate = replace(window.config, font_family="Menlo")
 
     class AcceptedSettings:
-        def __init__(self, _config, _parent, *, try_save) -> None:
+        def __init__(self, _config, _parent, *, try_save, session_shutdown) -> None:
             self._try_save = try_save
 
         def exec(self):

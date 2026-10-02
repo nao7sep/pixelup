@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+import pytest
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QWidget
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig, save_app_config_merged
 from pixelup.fonts import system_ui_font_family
 from pixelup.jobs import JobSettings
-from pixelup.settings_dialog import SettingsDialog
+from pixelup.settings_dialog import DiscardChangesDialog, SettingsDialog
 
 # The dialog holds only what the main window does not show: the UI font and the
 # concurrent job count. The image-processing
@@ -246,3 +249,93 @@ def test_footer_puts_cancel_before_ok_on_every_platform(qapp: QApplication) -> N
         assert dialog.result() == int(dialog.DialogCode.Rejected)
     finally:
         dialog.deleteLater()
+
+
+def _never_asked(_dialog: DiscardChangesDialog) -> QDialog.DialogCode:
+    raise AssertionError("the discard confirmation was shown")
+
+
+def test_a_clean_draft_closes_without_asking(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(DiscardChangesDialog, "exec", _never_asked)
+    dialog = SettingsDialog(AppConfig())
+    try:
+        dialog.show()
+        dialog.cancel_button.click()
+        assert dialog.isVisible() is False
+    finally:
+        dialog.deleteLater()
+
+
+@pytest.mark.parametrize("close", ["cancel", "escape", "title_bar"])
+def test_every_close_path_asks_before_discarding_a_dirty_draft(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, close: str
+) -> None:
+    answers = iter((QDialog.DialogCode.Rejected, QDialog.DialogCode.Accepted))
+    asked: list[QWidget] = []
+
+    def answer(confirm: DiscardChangesDialog) -> QDialog.DialogCode:
+        asked.append(confirm.parentWidget())
+        return next(answers)
+
+    monkeypatch.setattr(DiscardChangesDialog, "exec", answer)
+    dialog = SettingsDialog(AppConfig())
+    try:
+        dialog.show()
+        dialog.concurrent.setValue(4)
+
+        def request_close() -> None:
+            if close == "cancel":
+                dialog.cancel_button.click()
+            elif close == "escape":
+                QTest.keyClick(dialog, Qt.Key.Key_Escape)
+            else:
+                dialog.close()
+
+        request_close()
+        assert dialog.isVisible() is True
+        assert dialog.concurrent.value() == 4
+        request_close()
+        assert dialog.isVisible() is False
+        assert dialog.result() == int(QDialog.DialogCode.Rejected)
+        assert asked == [dialog, dialog]
+    finally:
+        dialog.deleteLater()
+
+
+def test_session_shutdown_discards_without_asking(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(DiscardChangesDialog, "exec", _never_asked)
+    dialog = SettingsDialog(AppConfig(), session_shutdown=lambda: True)
+    try:
+        dialog.show()
+        dialog.concurrent.setValue(4)
+        dialog.close()
+        assert dialog.isVisible() is False
+    finally:
+        dialog.deleteLater()
+
+
+def test_discard_confirmation_focuses_keep_editing_and_puts_discard_last(
+    qapp: QApplication,
+) -> None:
+    confirm = DiscardChangesDialog()
+    try:
+        footer = confirm.footer_layout
+        buttons = [
+            footer.itemAt(index).widget()
+            for index in range(footer.count())
+            if isinstance(footer.itemAt(index).widget(), QPushButton)
+        ]
+        keep, discard = buttons
+        assert [keep.text(), discard.text()] == ["Keep editing", "Discard"]
+        assert keep.isDefault()
+        assert confirm.focusWidget() is keep
+        assert discard.property("role") == "danger-confirm"
+        assert confirm.windowTitle() == "Unsaved changes"
+        QTest.keyClick(confirm, Qt.Key.Key_Escape)
+        assert confirm.result() == int(QDialog.DialogCode.Rejected)
+    finally:
+        confirm.deleteLater()

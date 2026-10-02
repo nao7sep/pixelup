@@ -6,6 +6,7 @@ from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
+    QDialog,
     QGridLayout,
     QLabel,
     QLineEdit,
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, MIN_CONCURRENT_JOBS, AppConfig
-from pixelup.dialog_shell import FORM_WIDTH, DialogShell
+from pixelup.dialog_shell import FORM_WIDTH, NOTICE_WIDTH, DialogShell
 from pixelup.fonts import system_ui_font_family
 from pixelup.i18n import localizer
 from pixelup.i18n.languages import LANGUAGES, SYSTEM
@@ -49,6 +50,34 @@ def _captioned(control: QWidget, caption_key: str) -> QWidget:
     return container
 
 
+class DiscardChangesDialog(DialogShell):
+    """Ask before Settings throws away its draft (modal-dialog-conventions).
+
+    ``exec()`` returns ``Accepted`` to discard, ``Rejected`` (Keep editing, Escape)
+    to stay in Settings.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("settings.unsavedTitle", parent, width=NOTICE_WIDTH)
+
+        message = localize(QLabel(), text="settings.unsavedMessage")
+        message.setWordWrap(True)
+        self.body_layout.addWidget(message)
+
+        keep_button = localize(QPushButton(), text="settings.keepEditing")
+        keep_button.setDefault(True)
+        keep_button.clicked.connect(self.reject)
+
+        discard_button = localize(QPushButton(), text="settings.discard")
+        discard_button.setProperty("role", "danger-confirm")
+        discard_button.clicked.connect(self.accept)
+
+        self.add_footer_widget(keep_button)
+        self.add_footer_widget(discard_button)
+        self.set_initial_focus(keep_button)
+        self.fit()
+
+
 class SettingsDialog(DialogShell):
     """Modal settings editor: everything PixelUp persists that the main window does not show.
 
@@ -70,10 +99,12 @@ class SettingsDialog(DialogShell):
         parent: QWidget | None = None,
         *,
         try_save: Callable[[AppConfig], bool] | None = None,
+        session_shutdown: Callable[[], bool] = lambda: False,
     ) -> None:
         super().__init__("settings.title", parent, width=FORM_WIDTH)
         self._initial = config
         self._try_save = try_save
+        self._session_shutdown = session_shutdown
 
         form_widget = QWidget()
         form = QGridLayout(form_widget)
@@ -167,6 +198,16 @@ class SettingsDialog(DialogShell):
 
     def is_dirty(self) -> bool:
         return self.config() != self._initial
+
+    def reject(self) -> None:
+        """The one close path for Cancel, Escape and the title bar's close button."""
+        if (
+            self.is_dirty()
+            and not self._session_shutdown()
+            and DiscardChangesDialog(self).exec() != QDialog.DialogCode.Accepted
+        ):
+            return
+        super().reject()
 
     def _update_commit_enabled(self) -> None:
         self.ok_button.setEnabled(self.is_dirty())
