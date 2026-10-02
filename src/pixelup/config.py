@@ -135,12 +135,12 @@ def _ensure_state_root(root: Path) -> Path:
     not ask for.
     """
     try:
-        # The root is created with the owner-only (0700) mode directly, rather than under the default
-        # umask and relying solely on `_tighten_root_permissions` afterward — that sequence would leave
-        # a brief window where a freshly created root is world-readable. The mode has no group/other
-        # bits, so a stricter umask can only narrow it further, never widen it. Subdirectories keep
-        # their existing default-mode creation; `_tighten_root_permissions` below only ever touches the
-        # root itself.
+        # The root is created with the owner-only (0700) mode directly, rather than under the
+        # default umask and relying solely on `_tighten_root_permissions` afterward — that
+        # sequence would leave a brief window where a freshly created root is world-readable.
+        # The mode has no group/other bits, so a stricter umask can only narrow it further,
+        # never widen it. Subdirectories keep their existing default-mode creation;
+        # `_tighten_root_permissions` below only ever touches the root itself.
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         for path in (root / "logs", root / "models", root / "temp"):
             path.mkdir(parents=True, exist_ok=True)

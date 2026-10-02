@@ -414,7 +414,8 @@ def test_dialog_band_lines_are_no_fainter_than_a_controls_own_border() -> None:
     for palette in (LIGHT, DARK):
         tone = theme.surfaces(palette)
         sheet = theme.build_stylesheet(palette)
-        rule = sheet.split('QFrame[frameShape="4"], QFrame[frameShape="5"] {', 1)[1].split("}", 1)[0]
+        rule_start = 'QFrame[frameShape="4"], QFrame[frameShape="5"] {'
+        rule = sheet.split(rule_start, 1)[1].split("}", 1)[0]
         assert f"background-color: {tone['button_edge']};" in rule
         window = palette.color(QPalette.ColorRole.Window)
         line_contrast = _contrast(QColor(tone["button_edge"]), window)
