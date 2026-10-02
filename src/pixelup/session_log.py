@@ -16,13 +16,6 @@ from pixelup.timestamps import to_utc_iso_ms, utc_stamp_ms
 LOGGER_NAME = "pixelup"
 DEBUG_ENV = "PIXELUP_DEBUG"
 
-# Field names whose values are masked before a record is serialized. Matched by
-# exact, case-insensitive name — never by substring — so the redactor can only
-# ever blank a value, never corrupt surrounding content. PixelUp handles no
-# secrets today; this is the standing backstop the logging convention requires.
-_REDACTED_KEYS = frozenset({"apikey", "api_key", "authorization", "token", "password", "secret"})
-_REDACTED_PLACEHOLDER = "[redacted]"
-
 # Keys a caller's structured field must never overwrite: the three-part envelope
 # plus `error`, which is reserved for the attached-exception payload.
 _RESERVED_FIELDS = frozenset({"time", "level", "message", "error"})
@@ -35,29 +28,6 @@ _LEVEL_NAMES = {
     logging.ERROR: "error",
     logging.CRITICAL: "error",
 }
-
-
-def redact_log_fields(value: Any) -> Any:
-    """Return log fields with sensitive values masked, structure untouched.
-
-    Denied field names are matched by exact, case-insensitive name (never by
-    substring), so ``token`` never matches ``tokenCount``. Only a matched value
-    is replaced with a fixed marker; mappings and lists are recursed; every other
-    value is returned as-is. Pure and total: it never raises and never drops
-    fields, so it cannot corrupt a log line.
-    """
-    if isinstance(value, Mapping):
-        return {
-            key: (
-                _REDACTED_PLACEHOLDER
-                if isinstance(key, str) and key.lower() in _REDACTED_KEYS
-                else redact_log_fields(item)
-            )
-            for key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [redact_log_fields(item) for item in value]
-    return value
 
 
 def _error_object(exc_info: Any) -> dict[str, Any]:
@@ -119,7 +89,7 @@ class JsonlFormatter(logging.Formatter):
         }
         fields = getattr(record, "fields", None)
         if isinstance(fields, Mapping):
-            for key, value in redact_log_fields(fields).items():
+            for key, value in fields.items():
                 if key not in _RESERVED_FIELDS:
                     entry[key] = value
         if record.exc_info:

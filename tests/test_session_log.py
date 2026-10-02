@@ -9,7 +9,6 @@ from pixelup.session_log import (
     debug_enabled,
     get_logger,
     log,
-    redact_log_fields,
     session_log_path,
 )
 
@@ -61,14 +60,14 @@ def test_warning_level_renders_as_warn(tmp_path: Path) -> None:
     assert entry["level"] == "warn"
 
 
-def test_logged_fields_are_redacted(tmp_path: Path) -> None:
+def test_logged_fields_are_kept_as_given(tmp_path: Path) -> None:
     log_path = tmp_path / "logs" / "session.log"
 
     configure_session_logging(log_path)
     log.info("auth.try", token="supersecret", user="bob")
 
     entry = _read_jsonl(log_path)[-1]
-    assert entry["token"] == "[redacted]"
+    assert entry["token"] == "supersecret"
     assert entry["user"] == "bob"
 
 
@@ -191,32 +190,6 @@ def test_configure_degrades_to_stderr_on_same_millisecond_clash(tmp_path: Path) 
     # The first writer's content is untouched — the second process never opened
     # (let alone truncated or appended into) the existing file.
     assert log_path.read_text(encoding="utf-8") == '{"message": "from first process"}\n'
-
-
-def test_redact_masks_denied_keys_case_insensitively() -> None:
-    out = redact_log_fields({"Token": "abc", "ApiKey": "k", "user": "bob"})
-    assert out == {"Token": "[redacted]", "ApiKey": "[redacted]", "user": "bob"}
-
-
-def test_redact_does_not_match_substrings() -> None:
-    fields = {"tokenCount": 5, "broken": True, "password_hint": "ok"}
-    assert redact_log_fields(fields) == fields
-
-
-def test_redact_recurses_nested_mappings_and_lists() -> None:
-    out = redact_log_fields(
-        {"outer": {"secret": "s", "ok": 1}, "items": [{"password": "p"}, "raw"]}
-    )
-    assert out == {
-        "outer": {"secret": "[redacted]", "ok": 1},
-        "items": [{"password": "[redacted]"}, "raw"],
-    }
-
-
-def test_redact_leaves_scalars_untouched() -> None:
-    assert redact_log_fields("token") == "token"
-    assert redact_log_fields(42) == 42
-    assert redact_log_fields(None) is None
 
 
 def test_unserializable_field_never_drops_the_line(tmp_path: Path) -> None:
