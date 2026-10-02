@@ -29,7 +29,8 @@ def utc_stamp_ms(moment: datetime) -> str:
     safe to embed in a filename and sorts lexicographically in chronological
     order. Aware inputs in other time zones are converted to UTC; naive inputs
     are interpreted as UTC (PixelUp's internal convention) rather than local
-    time. Used for session-log filenames and the ``.invalid`` quarantine stamp.
+    time. Names the records fallback log file and stamps a quarantined
+    ``.invalid`` config.
     """
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
