@@ -133,6 +133,28 @@ def test_an_unknown_key_shows_the_key_so_the_rendered_key_gate_sees_it() -> None
     assert str(Message("images.title")) == "images.title"
 
 
+def test_a_key_the_language_is_missing_falls_back_to_english(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pixelup.i18n import translator as translator_module
+
+    real_catalogue = translator_module.catalogue
+    japanese = dict(real_catalogue("ja"))
+    del japanese["images.alreadyOpen"]
+    del japanese["images.added"]
+    monkeypatch.setattr(
+        translator_module,
+        "catalogue",
+        lambda tag: japanese if tag == "ja" else real_catalogue(tag),
+    )
+
+    reader = Translator("ja", QLocale("ja"))
+    assert reader.t("images.alreadyOpen", names="a.png") == "Already open: a.png."
+    # Japanese has only one plural form; the English sentence keeps its own.
+    assert reader.t("images.added", count=1) == "Added 1 image."
+    assert reader.t("images.added", count=2) == "Added 2 images."
+
+
 def test_a_failure_logs_english_and_shows_the_readers_language() -> None:
     error = PixelupError(
         ErrorCode.MODEL_NOT_FOUND,
