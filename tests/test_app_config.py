@@ -242,6 +242,22 @@ def test_non_object_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path)
     assert load_app_config(path) == AppConfig()
 
 
+def test_a_failed_quarantine_propagates_and_leaves_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text("{ this is not valid json", encoding="utf-8")
+
+    def _fail(target: Path) -> Path:
+        raise OSError("rename failed")
+
+    monkeypatch.setattr("pixelup.app_config.quarantine_corrupt_file", _fail)
+
+    with pytest.raises(OSError, match="rename failed"):
+        load_app_config_result(path)
+    assert path.read_text(encoding="utf-8") == "{ this is not valid json"
+
+
 def test_missing_config_is_not_treated_as_corrupt(tmp_path: Path) -> None:
     # The normal first run: no file, defaults, and nothing quarantined.
     result = load_app_config_result(tmp_path / "missing.json")

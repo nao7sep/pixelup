@@ -125,14 +125,9 @@ def _read_config_map(path: Path) -> tuple[dict[str, Any], Path | None]:
     if not path.exists():
         return {}, None
     try:
-        data = _object(json.loads(path.read_text(encoding="utf-8")), "config")
+        return _object(json.loads(path.read_text(encoding="utf-8")), "config"), None
     except ValueError:
-        # Keep the rename outside the read-failure handler: a failed quarantine
-        # must propagate rather than overwrite bytes it exists to preserve.
-        pass
-    else:
-        return data, None
-    return {}, quarantine_corrupt_file(path)
+        return {}, quarantine_corrupt_file(path)
 
 
 def save_app_config_merged(
