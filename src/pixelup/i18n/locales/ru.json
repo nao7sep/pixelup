@@ -1,4 +1,5 @@
 {
+  "about.close": "Закрыть",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 или новее",
   "about.description": "Увеличивайте локальные изображения пакетами с помощью Real-ESRGAN и запускайте несколько моделей на одних и тех же изображениях, чтобы сравнить их.",
   "about.github": "GitHub",
@@ -277,9 +278,11 @@
   "quit.title": "Выйти из PixelUp?",
   "result.dismiss": "Скрыть",
   "result.dismissAccessible": "Скрыть сообщение",
+  "settings.cancel": "Отмена",
   "settings.concurrentJobs": "Одновременных заданий",
   "settings.language": "Язык",
   "settings.languageSystem": "Системный",
+  "settings.ok": "OK",
   "settings.saveFailed": "PixelUp не удалось сохранить настройки. Ваши изменения на месте; повторите попытку.",
   "settings.title": "Настройки",
   "settings.uiFont": "Шрифт интерфейса",

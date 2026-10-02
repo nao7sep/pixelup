@@ -58,3 +58,16 @@ def test_external_open_failure_stays_in_about_and_resizes_for_authored_result(
     finally:
         dialog.close()
         dialog.deleteLater()
+
+
+def test_close_button_closes_about(qapp: QApplication) -> None:
+    dialog = AboutDialog()
+    try:
+        close = next(
+            button for button in dialog.findChildren(QPushButton) if button.text() == "Close"
+        )
+        assert dialog.footer_layout.indexOf(close) >= 0
+        close.click()
+        assert dialog.result() == int(dialog.DialogCode.Rejected)
+    finally:
+        dialog.deleteLater()

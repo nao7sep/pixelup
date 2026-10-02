@@ -1,4 +1,5 @@
 {
+  "about.close": "Schließen",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 oder neuer",
   "about.description": "Skalieren Sie lokale Bilder mit Real-ESRGAN stapelweise hoch, und lassen Sie mehrere Modelle über dieselben Bilder laufen, um sie zu vergleichen.",
   "about.github": "GitHub",
@@ -253,9 +254,11 @@
   "quit.title": "PixelUp beenden?",
   "result.dismiss": "Ausblenden",
   "result.dismissAccessible": "Meldung ausblenden",
+  "settings.cancel": "Abbrechen",
   "settings.concurrentJobs": "Gleichzeitige Aufträge",
   "settings.language": "Sprache",
   "settings.languageSystem": "System",
+  "settings.ok": "OK",
   "settings.saveFailed": "PixelUp konnte Ihre Einstellungen nicht speichern. Ihre Änderungen sind noch hier; versuchen Sie es erneut.",
   "settings.title": "Einstellungen",
   "settings.uiFont": "Oberflächenschrift",

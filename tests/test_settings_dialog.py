@@ -232,3 +232,17 @@ def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: P
     finally:
         dialog.deleteLater()
 
+
+
+def test_footer_puts_cancel_before_ok_on_every_platform(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig())
+    try:
+        footer = dialog.footer_layout
+        assert footer.indexOf(dialog.cancel_button) < footer.indexOf(dialog.ok_button)
+        assert dialog.cancel_button.text() == "Cancel"
+        assert dialog.ok_button.text() == "OK"
+        assert dialog.ok_button.isDefault()
+        dialog.cancel_button.click()
+        assert dialog.result() == int(dialog.DialogCode.Rejected)
+    finally:
+        dialog.deleteLater()

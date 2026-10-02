@@ -1,4 +1,5 @@
 {
+  "about.close": "关闭",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 或更高版本",
   "about.description": "用 Real-ESRGAN 批量放大本地图像，并对同一批图像运行多个模型进行比较。",
   "about.github": "GitHub",
@@ -241,9 +242,11 @@
   "quit.title": "要退出 PixelUp 吗？",
   "result.dismiss": "关闭",
   "result.dismissAccessible": "关闭提示",
+  "settings.cancel": "取消",
   "settings.concurrentJobs": "同时运行的任务数",
   "settings.language": "语言",
   "settings.languageSystem": "跟随系统",
+  "settings.ok": "确定",
   "settings.saveFailed": "PixelUp 无法保存你的设置。你的更改仍保留在这里；请重试。",
   "settings.title": "设置",
   "settings.uiFont": "界面字体",

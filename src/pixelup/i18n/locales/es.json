@@ -1,4 +1,5 @@
 {
+  "about.close": "Cerrar",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 o posterior",
   "about.description": "Amplía imágenes locales por lotes con Real-ESRGAN, y ejecuta varios modelos sobre las mismas imágenes para compararlos.",
   "about.github": "GitHub",
@@ -265,9 +266,11 @@
   "quit.title": "¿Salir de PixelUp?",
   "result.dismiss": "Descartar",
   "result.dismissAccessible": "Descartar mensaje",
+  "settings.cancel": "Cancelar",
   "settings.concurrentJobs": "Trabajos simultáneos",
   "settings.language": "Idioma",
   "settings.languageSystem": "Sistema",
+  "settings.ok": "Aceptar",
   "settings.saveFailed": "PixelUp no pudo guardar tu configuración. Tus cambios siguen aquí; inténtalo de nuevo.",
   "settings.title": "Configuración",
   "settings.uiFont": "Fuente de la interfaz",

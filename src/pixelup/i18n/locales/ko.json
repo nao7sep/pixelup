@@ -1,4 +1,5 @@
 {
+  "about.close": "닫기",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 이상",
   "about.description": "Real-ESRGAN으로 로컬 이미지를 일괄 업스케일하고, 같은 이미지에 여러 모델을 실행하여 비교하세요.",
   "about.github": "GitHub",
@@ -241,9 +242,11 @@
   "quit.title": "PixelUp을 종료하시겠습니까?",
   "result.dismiss": "닫기",
   "result.dismissAccessible": "메시지 닫기",
+  "settings.cancel": "취소",
   "settings.concurrentJobs": "동시 작업 수",
   "settings.language": "언어",
   "settings.languageSystem": "시스템",
+  "settings.ok": "확인",
   "settings.saveFailed": "PixelUp이 설정을 저장할 수 없습니다. 변경 내용은 그대로 남아 있습니다. 다시 시도하십시오.",
   "settings.title": "설정",
   "settings.uiFont": "UI 글꼴",

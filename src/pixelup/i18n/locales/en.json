@@ -1,4 +1,5 @@
 {
+  "about.close": "Close",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 or later",
   "about.description": "Upscale local images in batches with Real-ESRGAN, and run several models over the same images to compare.",
   "about.github": "GitHub",
@@ -253,9 +254,11 @@
   "quit.title": "Quit PixelUp?",
   "result.dismiss": "Dismiss",
   "result.dismissAccessible": "Dismiss result",
+  "settings.cancel": "Cancel",
   "settings.concurrentJobs": "Concurrent jobs",
   "settings.language": "Language",
   "settings.languageSystem": "System",
+  "settings.ok": "OK",
   "settings.saveFailed": "PixelUp could not save your settings. Your changes are still here; try again.",
   "settings.title": "Settings",
   "settings.uiFont": "UI font",

@@ -1,4 +1,5 @@
 {
+  "about.close": "閉じる",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 以降",
   "about.description": "ローカルの画像を Real-ESRGAN でまとめてアップスケールし、同じ画像に複数のモデルを実行して比較しましょう。",
   "about.github": "GitHub",
@@ -241,9 +242,11 @@
   "quit.title": "PixelUp を終了しますか？",
   "result.dismiss": "閉じる",
   "result.dismissAccessible": "メッセージを閉じる",
+  "settings.cancel": "キャンセル",
   "settings.concurrentJobs": "同時に実行するジョブ数",
   "settings.language": "言語",
   "settings.languageSystem": "システム",
+  "settings.ok": "OK",
   "settings.saveFailed": "PixelUp は設定を保存できませんでした。変更内容はそのまま残っています。もう一度お試しください。",
   "settings.title": "設定",
   "settings.uiFont": "UI フォント",

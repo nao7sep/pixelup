@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtWidgets import (
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -78,12 +77,12 @@ class AboutDialog(DialogShell):
         self.body_layout.addWidget(self.launch_result)
         self.body_layout.addWidget(meta)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        # Close has RejectRole, so `rejected` covers both the button click and
-        # Escape with a single, unambiguous close path.
-        buttons.rejected.connect(self.reject)
-        self.add_footer_widget(buttons)
-        self.set_initial_focus(buttons.button(QDialogButtonBox.StandardButton.Close))
+        # Built by hand, like every footer with a choice to order
+        # (modal-dialog-conventions). Close and Escape share reject().
+        close_button = localize(QPushButton(), text="about.close")
+        close_button.clicked.connect(self.reject)
+        self.add_footer_widget(close_button)
+        self.set_initial_focus(close_button)
         self.fit()
 
     def _open_external(self, url: str, failure: Message) -> None:

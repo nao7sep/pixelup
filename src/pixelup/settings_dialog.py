@@ -6,10 +6,10 @@ from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
-    QDialogButtonBox,
     QGridLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -117,12 +117,15 @@ class SettingsDialog(DialogShell):
         form.setColumnStretch(1, 0)
         form.setColumnStretch(2, 1)
 
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        self.ok_button = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
+        # Built by hand rather than with QDialogButtonBox, whose platform layout puts
+        # OK first on Windows (modal-dialog-conventions).
+        self.cancel_button = localize(QPushButton(), text="settings.cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        self.ok_button = localize(QPushButton(), text="settings.ok")
         # OK is what saves, so it is the dialog's primary action.
         self.ok_button.setProperty("role", "primary")
+        self.ok_button.setDefault(True)
+        self.ok_button.clicked.connect(self._save)
         self.error_message = QLabel()
         self.error_message.setWordWrap(True)
         dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
@@ -130,13 +133,12 @@ class SettingsDialog(DialogShell):
             f"color: {'#ff766a' if dark else '#b3261e'}; font-weight: 600;"
         )
         self.error_message.hide()
-        self.buttons.accepted.connect(self._save)
-        self.buttons.rejected.connect(self.reject)
 
         self.body_layout.addWidget(form_widget, 0, Qt.AlignmentFlag.AlignLeft)
         self.body_layout.addWidget(self.error_message)
         self.body_layout.addStretch()
-        self.add_footer_widget(self.buttons)
+        self.add_footer_widget(self.cancel_button)
+        self.add_footer_widget(self.ok_button)
         self.set_initial_focus(self.font_family)
         self.fit()
 

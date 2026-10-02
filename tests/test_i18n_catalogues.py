@@ -30,6 +30,8 @@ BRAND_KEYS = frozenset({"app.name", "about.github", "images.size"})
 # Values a language shares with English on purpose. A listed entry that no longer
 # matches English fails too, so the list cannot rot.
 _UNITS = ["units.bytes", "units.gigabytes", "units.kilobytes", "units.megabytes"]
+# Where Qt's own translation of the OK button is "OK", the app's says so too.
+_OK = ["settings.ok"]
 SAME_AS_ENGLISH: dict[str, list[str]] = {
     # "Version" and "Status" are the German words, System is the standard German
     # label for following the computer, and the byte units are the same symbols.
@@ -38,6 +40,7 @@ SAME_AS_ENGLISH: dict[str, list[str]] = {
         "managedModels.columnStatus",
         "queue.columnStatus",
         "settings.languageSystem",
+        *_OK,
         *_UNITS,
     ],
     # "General" is the Spanish word for a general settings group.
@@ -50,13 +53,14 @@ SAME_AS_ENGLISH: dict[str, list[str]] = {
         "images.title",
         "managedModels.columnAction",
         "queue.columnImage",
+        *_OK,
     ],
     # Italian keeps "Output" as a column name; "Uscita" would read as an exit.
-    "it": ["queue.columnOutput", *_UNITS],
+    "it": ["queue.columnOutput", *_OK, *_UNITS],
     # "Status" is the everyday Brazilian Portuguese column name.
-    "pt-BR": ["managedModels.columnStatus", "queue.columnStatus", *_UNITS],
-    "ru": [],
-    "ja": [*_UNITS],
+    "pt-BR": ["managedModels.columnStatus", "queue.columnStatus", *_OK, *_UNITS],
+    "ru": [*_OK],
+    "ja": [*_OK, *_UNITS],
     "ko": [*_UNITS],
     "zh-Hans": [*_UNITS],
 }
