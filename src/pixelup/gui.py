@@ -1910,21 +1910,20 @@ def _reveal_in_file_browser(path: Path) -> bool:
 def build_app(
     argv: list[str],
     *,
-    log_file: Path | None = None,
     runtime_dirs: RuntimeDirs | None = None,
 ) -> tuple[QApplication, MainWindow]:
     """Build the fully-wired application and main window, ready to run.
 
     Everything ``main`` does except the blocking ``app.exec()`` lives here so it is exercisable
     headlessly: session logging, the runtime dirs, the QApplication and its style/icon, the window,
-    and opening any image paths passed on the command line. ``log_file`` and ``runtime_dirs`` are
-    injectable so a test can point them at a temp location; both default to the real resolution.
+    and opening any image paths passed on the command line. ``runtime_dirs`` is injectable so a
+    test can point it at a temp location; it defaults to the real resolution.
     """
     register_image_plugins()
     # Before the application object exists, so AppKit's own menu items and the
     # first frame are both already in the reader's language.
     settle_language()
-    resolved_log_file = configure_session_logging(log_file)
+    log_file = configure_session_logging()
     resolved_runtime_dirs = runtime_dirs if runtime_dirs is not None else resolve_runtime_dirs()
     app = QApplication.instance() or QApplication(argv)
     localizer.sync_qt_translation()
@@ -1973,7 +1972,7 @@ def build_app(
         version=__version__,
         python=sys.version.split()[0],
         platform=sys.platform,
-        log_file=str(resolved_log_file),
+        log_file=str(log_file),
         runtime_dirs={
             "models_dir": str(resolved_runtime_dirs.models_dir),
             "temp_dir": str(resolved_runtime_dirs.temp_dir),
@@ -1981,7 +1980,7 @@ def build_app(
         argv=argv[1:],
     )
 
-    window = MainWindow(log_file=resolved_log_file, runtime_dirs=resolved_runtime_dirs)
+    window = MainWindow(log_file=log_file, runtime_dirs=resolved_runtime_dirs)
     window.show_prepared()
     paths = [Path(arg) for arg in argv[1:] if not arg.startswith("-")]
     if paths:

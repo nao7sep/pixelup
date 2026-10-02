@@ -263,10 +263,10 @@ class _FakeThread:
 
 
 @pytest.fixture
-def _session_log(tmp_path: Path) -> None:
-    # Route the singleton logger to a temp file so the quit.* lines don't spill
-    # to stderr. conftest restores the logger after the test.
-    configure_session_logging(tmp_path / "logs" / "session.log")
+def _session_log() -> None:
+    # Route the singleton logger to the test's records database so the quit.* lines
+    # don't spill to stderr. conftest restores the logger after the test.
+    configure_session_logging()
 
 
 def test_cleanup_for_quit_teardown_sequence(_session_log: None) -> None:

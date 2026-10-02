@@ -116,10 +116,9 @@ def window(
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig())
     )
-    log_file = tmp_path / "logs" / "session.log"
-    configure_session_logging(log_file)
+    log_file = configure_session_logging()
     models_dir = tmp_path / "home" / "models"
-    models_dir.mkdir(parents=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
     # Every model but the denoise companion, which no queued job here needs, so
     # the models line says some are missing.
     for info in ALL_MODELS:

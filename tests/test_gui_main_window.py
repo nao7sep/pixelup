@@ -61,8 +61,7 @@ def make_window(
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
-    log_file = tmp_path / "logs" / "session.log"
-    configure_session_logging(log_file)
+    log_file = configure_session_logging()
 
     created: list[MainWindow] = []
 
@@ -141,19 +140,14 @@ def test_build_app_wires_application_and_opens_argv_paths(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # build_app is everything main() does except the blocking app.exec(); driving it headlessly
-    # is the whole point of extracting it (main() is then a 3-line untestable shell). log_file and
-    # runtime_dirs are injected at a temp location so nothing touches the real ~/.pixelup.
+    # is the whole point of extracting it (main() is then a 3-line untestable shell). runtime_dirs
+    # is injected at a temp location so nothing touches the real ~/.pixelup.
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     image = _png(tmp_path, "a.png")
-    log_file = tmp_path / "logs" / "session.log"
     runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models", temp_dir=tmp_path / "temp")
 
-    app, window = gui.build_app(
-        ["pixelup", str(image)],
-        log_file=log_file,
-        runtime_dirs=runtime_dirs,
-    )
+    app, window = gui.build_app(["pixelup", str(image)], runtime_dirs=runtime_dirs)
     try:
         assert app is qapp  # reuses the running QApplication rather than constructing a second
         assert app.applicationName() == "PixelUp"
@@ -188,11 +182,7 @@ def test_build_app_assigns_runtime_icon_only_on_windows(
     monkeypatch.setattr(qapp, "setWindowIcon", assigned_icons.append)
     runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models", temp_dir=tmp_path / "temp")
 
-    _, window = gui.build_app(
-        ["pixelup"],
-        log_file=tmp_path / "logs" / "session.log",
-        runtime_dirs=runtime_dirs,
-    )
+    _, window = gui.build_app(["pixelup"], runtime_dirs=runtime_dirs)
     try:
         if expected_icon is None:
             assert assigned_icons == []
@@ -1455,8 +1445,7 @@ def test_window_seeds_the_panel_from_the_persisted_parameters(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(parameters=parameters)),
     )
-    log_file = tmp_path / "logs" / "session.log"
-    configure_session_logging(log_file)
+    log_file = configure_session_logging()
 
     window = MainWindow(log_file=log_file)
     try:
@@ -1552,8 +1541,7 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
         "pixelup.gui.warn_config_reset",
         lambda _parent: notices.append("shown"),
     )
-    log_file = tmp_path / "logs" / "session.log"
-    configure_session_logging(log_file)
+    log_file = configure_session_logging()
 
     window = MainWindow(log_file=log_file)
     try:

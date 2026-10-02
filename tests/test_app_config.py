@@ -274,8 +274,7 @@ def test_corrupt_config_lets_window_open(
         "pixelup.gui.warn_config_reset",
         lambda _parent: notices.append("shown"),
     )
-    log_file = home / "logs" / "session.log"
-    configure_session_logging(log_file)
+    log_file = configure_session_logging()
 
     window = MainWindow(log_file=log_file)
     try:

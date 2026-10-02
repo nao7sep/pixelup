@@ -121,7 +121,7 @@ class ModelInstallWorker(QObject):
             message = user_text(exc, internal_fallback=INSTALL_FAILED)
             self.finished.emit(self._operation_id, False, cancelled, message)
         except Exception:  # noqa: BLE001 - every worker outcome must settle.
-            log.exception("models.install_failed_unexpectedly")
+            log.exception("models.install_failed_unexpectedly", operation_id=self._operation_id)
             self.finished.emit(self._operation_id, False, False, INSTALL_FAILED)
         else:
             self.finished.emit(self._operation_id, True, False, None)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import sys
 import traceback
 from collections.abc import Mapping
@@ -15,10 +16,30 @@ from pixelup.timestamps import to_utc_iso_ms, utc_stamp_ms
 
 LOGGER_NAME = "pixelup"
 DEBUG_ENV = "PIXELUP_DEBUG"
+RECORDS_FILE_NAME = "records.sqlite3"
 
-# Keys a caller's structured field must never overwrite: the three-part envelope
-# plus `error`, which is reserved for the attached-exception payload.
-_RESERVED_FIELDS = frozenset({"time", "level", "message", "error"})
+# One row per log line. `session` is the launch's start time; `job_id` (a queue
+# job) and `operation_id` (a managed-model install) are numbered within their
+# session; `fields` is the JSON object of everything else the line carries.
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS logs (
+  id           INTEGER PRIMARY KEY,
+  session      TEXT NOT NULL,
+  time         TEXT NOT NULL,
+  level        TEXT NOT NULL,
+  message      TEXT NOT NULL,
+  job_id       INTEGER,
+  operation_id INTEGER,
+  fields       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session, id);
+"""
+_COLUMNS = frozenset({"time", "level", "message", "job_id", "operation_id"})
+
+# Keys a caller's structured field must never overwrite: the three-part envelope,
+# `error`, which is reserved for the attached-exception payload, and the two keys
+# a fallback line adds.
+_RESERVED_FIELDS = frozenset({"time", "level", "message", "error", "session", "records_error"})
 
 # stdlib level -> the four convention level names (WARNING renders as "warn").
 _LEVEL_NAMES = {
@@ -76,32 +97,108 @@ def _json_safe(value: Any) -> Any:
         return f"<unrenderable {type(value).__name__}>"
 
 
-class JsonlFormatter(logging.Formatter):
-    """Render each record as one compact JSON object: the convention envelope
-    (``time``, ``level``, ``message``) plus the caller's structured fields, plus
-    an ``error`` object carrying full exception fidelity when one is attached."""
+def _entry(record: logging.LogRecord) -> dict[str, Any]:
+    """The convention envelope (``time``, ``level``, ``message``) plus the caller's
+    structured fields, plus an ``error`` object carrying full exception fidelity
+    when one is attached."""
+    entry: dict[str, Any] = {
+        "time": to_utc_iso_ms(datetime.fromtimestamp(record.created, UTC)),
+        "level": _LEVEL_NAMES.get(record.levelno, record.levelname.lower()),
+        "message": record.getMessage(),
+    }
+    fields = getattr(record, "fields", None)
+    if isinstance(fields, Mapping):
+        for key, value in fields.items():
+            if key not in _RESERVED_FIELDS:
+                entry[key] = value
+    if record.exc_info:
+        error = _error_object(record.exc_info)
+        if error:
+            entry["error"] = error
+    return entry
 
-    def format(self, record: logging.LogRecord) -> str:
-        entry: dict[str, Any] = {
-            "time": to_utc_iso_ms(datetime.fromtimestamp(record.created, UTC)),
-            "level": _LEVEL_NAMES.get(record.levelno, record.levelname.lower()),
-            "message": record.getMessage(),
-        }
-        fields = getattr(record, "fields", None)
-        if isinstance(fields, Mapping):
-            for key, value in fields.items():
-                if key not in _RESERVED_FIELDS:
-                    entry[key] = value
-        if record.exc_info:
-            error = _error_object(record.exc_info)
-            if error:
-                entry["error"] = error
-        return _dumps(entry)
+
+def _open_records(database: Path) -> sqlite3.Connection:
+    database.parent.mkdir(parents=True, exist_ok=True)
+    # check_same_thread=False: job and download threads log too; logging.Handler
+    # holds its own lock around every emit, so the connection is never shared at
+    # once. The timeout bounds a write that waits on a second PixelUp instance.
+    connection = sqlite3.connect(
+        database, timeout=5.0, isolation_level=None, check_same_thread=False
+    )
+    try:
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = NORMAL")
+        connection.executescript(_SCHEMA)
+    except BaseException:
+        connection.close()
+        raise
+    return connection
+
+
+class RecordsHandler(logging.Handler):
+    """Writes each log line as one row of this launch's session in the records
+    database (logging-conventions, data-lifecycle-conventions)."""
+
+    def __init__(self, database: Path, *, session: str, fallback: Path) -> None:
+        super().__init__()
+        self._database = database
+        self._session = session
+        self._fallback = fallback
+        self._connection: sqlite3.Connection | None = None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        entry = _entry(record)
+        try:
+            self._insert(entry)
+        except Exception as exc:  # noqa: BLE001 - logging never crashes the app.
+            self._fall_back(entry, exc)
+
+    def _insert(self, entry: dict[str, Any]) -> None:
+        # not recorded: records.sqlite3 is a binary store written through SQLite,
+        # never the managed-text atomic-write path (data-backup-conventions).
+        if self._connection is None:
+            self._connection = _open_records(self._database)
+        fields = {key: value for key, value in entry.items() if key not in _COLUMNS}
+        self._connection.execute(
+            "INSERT INTO logs (session, time, level, message, job_id, operation_id, fields)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                self._session,
+                entry["time"],
+                entry["level"],
+                entry["message"],
+                entry.get("job_id"),
+                entry.get("operation_id"),
+                _dumps(fields),
+            ),
+        )
+
+    def _fall_back(self, entry: dict[str, Any], exc: Exception) -> None:
+        line = _dumps({**entry, "session": self._session, "records_error": repr(exc)}) + "\n"
+        # not recorded: the fallback file is append-mode, never the managed-text
+        # atomic-write path (data-backup-conventions).
+        try:
+            self._fallback.parent.mkdir(parents=True, exist_ok=True)
+            with self._fallback.open("a", encoding="utf-8") as stream:
+                stream.write(line)
+        except OSError:
+            sys.stderr.write(line)
+            sys.stderr.flush()
+
+    def close(self) -> None:
+        with self.lock:
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                finally:
+                    self._connection = None
+        super().close()
 
 
 class SessionLog:
     """The app-wide structured logger. Callers pass a short, stable ``message``
-    plus keyword fields; the handler serializes them as one JSON line. ``message``
+    plus keyword fields; the handler writes them as one record. ``message``
     is the greppable event identity, fields carry the data — never build a
     pre-formatted string."""
 
@@ -155,21 +252,14 @@ def debug_enabled(env: Mapping[str, str] | None = None) -> bool:
     return source.get(DEBUG_ENV, "").strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-def session_log_path(*, state_dir: Path | None = None, now: datetime | None = None) -> Path:
-    moment = now if now is not None else datetime.now(UTC)
-    stamp = utc_stamp_ms(moment)
-    root = resolve_state_dir(state_dir)
-    return root / "logs" / f"{stamp}.log"
+def configure_session_logging() -> Path:
+    """Start this launch's session and route the app logger to the records database.
 
-
-def configure_session_logging(log_path: Path | None = None) -> Path:
-    """Open this launch's session log and route the app logger to it.
-
-    Writes one JSON object per line. Debug is enabled only when PIXELUP_DEBUG is
-    set. If the log file cannot be opened, logging degrades to stderr rather than
-    failing the launch — best effort, surfaced, never silently swallowed.
+    Debug is enabled only when PIXELUP_DEBUG is set. Returns the database path.
     """
-    path = log_path or session_log_path()
+    started = datetime.now(UTC)
+    root = resolve_state_dir()
+    database = root / RECORDS_FILE_NAME
 
     logger = get_logger()
     for handler in list(logger.handlers):
@@ -178,42 +268,17 @@ def configure_session_logging(log_path: Path | None = None) -> Path:
 
     logger.setLevel(logging.DEBUG if debug_enabled() else logging.INFO)
     logger.propagate = False
-
-    handler = _build_file_handler(path)
-    degraded = handler is None
-    if handler is None:
-        handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(JsonlFormatter())
-    logger.addHandler(handler)
+    logger.addHandler(
+        RecordsHandler(
+            database,
+            session=to_utc_iso_ms(started),
+            fallback=root / "logs" / f"{utc_stamp_ms(started)}.log",
+        )
+    )
 
     _install_excepthook()
-    if degraded:
-        log.warning("log.file_unavailable", log_path=str(path), fallback="stderr")
-    else:
-        log.info("log.session_started", log_path=str(path), debug=debug_enabled())
-    return path
-
-
-def _build_file_handler(path: Path) -> logging.FileHandler | None:
-    # The file is a StreamHandler under the hood, so every record is flushed on
-    # emit — the convention's "flush warn/error/debug immediately" holds for free.
-    # Exclusive-create (mode "x"): the session filename is millisecond-paced, so
-    # a same-millisecond clash between two processes is vanishingly rare but not
-    # impossible. On that clash the second writer's open raises FileExistsError
-    # (an OSError) rather than silently interleaving into the first writer's
-    # file, and degrades to the console fallback below like any other open
-    # failure.
-    #
-    # not recorded: the session log is an append-mode file (logs/<stamp>.log),
-    # opened by this FileHandler and never written through the managed-text
-    # atomic-write choke point (write_managed_text). Append-mode logs are excluded
-    # from the text backup by construction — the mechanism never reaches the record
-    # hook — so no explicit rule is needed (data-backup-conventions).
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return logging.FileHandler(path, mode="x", encoding="utf-8")
-    except OSError:
-        return None
+    log.info("log.session_started", records=str(database), debug=debug_enabled())
+    return database
 
 
 # The interpreter's excepthook from before PixelUp first wrapped it. Captured

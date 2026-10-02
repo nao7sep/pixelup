@@ -30,8 +30,7 @@ def make_window(
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
-    log_file = tmp_path / "logs" / "session.log"
-    configure_session_logging(log_file)
+    log_file = configure_session_logging()
 
     created: list[MainWindow] = []
 
