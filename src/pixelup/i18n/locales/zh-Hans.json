@@ -253,7 +253,7 @@
   "settings.title": "设置",
   "settings.uiFont": "界面字体",
   "settings.uiFontCaption": "留空则使用系统界面字体；否则使用列出的第一个已安装字体。",
-  "settings.unsavedMessage": "要放弃你的更改吗？",
+  "settings.unsavedMessage": "要放弃更改吗？",
   "settings.unsavedTitle": "未保存的更改",
   "shortcuts.groupGeneral": "通用",
   "shortcuts.introduction": "这些快捷键在 PixelUp 的任何位置都可使用。",

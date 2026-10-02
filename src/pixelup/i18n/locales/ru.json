@@ -289,7 +289,7 @@
   "settings.title": "Настройки",
   "settings.uiFont": "Шрифт интерфейса",
   "settings.uiFontCaption": "Если оставить пустым, используется системный шрифт интерфейса. Иначе используется первый установленный шрифт.",
-  "settings.unsavedMessage": "Отменить ваши изменения?",
+  "settings.unsavedMessage": "Отменить изменения?",
   "settings.unsavedTitle": "Несохранённые изменения",
   "shortcuts.groupGeneral": "Общие",
   "shortcuts.introduction": "Эти сочетания клавиш работают в любом месте PixelUp.",
