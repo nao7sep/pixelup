@@ -13,6 +13,7 @@ from PySide6.QtCore import QEventLoop
 from PySide6.QtWidgets import QApplication, QStyleFactory
 
 from pixelup.backup_store import close_backup_store
+from pixelup.i18n.localizer import english
 from pixelup.model_management import MANAGED_ARTIFACT_NAMES
 from pixelup.model_manager import ModelManager
 from pixelup.session_log import LOGGER_NAME
@@ -130,6 +131,26 @@ def process_until(qapp: QApplication) -> ProcessUntil:
     return run
 
 
+class _InstallFailureLog(logging.Handler):
+    """Keeps the warnings and errors PixelUp logs while the heavy fixture installs.
+
+    The operation's own error is the reader's message ("download failed"); the
+    reason behind it, such as the network error, goes only to the app's log, which
+    is not configured under the fixture's throwaway data folder.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        line = f"{record.getMessage()} {getattr(record, 'fields', {})}"
+        if record.exc_info and record.exc_info[1] is not None:
+            error = record.exc_info[1]
+            line += f" {type(error).__name__}: {error}"
+        self.lines.append(line)
+
+
 @pytest.fixture(scope="session")
 def heavy_models_dir(
     request: pytest.FixtureRequest,
@@ -148,15 +169,28 @@ def heavy_models_dir(
         manager = ModelManager(models_dir)
         missing = manager.missing(MANAGED_ARTIFACT_NAMES)
         if missing:
-            operation_id = manager.install(missing, force=False)
-            assert operation_id is not None
-            process_until(
-                lambda: not manager.active_operations and manager.cleanup_for_quit(),
-                timeout_s=MODEL_INSTALL_TIMEOUT_S,
-                what="Installing the managed models",
+            failure_log = _InstallFailureLog()
+            logger = logging.getLogger(LOGGER_NAME)
+            logger.addHandler(failure_log)
+            try:
+                operation_id = manager.install(missing, force=False)
+                assert operation_id is not None
+                process_until(
+                    lambda: not manager.active_operations and manager.cleanup_for_quit(),
+                    timeout_s=MODEL_INSTALL_TIMEOUT_S,
+                    what="Installing the managed models",
+                )
+            finally:
+                logger.removeHandler(failure_log)
+            failures = [
+                english().of(operation.error)
+                for operation in manager.failed_operations
+                if operation.error is not None
+            ]
+            assert not manager.failed_operations, (
+                f"Installing the managed models failed: {failures}\n"
+                "PixelUp logged:\n" + "\n".join(failure_log.lines)
             )
-            failures = [operation.error for operation in manager.failed_operations]
-            assert not failures, f"Installing the managed models failed: {failures}"
         manager.deleteLater()
     return models_dir
 
