@@ -331,17 +331,17 @@ class MainWindow(QMainWindow):
 
     def __init__(self, *, log_file: Path, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
-        # A corrupt config.json quarantines-then-resets rather than crashing startup
-        # (storage-path conventions); the loader returns where the corrupt file went so
-        # the notice below can tell the user. It is surfaced only after the window is
-        # built, so the message box has a real parent.
+        # A corrupt config.json is quarantined and the app runs on the built-ins rather
+        # than crashing startup (store-recovery-conventions); the loader returns where
+        # the corrupt file went so the notice below can tell the user. It is surfaced
+        # only after the window is built, so the message box has a real parent.
         load_result = load_app_config_result()
         self.config = load_result.config
         self._config_quarantined_to = load_result.quarantined_to
         # Apply the configured UI font (family-only; the explicit size lives in
-        # fonts.py) before building the UI so every widget inherits it. A fresh
-        # install resolves the canonical default stack. setFont propagates app-
-        # wide, so this is the single place the UI font is established.
+        # fonts.py) before building the UI so every widget inherits it. The blank
+        # built-in resolves to the system UI font. setFont propagates app-wide, so
+        # this is the single place the UI font is established.
         apply_ui_font(QApplication.instance(), self.config.font_family)
         self.log_file = log_file
         self._reveal_thread: QThread | None = None
@@ -406,8 +406,8 @@ class MainWindow(QMainWindow):
         )
         self._restore_window_geometry()
         # The panel opens on what the user last left it at, not on a defaults layer:
-        # config.parameters is the persisted panel, and on a fresh install the loader
-        # has already filled it with JobSettings() — the built-ins.
+        # config.parameters is the persisted panel, and with no stored set it is
+        # JobSettings() — the built-ins.
         self._apply_job_settings(self.config.parameters)
         self._update_selected_image()
         self._update_action_buttons()
@@ -431,7 +431,7 @@ class MainWindow(QMainWindow):
             # Deferred to the event loop so the notice appears over the shown window
             # (build_app calls window.show() after __init__ returns) instead of
             # blocking construction ahead of the first paint. Non-fatal: the app is
-            # already running on freshly reset defaults; this only tells the user.
+            # already running on the built-ins; this only tells the user.
             QTimer.singleShot(0, self._notify_config_reset)
 
     def _retranslate(self) -> None:
@@ -1396,8 +1396,8 @@ class MainWindow(QMainWindow):
     def _apply_job_settings(self, settings: JobSettings) -> None:
         # Checking one button of an exclusive group unchecks the other, so the matching
         # button is all that is set. An out-of-domain scale falls back to the built-in
-        # rather than raising: the loader already coerces against SCALE_VALUES, so this
-        # only guards a programmatic caller.
+        # rather than raising: the loader already rejects a scale outside SCALE_VALUES,
+        # so this only guards a programmatic caller.
         self.scale_buttons.get(settings.scale, self.scale_buttons[DEFAULT_SCALE]).setChecked(True)
         self.denoise_strength.setValue(settings.denoise_strength)
         self.alpha_mode.setCurrentIndex(self.alpha_mode.findData(settings.alpha_mode))
@@ -1436,7 +1436,7 @@ class MainWindow(QMainWindow):
         preference. This never touches an already-queued job: a job snapshots the panel
         through current_job_settings() at the moment it is created (see _enqueue_jobs),
         and holds its own frozen JobSettings from then on. Saving is a no-op when the
-        panel already matches what is on disk, which is what makes it safe to call from
+        panel already matches the saved config, which is what makes it safe to call from
         the startup apply, from close, and from the settings dialog.
         """
         parameters = self.current_job_settings()

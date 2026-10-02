@@ -1,6 +1,6 @@
 import json
 import threading
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
@@ -104,7 +104,7 @@ def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
     save_app_config_merged(candidate, AppConfig(), path)
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert set(stored) == {"parameters"}
-    assert len(stored["parameters"]) == 9
+    assert set(stored["parameters"]) == {item.name for item in fields(JobSettings)}
     assert load_app_config(path) == candidate
 
 
@@ -203,16 +203,16 @@ def test_load_app_config_ignores_unusable_font_family(tmp_path: Path) -> None:
     assert path.exists()
 
 
-def test_corrupt_config_is_quarantined_then_reset(tmp_path: Path) -> None:
+def test_corrupt_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) -> None:
     # A present-but-corrupt config.json must never crash startup: the load path
-    # quarantines the unreadable file aside (bytes preserved) and resets to defaults,
-    # rather than raising or silently discarding the original (storage-path conventions).
+    # quarantines the unreadable file aside (bytes preserved) and runs on the built-ins,
+    # rather than raising or silently discarding the original (store-recovery-conventions).
     path = tmp_path / "config.json"
     path.write_text("{ this is not valid json", encoding="utf-8")
 
     result = load_app_config_result(path)
 
-    # Defaults were loaded, so the app can proceed on a fresh, valid config.
+    # The built-ins were loaded, so the app can proceed.
     assert result.config == AppConfig()
     # The corrupt original was quarantined, not discarded: a <stem>-<ms-utc>.invalid
     # sibling now holds the exact original bytes, and config.json itself no longer does.
@@ -227,9 +227,9 @@ def test_corrupt_config_is_quarantined_then_reset(tmp_path: Path) -> None:
     assert load_app_config(path) == AppConfig()
 
 
-def test_non_object_config_is_quarantined_then_reset(tmp_path: Path) -> None:
+def test_non_object_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) -> None:
     # A syntactically valid but wrong-shaped config (a JSON array, not an object) is
-    # corrupt just the same: quarantined-then-reset, never raised.
+    # corrupt just the same: quarantined, never raised.
     path = tmp_path / "config.json"
     path.write_text("[]\n", encoding="utf-8")
 
@@ -255,8 +255,8 @@ def test_corrupt_config_lets_window_open(
 ) -> None:
     # End-to-end pin: a corrupt config.json under a redirected PIXELUP_DATA_DIR must let
     # MainWindow construct (the frozen-app failure the finding is about was the window
-    # never opening), running on freshly reset defaults and surfacing the reset to the
-    # user rather than crashing.
+    # never opening), running on the built-ins and telling the user rather than
+    # crashing.
     from PySide6.QtWidgets import QApplication
 
     from pixelup.gui import MainWindow
@@ -282,7 +282,7 @@ def test_corrupt_config_lets_window_open(
         # The window opened on defaults instead of crashing on the corrupt file.
         assert window.config == AppConfig()
         assert window._config_quarantined_to is not None
-        # The corrupt original was quarantined next to the (now reset) config.json.
+        # The corrupt original was quarantined next to where config.json was.
         assert window._config_quarantined_to.suffix == ".invalid"
         assert window._config_quarantined_to.read_text(encoding="utf-8") == "{ broken"
         assert not (home / "config.json").exists()
@@ -316,7 +316,7 @@ def _write(path: Path, **parameters: object) -> None:
     path.write_text(json.dumps({"parameters": _parameter_map(**parameters)}), encoding="utf-8")
 
 
-def test_invalid_utf8_config_is_quarantined_then_reset(tmp_path: Path) -> None:
+def test_invalid_utf8_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     original = b'{"font_family": "\xff"}'
     path.write_bytes(original)

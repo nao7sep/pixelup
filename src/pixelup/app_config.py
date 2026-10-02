@@ -63,7 +63,8 @@ MAX_CONCURRENT_JOBS = 8
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
-    """Effective settings; only changed sets are persisted in ``config.json``.
+    """Effective settings; ``config.json`` holds only the sets that differ from their
+    built-ins, each whole (config-sets-conventions).
 
     Two kinds of thing, one home each. The scalars are the Settings modal's whole
     content — what the main window does not show. ``parameters`` is the main

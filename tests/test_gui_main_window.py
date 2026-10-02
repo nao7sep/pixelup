@@ -56,9 +56,8 @@ def make_window(
 ):
     # No real scheduling (no threads / inference), and a clean in-memory config
     # rather than the developer's real ~/.pixelup/config.json. PIXELUP_DATA_DIR is
-    # redirected as well as the load stubbed, because the window now *writes*:
-    # The Parameters panel's save resolves config.json
-    # through the storage root, and neither may land in the real one.
+    # redirected as well as the load stubbed, because the Parameters panel's save
+    # resolves config.json through the storage root and must not land in the real one.
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))

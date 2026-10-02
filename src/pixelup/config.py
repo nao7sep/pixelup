@@ -201,8 +201,8 @@ def quarantine_corrupt_file(path: Path) -> Path:
     The one place PixelUp quarantines an unreadable managed file. The storage-path
     conventions forbid silently discarding a corrupt managed file: the load path may
     only halt or *quarantine-then-reset*, and either way the original bytes are
-    preserved. This is that quarantine step, used by the ``config.json`` load path
-    when it resets a corrupt file to defaults.
+    preserved. This is that quarantine step, used by the ``config.json`` load path,
+    which then runs on the built-ins in memory and writes no replacement file.
 
     The quarantine name follows the derived-filename grammar
     ``<stem>-<discriminator>.<role-extension>``: the discriminator is a millisecond
@@ -219,9 +219,7 @@ def quarantine_corrupt_file(path: Path) -> Path:
         target = path.with_name(f"{path.stem}-{utc_now_stamp_ms()}-{nanoid()}.invalid")
     # not recorded: this is a move-aside of an already-unreadable managed file, not a
     # managed-text write — no new content is produced here, and the corrupt bytes are
-    # not a version to preserve in the history (the store never captured them, so
-    # there is nothing to add). The subsequent fresh save through write_managed_text
-    # is what records the recovered-to-defaults content (data-backup-conventions).
+    # not a version to preserve in the history (data-backup-conventions).
     os.replace(path, target)
     return target
 
