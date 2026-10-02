@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, fields, replace
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_man
 from pixelup.devices import DEVICE_VALUES
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY
-from pixelup.i18n.languages import SYSTEM, TAGS
+from pixelup.i18n.languages import SYSTEM, is_preference
 from pixelup.jobs import (
     JobSettings,
     job_settings_log_payload,
@@ -77,10 +78,6 @@ class AppConfig:
     # (localization-conventions).
     language: str = SYSTEM
     parameters: JobSettings = field(default_factory=JobSettings)
-
-
-_CONFIG_SET_KEYS = tuple(item.name for item in fields(AppConfig))
-_warned_invalid_sets: set[tuple[Path, str]] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +172,7 @@ def save_app_config_merged(
             _decode_app_config(stored, path),
             **{
                 key: getattr(candidate, key)
-                for key in _CONFIG_SET_KEYS
+                for key in _SET_DECODERS
                 if getattr(candidate, key) != getattr(previous, key)
             },
         )
@@ -198,73 +195,64 @@ def _stored_sets(config: AppConfig) -> dict[str, Any]:
 
 
 def _decode_app_config(data: dict[str, Any], path: Path) -> AppConfig:
-    defaults = AppConfig()
     decoded: dict[str, Any] = {}
-    for key in _CONFIG_SET_KEYS:
+    for key, decode in _SET_DECODERS.items():
         if key not in data:
             continue
         try:
-            decoded[key] = _decode_set(key, data[key], defaults)
+            decoded[key] = decode(data[key])
         except ValueError as exc:
-            warning_key = (path, key)
-            if warning_key not in _warned_invalid_sets:
-                _warned_invalid_sets.add(warning_key)
-                log.warning("config.invalid_set", path=str(path), key=key, reason=str(exc))
+            log.warning("config.invalid_set", path=str(path), key=key, reason=str(exc))
     return AppConfig(**decoded)
 
 
-def _decode_set(key: str, value: Any, defaults: AppConfig) -> Any:
-    if key == "parameters":
-        return _decode_parameters(value)
-    if key == "font_family":
-        if not isinstance(value, str):
-            raise ValueError("font_family is not a string")
-        return single_line(value)
-    if key == "language":
-        return _optional_choice({key: value}, key, defaults.language, (SYSTEM, *TAGS))
-    return _optional_int_range(
-        {key: value}, key, defaults.max_concurrent_jobs, MIN_CONCURRENT_JOBS, MAX_CONCURRENT_JOBS
-    )
+def _decode_font_family(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("font_family is not a string")
+    return single_line(value)
+
+
+def _decode_language(value: Any) -> str:
+    if not is_preference(value):
+        raise ValueError("language is not a recognized preference")
+    return value
+
+
+def _decode_max_concurrent_jobs(value: Any) -> int:
+    return _int_range(value, "max_concurrent_jobs", MIN_CONCURRENT_JOBS, MAX_CONCURRENT_JOBS)
 
 
 def _decode_parameters(value: Any) -> JobSettings:
     data = _object(value, "parameters")
-    defaults = JobSettings()
-    if not _parameters_to_json(defaults).keys() <= data.keys():
+    if not _parameters_to_json(JobSettings()).keys() <= data.keys():
         raise ValueError("parameters is missing a member")
-    output_format = _optional_choice(
-        data,
-        "output_format",
-        defaults.output_format.value,
-        tuple(item.value for item in OutputFormat),
+    output_format = _choice(
+        data["output_format"], "output_format", tuple(item.value for item in OutputFormat)
     )
     return JobSettings(
-        scale=_optional_int_choice(data, "scale", defaults.scale, SCALE_VALUES),
-        denoise_strength=_optional_float_range(
-            data,
+        scale=_int_choice(data["scale"], "scale", SCALE_VALUES),
+        denoise_strength=_float_range(
+            data["denoise_strength"],
             "denoise_strength",
-            defaults.denoise_strength,
             MIN_DENOISE_STRENGTH,
             MAX_DENOISE_STRENGTH,
         ),
-        alpha_mode=_optional_choice(
-            data, "alpha_mode", defaults.alpha_mode, ALPHA_MODE_VALUES
-        ),
-        device=_optional_choice(data, "device", defaults.device, DEVICE_VALUES),
+        alpha_mode=_choice(data["alpha_mode"], "alpha_mode", ALPHA_MODE_VALUES),
+        device=_choice(data["device"], "device", DEVICE_VALUES),
         output_format=OutputFormat(output_format),
-        quality=_optional_int_range(
-            data, "quality", defaults.quality, MIN_QUALITY, MAX_QUALITY
-        ),
-        tile=_optional_int_choice(data, "tile", defaults.tile, TILE_VALUES),
-        strip_metadata=_optional_bool(data, "strip_metadata", defaults.strip_metadata),
-        target_profile=_optional_choice(
-            data,
-            "target_profile",
-            defaults.target_profile,
-            TARGET_PROFILE_VALUES,
-            allow_none=True,
-        ),
+        quality=_int_range(data["quality"], "quality", MIN_QUALITY, MAX_QUALITY),
+        tile=_int_choice(data["tile"], "tile", TILE_VALUES),
+        strip_metadata=_bool(data["strip_metadata"], "strip_metadata"),
+        target_profile=_choice(data["target_profile"], "target_profile", TARGET_PROFILE_VALUES),
     )
+
+
+_SET_DECODERS: dict[str, Callable[[Any], Any]] = {
+    "font_family": _decode_font_family,
+    "language": _decode_language,
+    "max_concurrent_jobs": _decode_max_concurrent_jobs,
+    "parameters": _decode_parameters,
+}
 
 
 def _object(value: Any, name: str) -> dict[str, Any]:
@@ -273,67 +261,37 @@ def _object(value: Any, name: str) -> dict[str, Any]:
     return value
 
 
-def _optional_bool(data: dict[str, Any], key: str, default: bool) -> bool:
-    if key not in data:
-        return default
-    value = data[key]
+def _bool(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f"{key} is not a boolean")
+        raise ValueError(f"{name} is not a boolean")
     return value
 
 
-def _optional_int_range(
-    data: dict[str, Any], key: str, default: int, low: int, high: int
-) -> int:
-    if key not in data:
-        return default
-    value = data[key]
+def _int_range(value: Any, name: str, low: int, high: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
-        raise ValueError(f"{key} is outside its valid integer range")
+        raise ValueError(f"{name} is outside its valid integer range")
     return value
 
 
-def _optional_float_range(
-    data: dict[str, Any], key: str, default: float, low: float, high: float
-) -> float:
-    if key not in data:
-        return default
-    value = data[key]
+def _float_range(value: Any, name: str, low: float, high: float) -> float:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
         or not low <= value <= high
     ):
-        raise ValueError(f"{key} is outside its valid numeric range")
+        raise ValueError(f"{name} is outside its valid numeric range")
     return float(value)
 
 
-def _optional_int_choice(
-    data: dict[str, Any], key: str, default: int, choices: tuple[int, ...]
-) -> int:
-    if key not in data:
-        return default
-    value = data[key]
+def _int_choice(value: Any, name: str, choices: tuple[int, ...]) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value not in choices:
-        raise ValueError(f"{key} is not a recognized integer choice")
+        raise ValueError(f"{name} is not a recognized integer choice")
     return value
 
 
-def _optional_choice(
-    data: dict[str, Any],
-    key: str,
-    default: Any,
-    choices: tuple[Any, ...],
-    *,
-    allow_none: bool = False,
-) -> Any:
-    if key not in data:
-        return default
-    value = data[key]
-    if value is None and allow_none and None in choices:
-        return None
-    if not isinstance(value, str) or value not in choices:
-        raise ValueError(f"{key} is not a recognized string choice")
+def _choice(value: Any, name: str, choices: tuple[str | None, ...]) -> Any:
+    if not (value is None or isinstance(value, str)) or value not in choices:
+        raise ValueError(f"{name} is not a recognized string choice")
     return value
 
 

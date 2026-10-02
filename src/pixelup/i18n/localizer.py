@@ -74,7 +74,7 @@ def english() -> Translator:
     return Translator(languages.ENGLISH, QLocale(languages.ENGLISH))
 
 
-def use(preference: object, computer_languages: Iterable[str] | None = None) -> None:
+def use(preference: str, computer_languages: Iterable[str] | None = None) -> None:
     """Speak ``preference`` from now on.
 
     ``computer_languages`` is the computer's own list, in order, which decides what
@@ -84,7 +84,7 @@ def use(preference: object, computer_languages: Iterable[str] | None = None) -> 
     global _preference, _computer_languages
     if computer_languages is not None:
         _computer_languages = tuple(computer_languages)
-    _preference = languages.normalize_preference(preference)
+    _preference = preference
     tag = languages.resolve(_preference, _computer_languages)
     if tag != _translator.tag:
         _switch(tag)

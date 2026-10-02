@@ -355,6 +355,8 @@ def test_config_read_oserror_propagates_without_touching_the_store(
         {"max_concurrent_jobs": 99},
         {"max_concurrent_jobs": "4"},
         {"max_concurrent_jobs": True},
+        {"language": "JA"},
+        {"language": 7},
         {"parameters": "nope"},
         {"parameters": _parameter_map(strip_metadata="false")},
         {"parameters": _parameter_map(quality=250)},
@@ -385,7 +387,6 @@ def test_present_malformed_set_falls_back_without_costing_other_sets(
     assert result.config == AppConfig(font_family="Menlo")
     assert result.quarantined_to is None
     assert path.read_bytes() == original
-    load_app_config(path)
     warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
     assert len(warnings) == 1
     assert warnings[0].fields["key"] == next(iter(data))
@@ -575,7 +576,7 @@ def test_config_log_payload_shape() -> None:
     }
 
 
-def test_partial_parameters_are_absent_as_a_whole_and_warn_once(
+def test_partial_parameters_read_as_the_built_in_with_a_warning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     path = tmp_path / "config.json"
@@ -583,7 +584,6 @@ def test_partial_parameters_are_absent_as_a_whole_and_warn_once(
     result = load_app_config_result(path)
     assert result.config == AppConfig(language="ja")
     assert result.quarantined_to is None
-    load_app_config(path)
     warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
     assert len(warnings) == 1
     assert warnings[0].fields["key"] == "parameters"

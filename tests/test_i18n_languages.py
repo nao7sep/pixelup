@@ -25,21 +25,23 @@ def test_names_are_each_language_in_its_own_words() -> None:
 
 
 @pytest.mark.parametrize(
-    ("saved", "expected"),
+    ("value", "expected"),
     [
-        (None, "system"),
-        ("", "system"),
-        ("  ", "system"),
-        (7, "system"),
-        ("SYSTEM", "system"),
-        ("klingon", "system"),
-        ("ja", "ja"),
-        ("PT-br", "pt-BR"),
-        (" zh-hans ", "zh-Hans"),
+        ("system", True),
+        ("ja", True),
+        ("pt-BR", True),
+        ("zh-Hans", True),
+        (None, False),
+        ("", False),
+        (7, False),
+        ("SYSTEM", False),
+        ("PT-br", False),
+        (" zh-Hans ", False),
+        ("klingon", False),
     ],
 )
-def test_a_saved_preference_is_a_tag_or_system(saved: object, expected: str) -> None:
-    assert languages.normalize_preference(saved) == expected
+def test_a_preference_is_system_or_a_tag_exactly(value: object, expected: bool) -> None:
+    assert languages.is_preference(value) is expected
 
 
 @pytest.mark.parametrize(
@@ -172,6 +174,8 @@ def test_the_saved_language_is_read_straight_from_config_json(
     assert bootstrap.saved_preference() == "system"
     (tmp_path / "config.json").write_text(json.dumps({"language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "it"
+    (tmp_path / "config.json").write_text(json.dumps({"language": "IT"}), encoding="utf-8")
+    assert bootstrap.saved_preference() == "system"
     (tmp_path / "config.json").write_text("{not json", encoding="utf-8")
     assert bootstrap.saved_preference() == "system"
 

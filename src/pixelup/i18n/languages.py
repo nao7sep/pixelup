@@ -53,27 +53,14 @@ def name_of(tag: str) -> str:
     return dict(LANGUAGES).get(tag, tag)
 
 
-def normalize_preference(saved: object) -> str:
-    """A saved preference as the app acts on it: a tag in the set, or System.
-
-    A missing, blank or unrecognized value means System, so a hand-edited file can
-    never leave the app without a language.
-    """
-    if not isinstance(saved, str) or not saved.strip():
-        return SYSTEM
-    text = saved.strip()
-    if text.casefold() == SYSTEM:
-        return SYSTEM
-    for tag in TAGS:
-        if tag.casefold() == text.casefold():
-            return tag
-    return SYSTEM
+def is_preference(value: object) -> bool:
+    """Whether ``value`` is a preference Settings offers: System or a tag in the set."""
+    return isinstance(value, str) and value in (SYSTEM, *TAGS)
 
 
-def resolve(preference: object, computer_languages: Iterable[str]) -> str:
+def resolve(preference: str, computer_languages: Iterable[str]) -> str:
     """The language a preference resolves to, given the computer's languages in order."""
-    normalized = normalize_preference(preference)
-    return match(computer_languages) if normalized == SYSTEM else normalized
+    return match(computer_languages) if preference == SYSTEM else preference
 
 
 def match(computer_languages: Iterable[str]) -> str:
