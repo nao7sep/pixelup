@@ -9,23 +9,14 @@ from pixelup.fonts import (
     DEFAULT_UI_FONT_SIZE,
     apply_ui_font,
     build_ui_font,
-    normalize_font_family,
     parse_font_families,
     resolve_ui_font_family,
 )
+from pixelup.text_cleanup import single_line
 
 
-def test_normalize_font_family_trims_and_keeps_value() -> None:
-    assert normalize_font_family("  Arial  ", DEFAULT_UI_FONT_FAMILY) == "Arial"
-
-
-def test_normalize_font_family_uses_blank_for_the_builtin_default() -> None:
-    assert normalize_font_family("", DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
-    assert normalize_font_family("   ", DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
-    assert normalize_font_family(None, DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
-    assert normalize_font_family(42, DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
-    legacy = "Helvetica Neue, Segoe UI, Roboto, Arial"
-    assert normalize_font_family(legacy) == legacy
+def test_built_in_font_family_is_kept_cleaned() -> None:
+    assert single_line(DEFAULT_UI_FONT_FAMILY) == DEFAULT_UI_FONT_FAMILY
 
 
 def test_parse_font_families_splits_strips_quotes_and_drops_empties() -> None:

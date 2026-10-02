@@ -373,7 +373,6 @@ class MainWindow(QMainWindow):
         # Coalesces the Parameters panel's edits into one save (see
         # _PARAMETERS_SAVE_DELAY_MS). Built before the UI, because building the panel
         # connects the widget-change signals that start it.
-        self._parameters_reset_pending = False
         self._parameters_save_timer = QTimer(self)
         self._parameters_save_timer.setSingleShot(True)
         self._parameters_save_timer.setInterval(_PARAMETERS_SAVE_DELAY_MS)
@@ -1415,7 +1414,6 @@ class MainWindow(QMainWindow):
         self._update_reset_button()
 
     def _parameters_edited(self) -> None:
-        self._parameters_reset_pending = False
         self._parameters_save_timer.start()
         self._update_reset_button()
 
@@ -1439,17 +1437,12 @@ class MainWindow(QMainWindow):
         the startup apply, from close, and from the settings dialog.
         """
         parameters = self.current_job_settings()
-        if parameters == self.config.parameters and not self._parameters_reset_pending:
+        if parameters == self.config.parameters:
             self.parameters_result.clear_result()
             return True
         candidate = replace(self.config, parameters=parameters)
-        if not self._save_config_candidate(
-            candidate,
-            surface_failure=surface_failure,
-            reset_parameters=self._parameters_reset_pending,
-        ):
+        if not self._save_config_candidate(candidate, surface_failure=surface_failure):
             return False
-        self._parameters_reset_pending = False
         log.info(
             "parameters.saved",
             path=str(config_path()),
@@ -1463,16 +1456,12 @@ class MainWindow(QMainWindow):
         candidate: AppConfig,
         *,
         surface_failure: bool = True,
-        reset_parameters: bool = False,
     ) -> bool:
         try:
             # previous=self.config: only the fields this candidate actually changed
-            # from it are written, so a sibling PixelUp window's own saved change to
+            # from it are applied, so a sibling PixelUp window's own saved change to
             # some other field is never clobbered (PU-3).
-            if reset_parameters:
-                merged = save_app_config_merged(candidate, self.config, reset_parameters=True)
-            else:
-                merged = save_app_config_merged(candidate, self.config)
+            merged = save_app_config_merged(candidate, self.config)
         except Exception as exc:  # noqa: BLE001 - persistence failure must remain in the UI.
             log.warning(
                 "config.save_failed",
@@ -1489,16 +1478,13 @@ class MainWindow(QMainWindow):
         return True
 
     def _reset_parameters_to_defaults(self) -> None:
-        """Restore the panel to PixelUp's built-in parameters.
+        """Restore the panel to PixelUp's built-in parameters and save it like any edit.
 
         ``JobSettings()`` is the built-ins, and the only source of them — not the
         user's persisted config, which is what the reset exists to get *away* from.
-        Delete the stored set through the same locked save path. Keep that intent
-        if saving fails, so the next retry still deletes rather than copying defaults.
         """
         defaults = JobSettings()
         self._apply_job_settings(defaults)
-        self._parameters_reset_pending = True
         log.info("parameters.reset", defaults=job_settings_log_payload(defaults))
         self._flush_parameters_save()
 

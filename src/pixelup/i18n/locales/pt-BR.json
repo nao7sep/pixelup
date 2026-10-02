@@ -272,7 +272,6 @@
   "settings.title": "Configurações",
   "settings.uiFont": "Fonte da interface",
   "settings.uiFontCaption": "Em branco, usa a fonte de interface do sistema. Caso contrário, usa a primeira fonte instalada.",
-  "settings.uiFontPlaceholder": "Padrão do sistema",
   "shortcuts.groupGeneral": "Geral",
   "shortcuts.introduction": "Estes atalhos funcionam em qualquer lugar do PixelUp.",
   "shortcuts.openSettings": "Abrir configurações",

@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig, save_app_config_merged
+from pixelup.fonts import system_ui_font_family
 from pixelup.jobs import JobSettings
 from pixelup.settings_dialog import SettingsDialog
 
@@ -86,20 +87,20 @@ def test_font_family_field_reflects_config(qapp: QApplication) -> None:
 def test_font_family_change_marks_dirty_and_normalizes(qapp: QApplication) -> None:
     dialog = SettingsDialog(AppConfig())
     try:
-        dialog.font_family.setText("  Menlo  ")
+        dialog.font_family.setText("  Menlo,\n Arial  ")
         assert dialog.is_dirty() is True
         assert dialog.ok_button.isEnabled() is True
-        assert dialog.config().font_family == "Menlo"
+        assert dialog.config().font_family == "Menlo, Arial"
     finally:
         dialog.deleteLater()
 
 
 def test_blank_font_family_is_the_builtin_default(qapp: QApplication) -> None:
-    dialog = SettingsDialog(AppConfig())
+    dialog = SettingsDialog(AppConfig(font_family="Menlo"))
     try:
-        dialog.font_family.setText("")
+        dialog.font_family.setText("   ")
         assert dialog.config().font_family == AppConfig().font_family
-        assert dialog.font_family.placeholderText() == "Platform default"
+        assert dialog.font_family.placeholderText() == system_ui_font_family()
     finally:
         dialog.deleteLater()
 
@@ -231,13 +232,3 @@ def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: P
     finally:
         dialog.deleteLater()
 
-
-def test_untouched_saved_font_text_does_not_become_a_dialog_edit(qapp: QApplication) -> None:
-    initial = AppConfig(font_family="  Arial  ")
-    dialog = SettingsDialog(initial)
-    try:
-        assert dialog.is_dirty() is False
-        dialog.concurrent.setValue(4)
-        assert dialog.config().font_family == initial.font_family
-    finally:
-        dialog.deleteLater()

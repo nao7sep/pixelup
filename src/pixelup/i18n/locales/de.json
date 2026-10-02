@@ -260,7 +260,6 @@
   "settings.title": "Einstellungen",
   "settings.uiFont": "Oberflächenschrift",
   "settings.uiFontCaption": "Leer verwendet die Systemschrift der Oberfläche. Sonst wird die erste installierte Schrift verwendet.",
-  "settings.uiFontPlaceholder": "Systemstandard",
   "shortcuts.groupGeneral": "Allgemein",
   "shortcuts.introduction": "Diese Tastenkürzel funktionieren überall in PixelUp.",
   "shortcuts.openSettings": "Einstellungen öffnen",

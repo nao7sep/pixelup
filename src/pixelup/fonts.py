@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QFont
@@ -16,22 +16,6 @@ DEFAULT_UI_FONT_FAMILY = ""
 # base; point sizing would convert through platform DPI and make the Windows UI
 # substantially larger.
 DEFAULT_UI_FONT_SIZE = 13
-
-
-def normalize_font_family(value: Any, default: str = DEFAULT_UI_FONT_FAMILY) -> str:
-    """Normalize an entered family string.
-
-    The stored value is free text (possibly a comma-separated stack). This only
-    trims it and substitutes the user-facing default when it is missing or empty;
-    it does not touch the font database. Matching an entered family to an
-    installed one happens later, at apply time, in resolve_ui_font_family.
-    """
-    if not isinstance(value, str):
-        return default
-    text = value.strip()
-    if not text:
-        return default
-    return text
 
 
 def parse_font_families(value: str) -> list[str]:
@@ -60,6 +44,13 @@ def resolve_ui_font_family(value: str) -> str | None:
     return None
 
 
+def system_ui_font_family() -> str:
+    """The operating system's own UI family: Qt's general system font."""
+    from PySide6.QtGui import QFontDatabase
+
+    return QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+
+
 def build_ui_font(value: str) -> QFont:
     """Build the UI font from a family string at the fixed UI size.
 
@@ -69,12 +60,12 @@ def build_ui_font(value: str) -> QFont:
     the app-chrome-conventions. The size is always the explicit
     DEFAULT_UI_FONT_SIZE.
     """
-    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtGui import QFont
 
     font = QFont()
     family = resolve_ui_font_family(value)
     if family is None:
-        family = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+        family = system_ui_font_family()
     if family:
         font.setFamily(family)
     font.setPixelSize(DEFAULT_UI_FONT_SIZE)

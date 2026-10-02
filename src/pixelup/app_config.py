@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,7 @@ from pixelup.parameters import (
 )
 from pixelup.paths import OutputFormat
 from pixelup.session_log import log
+from pixelup.text_cleanup import single_line
 
 
 def config_path() -> Path:
@@ -140,8 +141,6 @@ def save_app_config_merged(
     candidate: AppConfig,
     previous: AppConfig,
     path: Path | None = None,
-    *,
-    reset_parameters: bool = False,
 ) -> AppConfig:
     """Save an edit to ``config.json`` without discarding a sibling window's own edit.
 
@@ -152,11 +151,12 @@ def save_app_config_merged(
     ``previous``'s stale copy of it. This takes a short-lived cross-process
     :class:`filelock.FileLock` on ``config.json`` — the same tolerated-two-instance
     pattern :mod:`pixelup.models`, :mod:`pixelup.output_reservation`, and
-    :mod:`pixelup.backup_store` already use for their own shared files — re-reads the
+    :mod:`pixelup.backup_store` already use for their own shared files — reads the
     file fresh under the lock, applies onto *that* only the fields ``candidate``
-    actually changed relative to ``previous``, and saves the result. The returned
-    ``AppConfig`` becomes the caller's new in-memory copy, so it also picks up
-    whatever the other window wrote to fields this edit did not touch.
+    actually changed relative to ``previous``, and writes the file from the result
+    (config-sets-conventions). The returned ``AppConfig`` becomes the caller's new
+    in-memory copy, so it also picks up whatever the other window wrote to fields
+    this edit did not touch.
     """
     if path is None:
         path = config_path()
@@ -171,24 +171,30 @@ def save_app_config_merged(
         ) from exc
     try:
         stored, _quarantined_to = _read_config_map(path)
-        updates = {
-            key: value
-            for key, value in _to_json(candidate).items()
-            if getattr(candidate, key) != getattr(previous, key)
-        }
-        if reset_parameters:
-            updates.pop("parameters", None)
-        data = {key: value for key, value in stored.items() if key in _CONFIG_SET_KEYS}
-        data.update(updates)
-        if reset_parameters:
-            data.pop("parameters", None)
-        # No edit means no write, even if unknown keys could be dropped. An
-        # explicit reset still deletes a stored copy equal to today's built-in.
-        if (updates or reset_parameters) and data != stored:
+        merged = replace(
+            _decode_app_config(stored, path),
+            **{
+                key: getattr(candidate, key)
+                for key in _CONFIG_SET_KEYS
+                if getattr(candidate, key) != getattr(previous, key)
+            },
+        )
+        data = _stored_sets(merged)
+        if data != stored:
             write_managed_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
-        return _decode_app_config(data, path)
+        return merged
     finally:
         lock.release()
+
+
+def _stored_sets(config: AppConfig) -> dict[str, Any]:
+    """Every set that differs from its built-in, whole (config-sets-conventions)."""
+    defaults = AppConfig()
+    return {
+        key: value
+        for key, value in _to_json(config).items()
+        if getattr(config, key) != getattr(defaults, key)
+    }
 
 
 def _decode_app_config(data: dict[str, Any], path: Path) -> AppConfig:
@@ -213,7 +219,7 @@ def _decode_set(key: str, value: Any, defaults: AppConfig) -> Any:
     if key == "font_family":
         if not isinstance(value, str):
             raise ValueError("font_family is not a string")
-        return value
+        return single_line(value)
     if key == "language":
         return _optional_choice({key: value}, key, defaults.language, (SYSTEM, *TAGS))
     return _optional_int_range(

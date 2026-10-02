@@ -248,7 +248,6 @@
   "settings.title": "設定",
   "settings.uiFont": "UI フォント",
   "settings.uiFontCaption": "空欄の場合はシステムの UI フォントを使います。それ以外は、インストールされている最初のフォントを使います。",
-  "settings.uiFontPlaceholder": "システムのデフォルト",
   "shortcuts.groupGeneral": "一般",
   "shortcuts.introduction": "これらのショートカットは PixelUp のどこでも使えます。",
   "shortcuts.openSettings": "設定を開く",

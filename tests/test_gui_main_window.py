@@ -1582,7 +1582,7 @@ def test_fresh_launch_and_close_do_not_create_config(make_window) -> None:
     assert not config_path().exists()
 
 
-def test_failed_reset_retries_deletion_instead_of_saving_built_ins(
+def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
     make_window, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     window = make_window()
@@ -1591,13 +1591,13 @@ def test_failed_reset_retries_deletion_instead_of_saving_built_ins(
     original = window.config
     saved = config_path().read_bytes()
     real_save = gui.save_app_config_merged
-    attempts: list[bool] = []
+    attempts: list[JobSettings] = []
 
-    def fail_once(candidate, previous, *, reset_parameters=False):
-        attempts.append(reset_parameters)
+    def fail_once(candidate, previous):
+        attempts.append(candidate.parameters)
         if len(attempts) == 1:
             raise OSError("disk full")
-        return real_save(candidate, previous, reset_parameters=reset_parameters)
+        return real_save(candidate, previous)
 
     monkeypatch.setattr(gui, "save_app_config_merged", fail_once)
     _reset_button(window).click()
@@ -1605,6 +1605,6 @@ def test_failed_reset_retries_deletion_instead_of_saving_built_ins(
     assert window.current_job_settings() == JobSettings()
     assert config_path().read_bytes() == saved
     assert window._flush_parameters_save() is True
-    assert attempts == [True, True]
+    assert attempts == [JobSettings(), JobSettings()]
     assert json.loads(config_path().read_text(encoding="utf-8")) == {}
     assert window.config.parameters == JobSettings()

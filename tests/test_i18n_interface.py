@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import AppConfig, ConfigLoadResult
+from pixelup.fonts import system_ui_font_family
 from pixelup.gui import MainWindow
 from pixelup.i18n import localizer
 from pixelup.i18n.catalogue import locale_file
@@ -223,7 +224,8 @@ def _texts(root: QWidget, *, include_cells: bool = True) -> list[str]:
 
 
 def _english_left_over(text: str) -> list[str]:
-    for word in _LITERAL_WORDS:
+    # The system font's family is a name, shown as the UI font field's placeholder.
+    for word in (*_LITERAL_WORDS, system_ui_font_family()):
         text = text.replace(word, " ")
     return _ENGLISH_WORD.findall(text)
 

@@ -260,7 +260,6 @@
   "settings.title": "Settings",
   "settings.uiFont": "UI font",
   "settings.uiFontCaption": "Blank uses the platform UI face. Otherwise, the first installed font is used.",
-  "settings.uiFontPlaceholder": "Platform default",
   "shortcuts.groupGeneral": "General",
   "shortcuts.introduction": "Use these shortcuts anywhere in PixelUp.",
   "shortcuts.openSettings": "Open Settings",

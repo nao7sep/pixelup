@@ -124,25 +124,39 @@ def test_next_edit_drops_version_and_other_unknown_keys(tmp_path: Path) -> None:
     }
 
 
-def test_reset_parameters_deletes_only_that_set(tmp_path: Path) -> None:
+def test_saving_a_set_equal_to_its_built_in_deletes_only_that_set(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     previous = AppConfig(language="ja", parameters=JobSettings(quality=55))
     save_app_config_merged(previous, AppConfig(), path)
-    reset = save_app_config_merged(
-        replace(previous, parameters=JobSettings()), previous, path, reset_parameters=True,
-    )
+    reset = save_app_config_merged(replace(previous, parameters=JobSettings()), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {"language": "ja"}
     assert reset == AppConfig(language="ja")
 
 
-def test_reset_deletes_a_stored_copy_equal_to_the_built_ins(tmp_path: Path) -> None:
+def test_the_last_set_back_at_its_built_in_leaves_an_empty_map(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    save_app_config_merged(AppConfig(parameters=JobSettings(quality=55)), AppConfig(), path)
-    previous = load_app_config(path)
+    previous = AppConfig(parameters=JobSettings(quality=55))
+    save_app_config_merged(previous, AppConfig(), path)
     save_app_config_merged(AppConfig(), previous, path)
-    assert "parameters" in json.loads(path.read_text(encoding="utf-8"))
-    save_app_config_merged(AppConfig(), AppConfig(), path, reset_parameters=True)
     assert json.loads(path.read_text(encoding="utf-8")) == {}
+
+
+def test_any_save_drops_a_stored_copy_equal_to_its_built_in(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"parameters": _parameter_map()}), encoding="utf-8")
+    previous = load_app_config(path)
+    save_app_config_merged(replace(previous, language="ja"), previous, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"language": "ja"}
+
+
+def test_any_save_drops_a_set_that_failed_its_check(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text('{"max_concurrent_jobs": 99, "language": "ja"}', encoding="utf-8")
+    previous = load_app_config(path)
+    save_app_config_merged(replace(previous, font_family="Menlo"), previous, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "font_family": "Menlo", "language": "ja",
+    }
 
 
 def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
@@ -154,18 +168,18 @@ def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
     assert load_app_config(path).font_family == "Courier New, monospace"
 
 
-def test_load_app_config_preserves_font_family(tmp_path: Path) -> None:
+def test_load_app_config_cleans_font_family_as_a_single_line(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"font_family": "  Arial  "}), encoding="utf-8")
+    path.write_text(json.dumps({"font_family": "  Arial,\n Menlo  "}), encoding="utf-8")
 
-    assert load_app_config(path).font_family == "  Arial  "
+    assert load_app_config(path).font_family == "Arial, Menlo"
 
 
-def test_load_app_config_preserves_whitespace_font_family(tmp_path: Path) -> None:
+def test_whitespace_font_family_reads_as_the_built_in(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"font_family": "   "}), encoding="utf-8")
 
-    assert load_app_config(path).font_family == "   "
+    assert load_app_config(path) == AppConfig()
 
 
 def test_load_app_config_preserves_the_legacy_font_stack(tmp_path: Path) -> None:
@@ -575,12 +589,12 @@ def test_partial_parameters_are_absent_as_a_whole_and_warn_once(
     assert warnings[0].fields["key"] == "parameters"
 
 
-def test_edit_preserves_the_whole_untouched_user_set(tmp_path: Path) -> None:
+def test_edit_writes_the_untouched_user_set_whole_from_memory(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    stored_parameters = _parameter_map(quality=42, future_parameter="untouched")
+    stored_parameters = _parameter_map(quality=42, future_parameter="dropped")
     path.write_text(json.dumps({"parameters": stored_parameters}), encoding="utf-8")
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, language="ja"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "parameters": stored_parameters, "language": "ja",
+        "parameters": _parameter_map(quality=42), "language": "ja",
     }

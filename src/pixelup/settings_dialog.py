@@ -16,10 +16,11 @@ from PySide6.QtWidgets import (
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, MIN_CONCURRENT_JOBS, AppConfig
 from pixelup.dialog_shell import FORM_WIDTH, DialogShell
-from pixelup.fonts import DEFAULT_UI_FONT_FAMILY, normalize_font_family
+from pixelup.fonts import system_ui_font_family
 from pixelup.i18n import localizer
 from pixelup.i18n.languages import LANGUAGES, SYSTEM
 from pixelup.i18n.localized import localize
+from pixelup.text_cleanup import single_line
 from pixelup.ui_common import secondary_label, use_regular_spacing
 from pixelup.widgets import NoWheelComboBox, NoWheelSpinBox
 
@@ -84,7 +85,8 @@ class SettingsDialog(DialogShell):
 
         self.font_family = QLineEdit()
         self.font_family.setText(config.font_family)
-        localize(self.font_family, placeholder="settings.uiFontPlaceholder")
+        # A built-in derived at runtime shows as the placeholder (config-sets-conventions).
+        self.font_family.setPlaceholderText(system_ui_font_family())
         self.font_family.setMinimumWidth(260)
 
         # System first, then each language in its own name, so a reader finds
@@ -157,11 +159,7 @@ class SettingsDialog(DialogShell):
         return replace(
             self._initial,
             max_concurrent_jobs=self.concurrent.value(),
-            font_family=(
-                self._initial.font_family
-                if self.font_family.text() == self._initial.font_family
-                else normalize_font_family(self.font_family.text(), DEFAULT_UI_FONT_FAMILY)
-            ),
+            font_family=single_line(self.font_family.text()),
             language=self.language.currentData(),
         )
 

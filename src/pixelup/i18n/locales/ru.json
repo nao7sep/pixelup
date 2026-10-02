@@ -284,7 +284,6 @@
   "settings.title": "Настройки",
   "settings.uiFont": "Шрифт интерфейса",
   "settings.uiFontCaption": "Если оставить пустым, используется системный шрифт интерфейса. Иначе используется первый установленный шрифт.",
-  "settings.uiFontPlaceholder": "Системный по умолчанию",
   "shortcuts.groupGeneral": "Общие",
   "shortcuts.introduction": "Эти сочетания клавиш работают в любом месте PixelUp.",
   "shortcuts.openSettings": "Открыть настройки",

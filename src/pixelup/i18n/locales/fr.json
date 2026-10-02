@@ -272,7 +272,6 @@
   "settings.title": "Réglages",
   "settings.uiFont": "Police de l’interface",
   "settings.uiFontCaption": "Vide utilise la police d’interface du système. Sinon, la première police installée est utilisée.",
-  "settings.uiFontPlaceholder": "Police du système",
   "shortcuts.groupGeneral": "Général",
   "shortcuts.introduction": "Ces raccourcis fonctionnent partout dans PixelUp.",
   "shortcuts.openSettings": "Ouvrir les réglages",
