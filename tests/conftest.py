@@ -80,16 +80,15 @@ def _reset_pixelup_logging():
 
 
 @pytest.fixture(autouse=True)
-def _reset_backup_store():
-    """Close the write-through backup store after every test.
+def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Point PIXELUP_DATA_DIR at the test's own folder, and close the backup store after.
 
-    The store is a process-wide singleton opened lazily against whatever
-    PIXELUP_DATA_DIR resolves to at first use. Tests redirect PIXELUP_DATA_DIR to a
-    throwaway root; without this teardown the singleton would stay bound to the
-    first test's root (and hold that file handle open) for the whole session. This
-    closes it and resets the singleton so the next test's first save re-opens the
-    store under that test's own root (data-backup-conventions test migration).
+    Without the redirect, any test that saves settings or a backup record writes into
+    the developer's real ~/.pixelup. The backup store is a process-wide singleton bound
+    to the root it first opened under, so it is closed after every test and the next
+    test's first save re-opens it under that test's own root.
     """
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path))
     yield
     close_backup_store()
 

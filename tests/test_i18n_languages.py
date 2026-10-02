@@ -167,10 +167,7 @@ def test_system_is_resolved_once_from_the_list_read_at_launch() -> None:
     assert localizer.preference() == "system"
 
 
-def test_the_saved_language_is_read_straight_from_config_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path))
+def test_the_saved_language_is_read_straight_from_config_json(tmp_path: Path) -> None:
     assert bootstrap.saved_preference() == "system"
     (tmp_path / "config.json").write_text(json.dumps({"language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "it"
@@ -183,7 +180,6 @@ def test_the_saved_language_is_read_straight_from_config_json(
 def test_settle_language_speaks_the_saved_choice_before_the_app_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path))
     aligned: list[str] = []
     monkeypatch.setattr(bootstrap, "align_appkit", aligned.append)
     monkeypatch.setattr(bootstrap, "read_computer_languages", lambda: ("es-MX",))
