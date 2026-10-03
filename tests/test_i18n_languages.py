@@ -168,7 +168,11 @@ def test_a_failure_logs_english_and_shows_the_readers_language() -> None:
 
 def test_a_language_change_is_announced_and_restored(qapp) -> None:
     heard: list[str] = []
-    localizer.changed.connect(lambda: heard.append(localizer.language()))
+
+    def hear() -> None:
+        heard.append(localizer.language())
+
+    localizer.changed.connect(hear)
     try:
         with localizer.speaking("fr"):
             assert localizer.t("quit.quit") == "Quitter"
@@ -176,7 +180,8 @@ def test_a_language_change_is_announced_and_restored(qapp) -> None:
         assert localizer.language() == "en"
         assert heard == ["fr", "en"]
     finally:
-        localizer.changed.disconnect()
+        # Only this test's own listener: the bindings' rewrite listens here too.
+        localizer.changed.disconnect(hear)
 
 
 def test_system_is_resolved_once_from_the_list_read_at_launch() -> None:
