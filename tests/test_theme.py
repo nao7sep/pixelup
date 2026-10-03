@@ -393,7 +393,7 @@ def test_lists_panels_and_reference_bodies_share_one_content_surface() -> None:
         tone = theme.surfaces(palette)
         sheet = theme.build_stylesheet(palette)
         for selector in (
-            "QTableWidget, QTableView {",
+            "QTableWidget, QTableView, QListView#recordsList {",
             'QFrame[surface="panel"] {',
             'QWidget[surface="content"] {',
         ):
@@ -431,7 +431,7 @@ def test_a_collection_keeps_its_square_contents_inside_its_rounded_edge() -> Non
     import math
 
     sheet = theme.build_stylesheet(LIGHT)
-    table = sheet.split("QTableWidget, QTableView {", 1)[1].split("}", 1)[0]
+    table = sheet.split("QTableWidget, QTableView, QListView#recordsList {", 1)[1].split("}", 1)[0]
     assert f"padding: {theme.COLLECTION_INSET}px;" in table
     section = sheet.split("QHeaderView::section {", 1)[1].split("}", 1)[0]
     assert "background-color: transparent;" in section

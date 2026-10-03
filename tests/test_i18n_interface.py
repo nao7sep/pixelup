@@ -159,7 +159,6 @@ def _populate(main: MainWindow, directory: Path) -> None:
     main._remove_selected_image()
     main.queue_action_result.show_result(Message("actions.needModels"), severity="warning")
     main.parameters_result.show_result(Message("parameters.saveFailed"), severity="error")
-    main.log_action_result.show_result(Message("main.revealLogFailed"), severity="error")
 
 
 def _dialogs(manager: ModelManager) -> list[QDialog]:
@@ -239,21 +238,29 @@ def _status_cells(main: MainWindow) -> list[str]:
 
 @pytest.mark.parametrize("tag", TAGS)
 def test_no_key_and_no_english_reaches_any_surface(
-    tag: str, window: MainWindow, qapp: QApplication, tmp_path: Path
+    tag: str, window: MainWindow, qapp: QApplication, tmp_path: Path, process_until
 ) -> None:
     manager = ModelManager(tmp_path / "models")
+    # The Records window, with its launches read so the launch filter holds this
+    # launch's label; the records themselves are stored text, not interface text.
+    window._open_records_window()
+    records = window._records_window
+    assert records is not None
+    process_until(
+        lambda: records.launch_filter.count() > 1, timeout_s=5, what="the Records window"
+    )
     with localizer.speaking(tag):
         qapp.processEvents()
         dialogs = _dialogs(manager)
         try:
-            surfaces: list[QWidget] = [window, *dialogs]
+            surfaces: list[QWidget] = [window, records, *dialogs]
             for surface in surfaces:
                 for text in _texts(surface):
                     assert not _KEY_SHAPE.search(text), f"{tag}: a key reached the screen: {text!r}"
             if tag in {"ja", "ko", "zh-Hans", "ru"}:
                 # These scripts share no letters with English, so a Latin word
                 # that is not a name is a string that was never translated.
-                shown = [text for s in dialogs for text in _texts(s)]
+                shown = [text for s in (records, *dialogs) for text in _texts(s)]
                 shown += _texts(window, include_cells=False) + _status_cells(window)
                 leftovers = {text: _english_left_over(text) for text in shown}
                 assert {text: words for text, words in leftovers.items() if words} == {}

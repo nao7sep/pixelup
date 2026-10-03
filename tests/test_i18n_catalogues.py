@@ -33,18 +33,23 @@ _UNITS = ["units.bytes", "units.gigabytes", "units.kilobytes", "units.megabytes"
 # Where Qt's own translation of the OK button is "OK", the app's says so too.
 _OK = ["settings.ok"]
 SAME_AS_ENGLISH: dict[str, list[str]] = {
-    # "Version" and "Status" are the German words, System is the standard German
-    # label for following the computer, and the byte units are the same symbols.
+    # "Version", "Status" and "Details" are the German words, Info and Debug the
+    # German names of those log levels, System is the standard German label for
+    # following the computer, and the byte units are the same symbols.
     "de": [
         "about.version",
         "managedModels.columnStatus",
         "queue.columnStatus",
+        "records.details",
+        "records.levelDebug",
+        "records.levelInfo",
         "settings.languageSystem",
         *_OK,
         *_UNITS,
     ],
-    # "General" is the Spanish word for a general settings group.
-    "es": ["shortcuts.groupGeneral", *_UNITS],
+    # "General" is the Spanish word for a general settings group, and "Error"
+    # the Spanish word for an error.
+    "es": ["records.error", "records.levelError", "shortcuts.groupGeneral", *_UNITS],
     # French writes Version, Image(s) and Action as English does; its byte units
     # are its own (o, Ko, Mo, Go).
     "fr": [
@@ -56,7 +61,8 @@ SAME_AS_ENGLISH: dict[str, list[str]] = {
         *_OK,
     ],
     # Italian keeps "Output" as a column name; "Uscita" would read as an exit.
-    "it": ["queue.columnOutput", *_OK, *_UNITS],
+    # "Info" and "Debug" are the Italian names of those log levels.
+    "it": ["queue.columnOutput", "records.levelDebug", "records.levelInfo", *_OK, *_UNITS],
     # "Status" is the everyday Brazilian Portuguese column name.
     "pt-BR": ["managedModels.columnStatus", "queue.columnStatus", *_OK, *_UNITS],
     "ru": [*_OK],

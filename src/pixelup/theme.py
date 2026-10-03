@@ -592,7 +592,7 @@ QGroupBox * {{
    square header, rows and scroll bar inside the rounded edge — at the frame's
    own inset their corners poked through the curve — and the header draws no fill
    of its own, so the frame's rounded surface shows behind it. */
-QTableWidget, QTableView {{
+QTableWidget, QTableView, QListView#recordsList {{
     border: {BORDER_WIDTH}px solid {tone["field_edge"]};
     border-radius: {RADIUS}px;
     padding: {COLLECTION_INSET}px;
@@ -642,6 +642,10 @@ QWidget[surface="content"] {{
    button beside the button it was about. */
 QLabel[severity="warning"] {{
     color: {warning_text(palette)};
+}}
+/* A read that failed, said in the app's red letters. */
+QLabel[severity="error"] {{
+    color: {danger["text"]};
 }}
 /* Weight, not size, sets a label apart: a panel's column headings, as the table
    headers are, and a value that needs the reader's attention. */

@@ -11,8 +11,10 @@ import pytest
 from pixelup.session_log import (
     RECORDS_FILE_NAME,
     configure_session_logging,
+    current_session,
     debug_enabled,
     log,
+    set_stored_listener,
 )
 
 
@@ -248,3 +250,45 @@ def test_excepthook_does_not_stack_across_reconfiguration() -> None:
     crashes = [e for e in _records(database) if e["message"] == "unhandled.exception"]
     assert len(crashes) == 1
     assert crashes[0]["error"]["type"] == "ValueError"
+
+
+def test_the_stored_listener_hears_each_line_the_database_stored() -> None:
+    database = configure_session_logging()
+    heard: list[int] = []
+    set_stored_listener(lambda: heard.append(len(_records(database))))
+
+    log.info("image.added", input="a.png")
+    log.warning("open.ignored_directory", path="d")
+
+    # Called after the line is in the database, so a read it starts sees it.
+    assert heard == [2, 3]
+
+
+def test_a_line_that_went_to_the_fallback_file_tells_no_listener(tmp_path: Path) -> None:
+    (tmp_path / RECORDS_FILE_NAME).mkdir()
+    configure_session_logging()
+    heard: list[None] = []
+    set_stored_listener(lambda: heard.append(None))
+
+    log.info("image.added", input="a.png")
+
+    assert heard == []
+
+
+def test_a_failing_listener_never_costs_the_line(capsys: pytest.CaptureFixture[str]) -> None:
+    database = configure_session_logging()
+
+    def fail() -> None:
+        raise RuntimeError("listener gone")
+
+    set_stored_listener(fail)
+    log.info("image.added", input="a.png")
+
+    assert _records(database)[-1]["message"] == "image.added"
+    assert "listener gone" in capsys.readouterr().err
+
+
+def test_current_session_is_the_session_every_record_carries() -> None:
+    database = configure_session_logging()
+
+    assert {record["session"] for record in _records(database)} == {current_session()}

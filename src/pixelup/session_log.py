@@ -6,7 +6,7 @@ import os
 import sqlite3
 import sys
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS logs (
   fields       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session, id);
+CREATE INDEX IF NOT EXISTS idx_logs_time ON logs (time, id);
 """
 _COLUMNS = frozenset({"time", "level", "message", "job_id", "operation_id"})
 
@@ -143,9 +144,13 @@ class RecordsHandler(logging.Handler):
     def __init__(self, database: Path, *, session: str, fallback: Path) -> None:
         super().__init__()
         self._database = database
-        self._session = session
+        self.session = session
         self._fallback = fallback
         self._connection: sqlite3.Connection | None = None
+        # Called after each line the database stored, on the thread that logged
+        # it; a line that went to the fallback file is not in the database, so it
+        # calls nothing. The Records window reads the newest records on it.
+        self.stored_listener: Callable[[], None] | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
         entry = _entry(record)
@@ -153,6 +158,15 @@ class RecordsHandler(logging.Handler):
             self._insert(entry)
         except Exception as exc:  # noqa: BLE001 - logging never crashes the app.
             self._fall_back(entry, exc)
+            return
+        listener = self.stored_listener
+        if listener is None:
+            return
+        try:
+            listener()
+        except Exception as exc:  # noqa: BLE001 - logging never crashes the app.
+            sys.stderr.write(f"[pixelup:records] stored listener failed: {exc!r}\n")
+            sys.stderr.flush()
 
     def _insert(self, entry: dict[str, Any]) -> None:
         # not recorded: records.sqlite3 is a binary store written through SQLite,
@@ -164,7 +178,7 @@ class RecordsHandler(logging.Handler):
             "INSERT INTO logs (session, time, level, message, job_id, operation_id, fields)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                self._session,
+                self.session,
                 entry["time"],
                 entry["level"],
                 entry["message"],
@@ -175,7 +189,7 @@ class RecordsHandler(logging.Handler):
         )
 
     def _fall_back(self, entry: dict[str, Any], exc: Exception) -> None:
-        line = _dumps({**entry, "session": self._session, "records_error": repr(exc)}) + "\n"
+        line = _dumps({**entry, "session": self.session, "records_error": repr(exc)}) + "\n"
         # not recorded: the fallback file is append-mode, never the managed-text
         # atomic-write path (data-backup-conventions).
         try:
@@ -242,6 +256,26 @@ def get_logger() -> logging.Logger:
 # Process-wide singleton. Import this and call log.info(...) etc.; before
 # configure_session_logging() runs it falls back to stdlib's last-resort handler.
 log = SessionLog(get_logger())
+
+
+def _records_handler() -> RecordsHandler | None:
+    return next(
+        (handler for handler in get_logger().handlers if isinstance(handler, RecordsHandler)),
+        None,
+    )
+
+
+def current_session() -> str | None:
+    """This launch's session, as every record it writes carries, once logging is set up."""
+    handler = _records_handler()
+    return None if handler is None else handler.session
+
+
+def set_stored_listener(listener: Callable[[], None] | None) -> None:
+    """Call ``listener`` after each line the records database stores (any thread)."""
+    handler = _records_handler()
+    if handler is not None:
+        handler.stored_listener = listener
 
 
 def debug_enabled(env: Mapping[str, str] | None = None) -> bool:

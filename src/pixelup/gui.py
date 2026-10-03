@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from collections import defaultdict
 from collections.abc import Iterable
@@ -11,13 +10,9 @@ from pathlib import Path
 from typing import Literal
 
 from PySide6.QtCore import (
-    QByteArray,
     QLocale,
-    QObject,
-    QSettings,
     QSize,
     Qt,
-    QThread,
     QTimer,
     QUrl,
     Signal,
@@ -27,7 +22,6 @@ from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
     QCloseEvent,
-    QDesktopServices,
     QDragEnterEvent,
     QDragLeaveEvent,
     QDragMoveEvent,
@@ -73,7 +67,7 @@ from pixelup.app_config import (
     load_app_config_result,
     save_app_config_merged,
 )
-from pixelup.config import RuntimeDirs, resolve_runtime_dirs, window_settings_path
+from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.devices import DEVICE_CHOICES
 from pixelup.errors import PixelupError
 from pixelup.fonts import apply_ui_font
@@ -119,8 +113,9 @@ from pixelup.parameters import (
 from pixelup.parameters_help_dialog import ParametersHelpDialog
 from pixelup.paths import absolute_user_path
 from pixelup.quit_dialog import QuitConfirmDialog
+from pixelup.records_window import RecordsReads, RecordsWindow, records_reads, stored_signal
 from pixelup.runner import JobRunner
-from pixelup.session_log import configure_session_logging, log
+from pixelup.session_log import configure_session_logging, log, set_stored_listener
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.theme import apply_theme
@@ -138,6 +133,11 @@ from pixelup.widgets import (
     output_format_combo,
     retranslate_choices,
 )
+from pixelup.window_placement import (
+    restore_window_geometry,
+    save_window_geometry,
+    window_settings,
+)
 
 # Horizontal slack added to a measured string so cell text never touches the
 # column edges (covers Qt's default cell margins plus a little breathing room).
@@ -153,7 +153,6 @@ _NAME_MIN_WIDTH = 180
 # backup record, so the writes are coalesced. Long enough to absorb typing "100" or
 # "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
-_REVEAL_TIMEOUT_SECONDS = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,10 +197,11 @@ def bounded_initial_window_size(minimum: QSize, work_area: QSize) -> QSize:
     )
 
 
-def _restored_window_state(state: Qt.WindowState, platform: str) -> Qt.WindowState:
-    if platform == "darwin":
-        return Qt.WindowState.WindowNoState
-    return state & ~Qt.WindowState.WindowMinimized
+def is_reopen(previous: Qt.ApplicationState, current: Qt.ApplicationState) -> bool:
+    """Whether an application-state change is a reopen: on macOS, a Dock click or a
+    second launch, which Qt reports as becoming active while already active."""
+    active = Qt.ApplicationState.ApplicationActive
+    return previous == active and current == active
 
 
 def announce_accessible_alert(widget: QWidget) -> None:
@@ -344,8 +344,10 @@ class MainWindow(QMainWindow):
         # this is the single place the UI font is established.
         apply_ui_font(QApplication.instance(), self.config.font_family)
         self.log_file = log_file
-        self._reveal_thread: QThread | None = None
-        self._reveal_worker: _RevealWorker | None = None
+        # The Records window and the one thread its reads run on, made when the
+        # window is first opened; the thread lasts until PixelUp quits.
+        self._records_window: RecordsWindow | None = None
+        self._records_reads: RecordsReads | None = None
         self.runtime_dirs = runtime_dirs or resolve_runtime_dirs()
         self._job_ids = count(1)
         self._images_by_path: dict[Path, ImageEntry] = {}
@@ -401,10 +403,8 @@ class MainWindow(QMainWindow):
             hint.height() + _WINDOW_TARGET_EXTRA_HEIGHT,
         )
         self.resize(bounded_initial_window_size(self.minimumSize(), work_area))
-        self._window_settings = QSettings(
-            str(window_settings_path()), QSettings.Format.IniFormat
-        )
-        self._restore_window_geometry()
+        self._window_settings = window_settings()
+        restore_window_geometry(self, self._window_settings, self._GEOMETRY_KEY)
         # The panel opens on what the user last left it at, not on a defaults layer:
         # config.parameters is the persisted panel, and with no stored set it is
         # JobSettings() — the built-ins.
@@ -417,6 +417,10 @@ class MainWindow(QMainWindow):
             commit = getattr(app, "commitDataRequest", None)
             if commit is not None:
                 commit.connect(self._on_commit_data_request)
+            self._application_state = app.applicationState()
+            app.applicationStateChanged.connect(self._application_state_changed)
+        # Each record the database stores tells an open Records window to read again.
+        set_stored_listener(stored_signal().emit)
         log.info(
             "config.loaded",
             path=str(config_path()),
@@ -463,24 +467,21 @@ class MainWindow(QMainWindow):
     def _on_commit_data_request(self, _manager: object) -> None:
         self._session_shutdown = True
 
-    def _restore_window_geometry(self) -> None:
-        geometry = self._window_settings.value(self._GEOMETRY_KEY)
-        if self._window_settings.status() != QSettings.Status.NoError:
-            log.warning("window.geometry_load_failed")
-            return
-        if isinstance(geometry, QByteArray) and not geometry.isEmpty():
-            if not self.restoreGeometry(geometry):
-                log.warning("window.geometry_restore_failed")
-                return
-            state = _restored_window_state(self.windowState(), sys.platform)
-            if state != self.windowState():
-                self.setWindowState(state)
+    @Slot(Qt.ApplicationState)
+    def _application_state_changed(self, state: Qt.ApplicationState) -> None:
+        # Reopening PixelUp brings the main window back, even while the Records
+        # window is the one on screen: Cocoa restores a minimized window by itself
+        # only when no other window is visible.
+        reopened = is_reopen(self._application_state, state)
+        self._application_state = state
+        if reopened and self.isVisible():
+            if self.isMinimized():
+                self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+            self.raise_()
+            self.activateWindow()
 
     def _accept_close(self, event: QCloseEvent) -> None:
-        self._window_settings.setValue(self._GEOMETRY_KEY, self.saveGeometry())
-        self._window_settings.sync()
-        if self._window_settings.status() != QSettings.Status.NoError:
-            log.warning("window.geometry_save_failed")
+        save_window_geometry(self, self._window_settings, self._GEOMETRY_KEY)
         event.accept()
 
     def show_prepared(self) -> None:
@@ -531,6 +532,8 @@ class MainWindow(QMainWindow):
     def _finish_or_defer_close(self, event: QCloseEvent, *, surface_wait: bool) -> None:
         self.runner.begin_shutdown()
         self.model_manager.begin_shutdown()
+        if self._records_window is not None:
+            self._records_window.close()
         if self._workers_clean_for_quit():
             self._accept_close(event)
             return
@@ -547,7 +550,7 @@ class MainWindow(QMainWindow):
         return (
             self.runner.cleanup_for_quit()
             and self.model_manager.cleanup_for_quit()
-            and self._reveal_thread is None
+            and (self._records_reads is None or self._records_reads.stop())
         )
 
     def open_paths(self, paths: list[Path]) -> None:
@@ -659,8 +662,8 @@ class MainWindow(QMainWindow):
         layout = QGridLayout(row)
         use_regular_spacing(layout, margins=False)
 
-        self.logs_button = localize(QPushButton(), text="main.revealLog")
-        self.logs_button.clicked.connect(self._reveal_log_file)
+        self.records_button = localize(QPushButton(), text="main.records")
+        self.records_button.clicked.connect(self._open_records_window)
         self.settings_button = localize(QPushButton(), text="main.settings")
         self.settings_button.clicked.connect(self._settings_dialog)
         settings_shortcut = QKeySequence("Ctrl+,")
@@ -678,18 +681,13 @@ class MainWindow(QMainWindow):
         self.about_button.clicked.connect(self._about_dialog)
 
         start = Qt.AlignmentFlag.AlignLeft
-        layout.addWidget(self.logs_button, 0, 0, start)
+        layout.addWidget(self.records_button, 0, 0, start)
         layout.addWidget(self.settings_button, 0, 1, start)
         layout.addWidget(self.shortcuts_button, 1, 0, start)
         layout.addWidget(self.about_button, 1, 1, start)
         # The two button columns take their content's width and the rest of the row
         # stays empty, so each pair sits together rather than across the panel.
         layout.setColumnStretch(2, 1)
-        self.log_action_result = OperationResult(
-            object_name="logActionResult",
-            dismissible=True,
-        )
-        layout.addWidget(self.log_action_result, 2, 0, 1, 3)
         return row
 
     def _bind_shortcuts(self) -> None:
@@ -1257,42 +1255,26 @@ class MainWindow(QMainWindow):
         log.info("about.dialog_opened")
         AboutDialog(self).exec()
 
-    def _reveal_log_file(self) -> None:
-        # _reveal_in_file_browser runs a real subprocess with its own timeout; run it
-        # off the GUI thread so a slow/unresponsive volume or file browser cannot
-        # freeze the whole window for that long, and disable the button meanwhile so
-        # repeat clicks cannot stack several such waits back to back (PU-4).
-        if self._reveal_thread is not None:
+    def _open_records_window(self) -> None:
+        if self._quit_when_workers_idle:
             return
-        self.logs_button.setEnabled(False)
-        thread = QThread(self)
-        worker = _RevealWorker(self.log_file)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(self._reveal_log_file_finished)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        self._reveal_thread = thread
-        # Kept alive explicitly: moveToThread/connect do not retain a Python
-        # reference of their own, and a GC'd worker mid-run would be undefined.
-        self._reveal_worker = worker
-        thread.start()
+        if self._records_window is not None:
+            self._records_window.bring_forward()
+            return
+        if self._records_reads is None:
+            self._records_reads = records_reads(self.log_file, self)
+            # A quit deferred behind a read still in flight retries once it ends.
+            self._records_reads.stopped.connect(self._close_when_workers_stop)
+        log.info("records.window_opened")
+        window = RecordsWindow(self._records_reads)
+        window.closed.connect(lambda: self._records_window_closed(window))
+        self._records_window = window
+        window.show()
 
-    @Slot(bool)
-    def _reveal_log_file_finished(self, revealed: bool) -> None:
-        self._reveal_thread = None
-        self._reveal_worker = None
-        self.logs_button.setEnabled(True)
-        if revealed:
-            self.log_action_result.clear_result()
-        else:
-            self.log_action_result.show_result(
-                Message("main.revealLogFailed"),
-                severity="error",
-            )
-        # A quit that arrived while this ran was deferred behind it; retry it now.
-        self._close_when_workers_stop()
+    def _records_window_closed(self, window: RecordsWindow) -> None:
+        if self._records_window is window:
+            self._records_window = None
+        log.info("records.window_closed")
 
     def _add_image_row(self, entry: ImageEntry) -> None:
         row = self.image_table.rowCount()
@@ -1850,61 +1832,6 @@ def _image_size_text(size: tuple[int, int] | None) -> Message:
     # Pixel dimensions are passed as text: a width is a measurement read digit by
     # digit, not a quantity to group ("4000 x 3000", never "4,000 x 3,000").
     return Message.of("images.size", width=str(width), height=str(height))
-
-
-class _RevealWorker(QObject):
-    """Runs one bounded ``_reveal_in_file_browser`` call off the GUI thread."""
-
-    finished = Signal(bool)
-
-    def __init__(self, path: Path) -> None:
-        super().__init__()
-        self._path = path
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            revealed = _reveal_in_file_browser(self._path)
-        except (OSError, subprocess.TimeoutExpired):
-            log.exception("log.reveal_failed", log_file=str(self._path))
-            self.finished.emit(False)
-            return
-        if revealed:
-            log.info("log.revealed", log_file=str(self._path))
-        else:
-            log.warning("log.reveal_failed", log_file=str(self._path))
-        self.finished.emit(revealed)
-
-
-def _reveal_in_file_browser(path: Path) -> bool:
-    """Reveal a path in the OS file browser, returning whether it succeeded.
-
-    The macOS path and the cross-platform fallback report a real success/failure
-    signal. Windows ``explorer.exe`` returns a non-zero exit code even when it
-    succeeds, so its return code can't signal failure; there, launching without
-    an ``OSError`` is the best signal available. Callers handle ``OSError`` (e.g.
-    the helper binary is missing) and log accordingly.
-    """
-    target = path if path.exists() else path.parent
-    if sys.platform == "darwin":
-        return (
-            subprocess.run(
-                ["open", "-R", str(target)],
-                check=False,
-                timeout=_REVEAL_TIMEOUT_SECONDS,
-            ).returncode
-            == 0
-        )
-    if sys.platform == "win32":
-        subprocess.run(
-            ["explorer", f"/select,{target}"],
-            check=False,
-            timeout=_REVEAL_TIMEOUT_SECONDS,
-        )
-        return True
-    if target.is_file():
-        target = target.parent
-    return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))))
 
 
 def build_app(

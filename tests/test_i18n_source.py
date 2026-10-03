@@ -57,6 +57,9 @@ TEXT_CALLS = frozenset(
 ALLOWED_LITERALS = frozenset({"", "PixelUp"})
 
 _KEY = re.compile(r"[a-z][a-zA-Z]*(\.[a-zA-Z0-9]+)+")
+# Strings shaped like a key that name something else: the records database's
+# file name shares the Records window's namespace.
+NOT_KEYS = frozenset({"records.sqlite3"})
 
 
 def _english_keys() -> set[str]:
@@ -144,6 +147,7 @@ def test_every_key_the_source_names_is_in_the_catalogue() -> None:
                 and node.value.split(".", 1)[0] in namespaces
                 and id(node) not in log_names
                 and node.value not in keys
+                and node.value not in NOT_KEYS
             ):
                 missing.append(f"{path.name}:{node.lineno} {node.value}")
     assert missing == []

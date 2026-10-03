@@ -27,6 +27,7 @@ from pixelup.parameters import DEFAULT_SCALE, TILE_VALUES
 from pixelup.paths import absolute_user_path
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
+from pixelup.window_placement import restored_window_state
 
 # The MainWindow orchestration (open/dedup, enqueue -> rows + summaries, the
 # job-finished status mapping, remove-guard, retry, cancel, and action-button
@@ -440,7 +441,7 @@ def test_window_utilities_sit_below_queue_actions(
     window.show()
     qapp.processEvents()
 
-    utilities = window.logs_button.parentWidget()
+    utilities = window.records_button.parentWidget()
     queue_group = window.queue_selected_button.parentWidget()
 
     assert utilities.parentWidget() is queue_group.parentWidget()
@@ -994,119 +995,6 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
     assert job.message == Message("error.modelFileMissing")
 
 
-def _run_reveal(window: MainWindow, qapp: QApplication) -> None:
-    window._reveal_log_file()
-    deadline = time.monotonic() + 2
-    while window._reveal_thread is not None and time.monotonic() < deadline:
-        qapp.processEvents()
-        time.sleep(0.001)
-    qapp.processEvents()
-    assert window._reveal_thread is None
-
-
-def test_reveal_log_file_survives_failure(
-    make_window, qapp: QApplication, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    window = make_window()
-
-    # A False result (reveal could not be confirmed) must not raise.
-    monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", lambda path: False)
-    _run_reveal(window, qapp)
-    assert window.log_action_result.isVisibleTo(window)
-    assert "Try again" in window.log_action_result.message_label.text()
-    assert window.logs_button.isEnabled()
-
-    # An OSError (e.g. the helper binary is missing) is caught and logged.
-    def _raise(path: Path) -> bool:
-        raise OSError("no file browser")
-
-    monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _raise)
-    _run_reveal(window, qapp)
-
-    def _timeout(path: Path) -> bool:
-        raise gui.subprocess.TimeoutExpired(["open", "-R", str(path)], 5)
-
-    monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _timeout)
-    _run_reveal(window, qapp)
-
-    monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", lambda path: True)
-    _run_reveal(window, qapp)
-    assert window.log_action_result.isHidden()
-
-
-def test_reveal_log_file_runs_off_the_gui_thread_and_ignores_repeat_clicks(
-    make_window, qapp: QApplication, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # PU-4: a slow file browser must not freeze the window, and a second click while
-    # one reveal is still running must not stack another wait behind it.
-    started = threading.Event()
-    release = threading.Event()
-    calls: list[Path] = []
-
-    def _slow_reveal(path: Path) -> bool:
-        calls.append(path)
-        started.set()
-        assert release.wait(2)
-        return True
-
-    monkeypatch.setattr("pixelup.gui._reveal_in_file_browser", _slow_reveal)
-    window = make_window()
-
-    window._reveal_log_file()
-    assert started.wait(1)
-    assert window._reveal_thread is not None
-    assert window.logs_button.isEnabled() is False
-
-    window._reveal_log_file()  # ignored: a reveal is already in flight
-
-    release.set()
-    deadline = time.monotonic() + 2
-    while window._reveal_thread is not None and time.monotonic() < deadline:
-        qapp.processEvents()
-        time.sleep(0.001)
-    qapp.processEvents()
-
-    assert calls == [window.log_file]
-    assert window.logs_button.isEnabled()
-    assert window.log_action_result.isHidden()
-
-
-def test_reveal_in_file_browser_darwin_reports_returncode(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    target = _png(tmp_path, "a.png")
-    monkeypatch.setattr(sys, "platform", "darwin")
-
-    calls: list[dict[str, object]] = []
-
-    def _run(*args: object, **kwargs: object) -> SimpleNamespace:
-        calls.append(kwargs)
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(gui.subprocess, "run", _run)
-    assert gui._reveal_in_file_browser(target) is True
-    assert calls == [{"check": False, "timeout": gui._REVEAL_TIMEOUT_SECONDS}]
-
-    monkeypatch.setattr(gui.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
-    assert gui._reveal_in_file_browser(target) is False
-
-
-def test_reveal_in_file_browser_windows_assumes_success(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    target = _png(tmp_path, "a.png")
-    monkeypatch.setattr(sys, "platform", "win32")
-    ran: list[object] = []
-
-    def _run(*args: object, **kwargs: object) -> SimpleNamespace:
-        ran.append(args)
-        return SimpleNamespace(returncode=1)  # explorer returns nonzero even on success
-
-    monkeypatch.setattr(gui.subprocess, "run", _run)
-    assert gui._reveal_in_file_browser(target) is True
-    assert ran
-
-
 def _reset_button(window: MainWindow) -> QPushButton:
     return next(
         button
@@ -1325,7 +1213,7 @@ def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
 def test_restored_window_state_is_platform_appropriate(
     platform: str, saved: Qt.WindowState, expected: Qt.WindowState
 ) -> None:
-    assert gui._restored_window_state(saved, platform) == expected
+    assert restored_window_state(saved, platform) == expected
 
 
 @pytest.mark.parametrize(
@@ -1366,7 +1254,7 @@ def test_main_window_restores_native_state_according_to_platform(
     assert first.close()
 
     second = make_window()
-    assert second.windowState() == gui._restored_window_state(window_state, sys.platform)
+    assert second.windowState() == restored_window_state(window_state, sys.platform)
     assert second.normalGeometry() == normal_geometry
 
 
