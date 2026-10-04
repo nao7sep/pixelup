@@ -58,6 +58,9 @@ markers = [
 # The default deselects heavy tests; the full gate selects everything with
 # `uv run pytest -m "heavy or not heavy"`.
 addopts = "-m 'not heavy'"
+# A test still running after this many seconds prints every thread's stack, so a
+# stalled run names the wait it is stuck in. Far above the slowest real test.
+faulthandler_timeout = 300
 
 # Coverage is an instrument, not a gate (no threshold / CI fail) — it maps where logic still
 # hides in the Qt layer. Run: `uv run pytest --cov --cov-report=term-missing --cov-report=html`.

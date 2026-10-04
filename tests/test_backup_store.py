@@ -10,6 +10,9 @@ import pytest
 
 from pixelup.backup_store import STORE_FILE_NAME, close_backup_store, record
 
+# How long a test waits on its own threads before it fails instead of hanging.
+_THREAD_WAIT_S = 10
+
 
 class _FailInsertConnection:
     """A delegating proxy over a real sqlite3.Connection whose ``execute`` raises on
@@ -195,18 +198,24 @@ def test_concurrent_in_process_records_share_one_connection_safely(
 ) -> None:
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
-    barrier = threading.Barrier(8)
+    barrier = threading.Barrier(8, timeout=_THREAD_WAIT_S)
+    errors: list[BaseException] = []
 
     def save() -> None:
-        barrier.wait()
-        record(target, b"same\n")
+        try:
+            barrier.wait()
+            record(target, b"same\n")
+        except Exception as exc:  # noqa: BLE001 - reported by the test thread below.
+            errors.append(exc)
 
     threads = [threading.Thread(target=save) for _ in range(8)]
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join()
+        thread.join(_THREAD_WAIT_S)
 
+    assert not any(thread.is_alive() for thread in threads), "a save never finished"
+    assert errors == []
     assert len(_rows(home, target)) == 1
 
 
