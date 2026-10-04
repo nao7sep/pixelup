@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import plistlib
 import subprocess
 import sys
 from pathlib import Path
@@ -282,6 +283,18 @@ def test_apple_languages_is_empty_when_defaults_fails(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(subprocess, "run", _raise)
     assert bootstrap.read_apple_languages() == ()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="AppleLanguages is a macOS default")
+def test_apple_languages_reads_this_macs_own_list() -> None:
+    # Unmocked: the real `defaults` text, checked against the same list exported
+    # as a property list, which plistlib parses without the text parser under test.
+    exported = subprocess.run(
+        ["defaults", "export", "-g", "-"], capture_output=True, timeout=10, check=True
+    ).stdout
+    expected = tuple(plistlib.loads(exported).get("AppleLanguages", ()))
+
+    assert bootstrap.read_apple_languages() == expected
 
 
 def test_system_resolves_ja_when_the_ui_list_starts_with_ja_even_though_lang_is_en_us() -> None:
