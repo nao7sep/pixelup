@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QEvent, QUrl
 from PySide6.QtGui import QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
     QFrame,
@@ -133,6 +133,13 @@ class ManagedModelsDialog(DialogShell):
         self._manager.changed.connect(self._render)
         self._render()
         self.set_initial_focus(self.primary_button)
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.WindowActivate:
+            # The folder may have gained files placed there by hand while the
+            # dialog was behind another window.
+            self._manager.rescan()
+        return super().event(event)
 
     def _summary_text(self) -> Message:
         if not self._required_artifacts:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, replace
 from itertools import count
 from pathlib import Path
@@ -127,17 +128,29 @@ class ModelInstallWorker(QObject):
             self.finished.emit(self._operation_id, True, False, None)
 
 
+def read_ready_names(models_dir: Path) -> frozenset[str]:
+    """The managed artifacts the models folder holds a usable file for."""
+    return frozenset(name for name in MANAGED_ARTIFACT_NAMES if model_is_ready(models_dir, name))
+
+
 class ModelManager(QObject):
     """Application-owned readiness and concurrent acquisition state."""
 
     changed = Signal()
     idle = Signal()
     cancelled = Signal(object)
+    _scanned = Signal(int, object)
 
     def __init__(self, models_dir: Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.models_dir = models_dir
-        self._ready_names = self._read_ready_names()
+        self._ready_names = read_ready_names(models_dir)
+        # Bumped whenever the ready names are set, so a background scan that
+        # started before a newer read applies nothing.
+        self._readiness_version = 0
+        self._scan_in_flight = False
+        self._scan_again = False
+        self._scanned.connect(self._scan_finished)
         self._operation_ids = count(1)
         self._operations: dict[int, ModelOperation] = {}
         self._threads: dict[int, QThread] = {}
@@ -220,11 +233,60 @@ class ModelManager(QObject):
         )
 
     def refresh_readiness(self) -> None:
-        ready_names = self._read_ready_names()
-        if ready_names == self._ready_names:
+        if self._set_ready_names(read_ready_names(self.models_dir)):
+            self.changed.emit()
+
+    def rescan(self) -> None:
+        """Re-check the models folder off the UI thread, for files placed there by hand.
+
+        A request while a scan runs is answered by one more scan after it. None
+        starts while an install is under way, since an install re-reads the folder
+        as each operation ends, nor once quitting has begun.
+        """
+        if self._shutting_down or self.in_progress_operations:
             return
+        if self._scan_in_flight:
+            self._scan_again = True
+            return
+        self._scan_in_flight = True
+        version = self._readiness_version
+        # A daemon thread, so quitting never waits on a folder that stalls; the
+        # answer arrives on the GUI thread through the queued signal.
+        threading.Thread(
+            target=self._scan,
+            args=(self.models_dir, version),
+            name="pixelup-model-scan",
+            daemon=True,
+        ).start()
+
+    def _scan(self, models_dir: Path, version: int) -> None:
+        ready_names = read_ready_names(models_dir)
+        try:
+            self._scanned.emit(version, ready_names)
+        except RuntimeError:
+            pass  # The manager was deleted while the scan ran; nothing waits for it.
+
+    @Slot(int, object)
+    def _scan_finished(self, version: int, ready_names: frozenset[str]) -> None:
+        self._scan_in_flight = False
+        current = (
+            version == self._readiness_version
+            and not self._shutting_down
+            and not self.in_progress_operations
+        )
+        if current and self._set_ready_names(ready_names):
+            self.changed.emit()
+        if self._scan_again:
+            self._scan_again = False
+            self.rescan()
+
+    def _set_ready_names(self, ready_names: frozenset[str]) -> bool:
+        """Record a read of the folder; whether the ready names changed."""
+        self._readiness_version += 1
+        if ready_names == self._ready_names:
+            return False
         self._ready_names = ready_names
-        self.changed.emit()
+        return True
 
     def install(self, artifact_names: tuple[str, ...], *, force: bool) -> int | None:
         if self._shutting_down:
@@ -405,7 +467,7 @@ class ModelManager(QObject):
 
         # Concurrent operations publish disjoint artifacts atomically. Re-read the
         # shared cache at each operation boundary so every view sees partial success.
-        self._ready_names = self._read_ready_names()
+        self._set_ready_names(read_ready_names(self.models_dir))
         operation = self._operations.get(operation_id)
         if operation is not None:
             if result is None:
@@ -457,8 +519,3 @@ class ModelManager(QObject):
         self.changed.emit()
         if not self._threads:
             self.idle.emit()
-
-    def _read_ready_names(self) -> frozenset[str]:
-        return frozenset(
-            name for name in MANAGED_ARTIFACT_NAMES if model_is_ready(self.models_dir, name)
-        )

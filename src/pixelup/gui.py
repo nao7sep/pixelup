@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from PySide6.QtCore import (
+    QEvent,
     QLocale,
     QSize,
     Qt,
@@ -466,6 +467,13 @@ class MainWindow(QMainWindow):
 
     def _on_commit_data_request(self, _manager: object) -> None:
         self._session_shutdown = True
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.WindowActivate:
+            # Model files copied into the folder by hand are found when PixelUp
+            # comes back to the front.
+            self.model_manager.rescan()
+        return super().event(event)
 
     @Slot(Qt.ApplicationState)
     def _application_state_changed(self, state: Qt.ApplicationState) -> None:

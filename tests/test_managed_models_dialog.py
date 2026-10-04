@@ -4,7 +4,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QProgressBar, QRadioButton
 
 from pixelup.dialog_shell import TABLE_WIDTH
@@ -288,6 +288,38 @@ def test_manual_surface_has_independent_actions_and_truthful_columns(
         assert footer.itemAt(2).widget() is dialog.reveal_button
         assert footer.itemAt(3).widget() is dialog.primary_button
     finally:
+        dialog.deleteLater()
+
+
+def test_coming_to_the_front_finds_model_files_placed_by_hand(
+    qapp: QApplication, tmp_path: Path, process_until
+) -> None:
+    manager = ModelManager(tmp_path)
+    dialog = ManagedModelsDialog(manager)
+    try:
+        dialog.show()
+        qapp.processEvents()
+        process_until(lambda: not manager._scan_in_flight, timeout_s=10, what="The models scan")
+        assert dialog.status_labels[0].text() == "Not installed"
+        row_button = dialog.row_action_buttons[0]
+        row_button.setFocus()
+
+        for name in MANAGED_MODEL_BUNDLES[0].artifact_names:
+            path = model_file(tmp_path, name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"model")
+        QApplication.sendEvent(dialog, QEvent(QEvent.Type.WindowActivate))
+        process_until(
+            lambda: dialog.status_labels[0].text() == "Installed",
+            timeout_s=10,
+            what="The dialog's rescan",
+        )
+
+        assert row_button.text() == "Reinstall"
+        # The rows are updated in place, so the focused one keeps the focus.
+        assert dialog.focusWidget() is row_button
+    finally:
+        dialog.close()
         dialog.deleteLater()
 
 

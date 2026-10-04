@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import QMargins, QRect, QSettings, QSize, Qt, QUrl
+from PySide6.QtCore import QEvent, QMargins, QRect, QSettings, QSize, Qt, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
@@ -799,6 +799,30 @@ def test_missing_models_show_as_a_warning_line_under_the_button(make_window) -> 
     assert not window.model_status.isHidden()
     assert window.model_status.text() == "Some models are not installed."
     assert window.model_status.property("severity") == "warning"
+
+
+def test_coming_to_the_front_finds_a_model_file_placed_by_hand(
+    make_window, tmp_path: Path, process_until
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    path = model_file(window.runtime_dirs.models_dir, "realesr-general-x4v3")
+    content = path.read_bytes()
+    path.unlink()
+    window.model_manager.refresh_readiness()
+    assert not window.model_status.isHidden()
+
+    path.write_bytes(content)
+    QApplication.sendEvent(window, QEvent(QEvent.Type.WindowActivate))
+    process_until(
+        lambda: window.model_status.isHidden(), timeout_s=10, what="The window's rescan"
+    )
+
+    assert window.model_manager.missing(("realesr-general-x4v3",)) == ()
+    assert window._selected_path() == image.resolve()
+    assert window._selected_models() == ["realesr-general-x4v3"]
 
 
 def test_the_warning_line_has_an_amber_for_each_theme() -> None:
