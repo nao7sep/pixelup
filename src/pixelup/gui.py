@@ -681,8 +681,8 @@ class MainWindow(QMainWindow):
         self.about_button.clicked.connect(self._about_dialog)
 
         start = Qt.AlignmentFlag.AlignLeft
-        layout.addWidget(self.records_button, 0, 0, start)
-        layout.addWidget(self.settings_button, 0, 1, start)
+        layout.addWidget(self.settings_button, 0, 0, start)
+        layout.addWidget(self.records_button, 0, 1, start)
         layout.addWidget(self.shortcuts_button, 1, 0, start)
         layout.addWidget(self.about_button, 1, 1, start)
         # The two button columns take their content's width and the rest of the row
