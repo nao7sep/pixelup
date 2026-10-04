@@ -95,7 +95,7 @@ def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(scope="session")
-def qapp() -> QApplication:
+def _session_qapp() -> QApplication:
     """A single offscreen QApplication shared by all GUI tests.
 
     Widget construction needs a running QApplication. The offscreen platform
@@ -113,11 +113,28 @@ def qapp() -> QApplication:
     return app
 
 
+@pytest.fixture
+def qapp(_session_qapp: QApplication):
+    """The shared QApplication, with the app sheet and palette put back after the test.
+
+    build_app installs both on the one application every test shares. Put back
+    here, a test that measures what the app sheet draws installs the sheet itself
+    instead of passing only when a test before it left one behind.
+    """
+    app = _session_qapp
+    style_sheet, palette = app.styleSheet(), app.palette()
+    yield app
+    if app.styleSheet() != style_sheet:
+        app.setStyleSheet(style_sheet)
+    if app.palette() != palette:
+        app.setPalette(palette)
+
+
 ProcessUntil = Callable[..., None]
 
 
 @pytest.fixture(scope="session")
-def process_until(qapp: QApplication) -> ProcessUntil:
+def process_until(_session_qapp: QApplication) -> ProcessUntil:
     """Run the Qt event loop until ``done()`` holds, failing after ``timeout_s``."""
 
     def run(done: Callable[[], bool], *, timeout_s: float, what: str) -> None:
@@ -125,7 +142,7 @@ def process_until(qapp: QApplication) -> ProcessUntil:
         while not done():
             if time.monotonic() > deadline:
                 pytest.fail(f"{what} did not finish within {timeout_s:.0f} s")
-            qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 100)
+            _session_qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 100)
             time.sleep(0.02)
 
     return run

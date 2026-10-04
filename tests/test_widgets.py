@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAccessible
@@ -13,6 +15,7 @@ from PySide6.QtWidgets import (
 from pixelup.devices import DEVICE_CHOICES
 from pixelup.i18n.message import Message
 from pixelup.paths import OutputFormat
+from pixelup.theme import apply_theme
 from pixelup.widgets import (
     EmptyStateTableWidget,
     OperationResult,
@@ -73,13 +76,15 @@ def test_operation_result_keeps_dismiss_at_the_upper_end_of_wrapping_copy(
     ids=["one-line", "wrapped"],
 )
 def test_operation_result_centers_dismiss_on_the_first_line_not_the_block(
-    qapp: QApplication, text: str
+    qapp: QApplication, tmp_path: Path, text: str
 ) -> None:
     """The X sits on the message's first line, one line or wrapped alike —
     never drifting toward the middle of a taller, wrapped block — and doing so
     never changes the banner's height or the message's own (unmoved) position.
     See scratchpad/redesign/xalign/pixelup for real-render screenshots and
     measured offsets (both within 1px)."""
+    # The banner's edge is drawn by the app sheet, which the height below counts.
+    apply_theme(qapp, tmp_path / "marks")
     result = OperationResult(object_name="xalignResult", dismissible=True)
     try:
         result.show_result(text, severity="warning")
