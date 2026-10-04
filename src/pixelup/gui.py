@@ -344,6 +344,9 @@ class MainWindow(QMainWindow):
         # built-in resolves to the system UI font. setFont propagates app-wide, so
         # this is the single place the UI font is established.
         apply_ui_font(QApplication.instance(), self.config.font_family)
+        # The window itself was made before that, so it takes the font too, as the
+        # Settings path does; otherwise what inherits from it keeps the platform font.
+        self.setFont(QApplication.instance().font())
         self.log_file = log_file
         # The Records window and the one thread its reads run on, made when the
         # window is first opened; the thread lasts until PixelUp quits.

@@ -1472,6 +1472,29 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
         qapp.processEvents()
 
 
+def test_the_window_itself_takes_the_configured_font_at_launch(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The window exists before the configured font is applied, so without its own
+    # setFont it kept the platform font, and anything inheriting from it did too.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"font_family": "Menlo"}))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
+    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    original = qapp.font()
+    window = MainWindow(log_file=configure_session_logging())
+    try:
+        assert window.font().family() == "Menlo"
+        assert window.settings_button.font().family() == "Menlo"
+    finally:
+        window._session_shutdown = True
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+        qapp.setFont(original)
+
+
 def test_fresh_launch_and_close_do_not_create_config(make_window) -> None:
     window = make_window()
     assert not config_path().exists()
