@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import time
@@ -152,6 +153,10 @@ def run_upscale(
         runtime_dirs,
         check_model=True,
     )
+    # Every fact about the input is read before processing starts, so the sidecar and
+    # the output's metadata describe the input this job began from.
+    input_sha256, input_size_bytes = _hash_input(plan.read_path)
+    source_metadata = load_source_metadata(plan.read_path)
     log.info(
         "upscale.planned",
         input=str(plan.input_path),
@@ -207,7 +212,7 @@ def run_upscale(
         output_format=plan.output_format,
         quality=options.quality,
         background=options.background,
-        source_metadata=load_source_metadata(plan.read_path),
+        source_metadata=source_metadata,
         strip_metadata=options.strip_metadata,
         target_profile=options.target_profile,
         on_published=on_output_published,
@@ -219,10 +224,30 @@ def run_upscale(
         "model": plan.model,
         "scale": plan.scale,
         "input_size": list(plan.input_size),
+        "input_sha256": input_sha256,
+        "input_size_bytes": input_size_bytes,
         "output_size": list(output_size),
         "format": plan.output_format.value,
         "ms": round((time.perf_counter() - started) * 1000),
     }
+
+
+def _hash_input(path: Path) -> tuple[str, int]:
+    """The input's SHA-256 and byte count, both from one read."""
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as file:
+            while chunk := file.read(1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+    except OSError as exc:
+        raise PixelupError(
+            ErrorCode.INPUT_UNREADABLE,
+            Message("error.inputOpenFailed"),
+            details={"input": str(path), "reason": str(exc)},
+        ) from exc
+    return digest.hexdigest(), size
 
 
 def validate_options(options: UpscaleOptions) -> None:

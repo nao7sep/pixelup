@@ -266,3 +266,38 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
         "Model 'RealESRGAN_x2plus' is trained for 2x, but the selected scale is 4x; "
         "Real-ESRGAN will rescale the output."
     ]
+
+
+def test_run_upscale_hashes_the_input_before_processing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+
+    from pixelup import upscale as upscale_module
+    from pixelup.upscale import run_upscale
+
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    models_dir.mkdir()
+    temp_dir.mkdir()
+    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    Image.new("RGB", (4, 4), "white").save(input_path)
+    original = input_path.read_bytes()
+    _stub_successful_inference(monkeypatch)
+
+    def edit_input_during_inference(*args: object, **kwargs: object) -> object:
+        Image.new("RGB", (4, 4), "black").save(input_path)
+        return object()
+
+    monkeypatch.setattr(upscale_module, "run_inference", edit_input_during_inference)
+
+    result = run_upscale(
+        options(input_path, str(tmp_path / "output.png"), model="custom-model"),
+        RuntimeDirs(models_dir, temp_dir),
+    )
+
+    assert input_path.read_bytes() != original
+    assert result["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert result["input_size_bytes"] == len(original)

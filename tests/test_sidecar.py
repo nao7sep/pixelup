@@ -45,6 +45,8 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
         ),
         result={
             "input_size": [1, 1],
+            "input_sha256": "ab" * 32,
+            "input_size_bytes": 69,
             "output_size": [4, 4],
             "format": "png",
             "model": "realesr-general-x4v3",
@@ -63,6 +65,13 @@ def test_sidecar_omits_private_paths(tmp_path: Path) -> None:
     assert payload["input"]["filename"] == "source.png"
     assert payload["output"]["filename"] == "source-realesr-general-x4v3-4x.png"
     assert str(tmp_path) not in serialized
+
+
+def test_sidecar_records_the_input_facts_read_when_the_job_started(tmp_path: Path) -> None:
+    _, payload = _write_sample_sidecar(tmp_path)
+    # The input on disk is a different file by now; the sidecar keeps what the job read.
+    assert payload["input"]["sha256"] == "ab" * 32
+    assert payload["input"]["size_bytes"] == 69
 
 
 def test_sidecar_created_at_is_canonical_utc(tmp_path: Path) -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -40,8 +39,8 @@ def write_sidecar(
         "status": "success",
         "input": {
             "filename": input_path.name,
-            "sha256": _sha256(input_path),
-            "size_bytes": input_path.stat().st_size,
+            "sha256": result.get("input_sha256"),
+            "size_bytes": result.get("input_size_bytes"),
             "dimensions": result.get("input_size"),
         },
         "output": {
@@ -137,11 +136,3 @@ def write_sidecar(
             details={"sidecar": str(sidecar_path)},
         )
     return claim
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        while chunk := file.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()

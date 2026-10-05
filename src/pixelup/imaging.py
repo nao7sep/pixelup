@@ -12,6 +12,12 @@ from typing import Any
 
 from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageError
 
+from pixelup.derived_metadata import (
+    OutputColor,
+    exif_declares_adobe_rgb,
+    exif_for_output,
+    xmp_for_output,
+)
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
@@ -32,6 +38,16 @@ class SourceMetadata:
     icc_profile: bytes | None = None
     exif: bytes | None = None
     xmp: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ColorPlan:
+    source_profile: bytes
+    # The profile the written pixels are in, and whether the file embeds it.
+    output_profile: bytes
+    embed_profile: bool
+    # The PixelUp colour space the output was converted to; None when it keeps the source's.
+    converted_to: OutputColor | None
 
 
 PublishedCallback = Callable[[PublishedFile], None]
@@ -124,20 +140,18 @@ def save_output_image(
     target_profile: str | None,
     on_published: PublishedCallback | None = None,
 ) -> tuple[int, int]:
+    source_metadata = source_metadata or SourceMetadata()
+    color = _plan_color(
+        source_metadata, strip_metadata=strip_metadata, target_profile=target_profile
+    )
     encoded = _prepare_image_for_save(
-        image,
-        output_format=output_format,
-        background=background,
-        source_metadata=source_metadata,
-        strip_metadata=strip_metadata,
-        target_profile=target_profile,
+        image, output_format=output_format, background=background, color=color
     )
     save_kwargs = _save_kwargs(
         output_format,
         quality=quality,
-        source_metadata=source_metadata,
-        strip_metadata=strip_metadata,
-        target_profile=target_profile,
+        color=color,
+        carried=None if strip_metadata else _carried_metadata(source_metadata, encoded.size, color),
     )
     temp_path = _temp_output_path(output_path)
     try:
@@ -229,26 +243,43 @@ def _output_exists(output_path: Path) -> PixelupError:
     )
 
 
+def _plan_color(
+    source_metadata: SourceMetadata,
+    *,
+    strip_metadata: bool,
+    target_profile: str | None,
+) -> _ColorPlan:
+    source_profile = _source_profile_bytes(source_metadata)
+    if target_profile is not None:
+        output_profile = _profile_bytes(target_profile)
+        return _ColorPlan(
+            source_profile,
+            output_profile,
+            embed_profile=True,
+            converted_to=OutputColor(target_profile, _profile_description(output_profile)),
+        )
+    if strip_metadata:
+        # A file with no profile is read as sRGB, so its pixels must be sRGB.
+        return _ColorPlan(
+            source_profile, _profile_bytes("srgb"), embed_profile=False, converted_to=None
+        )
+    return _ColorPlan(source_profile, source_profile, embed_profile=True, converted_to=None)
+
+
 def _prepare_image_for_save(
     image: Image.Image,
     *,
     output_format: OutputFormat,
     background: str,
-    source_metadata: SourceMetadata | None,
-    strip_metadata: bool,
-    target_profile: str | None,
+    color: _ColorPlan,
 ) -> Image.Image:
     prepared = image
     if output_format == OutputFormat.JPG:
         prepared = _flatten_alpha(prepared, background)
     elif prepared.mode not in {"RGB", "RGBA"}:
         prepared = prepared.convert("RGBA" if "A" in prepared.getbands() else "RGB")
-    if target_profile is not None:
-        source_profile = _source_profile_bytes(source_metadata)
-        prepared = _convert_profile(prepared, source_profile, _profile_bytes(target_profile))
-    elif strip_metadata and source_metadata and source_metadata.icc_profile:
-        prepared = _convert_profile(prepared, source_metadata.icc_profile, _profile_bytes("srgb"))
-        prepared.info.pop("icc_profile", None)
+    if color.output_profile != color.source_profile:
+        prepared = _convert_profile(prepared, color.source_profile, color.output_profile)
     return prepared
 
 
@@ -287,13 +318,32 @@ def _convert_profile(
         ) from exc
 
 
+def _carried_metadata(
+    source_metadata: SourceMetadata,
+    size: tuple[int, int],
+    color: _ColorPlan,
+) -> SourceMetadata:
+    """The source's EXIF and XMP as the output carries them: describing the output."""
+    exif = source_metadata.exif
+    if exif is not None:
+        try:
+            exif = exif_for_output(exif, size=size, color=color.converted_to)
+        except ValueError as exc:
+            # A block that is not a readable TIFF structure names no dimension or colour
+            # space any reader could use, so it is carried as it is.
+            log.debug("metadata.exif_unreadable", reason=str(exc))
+    xmp = source_metadata.xmp
+    if xmp is not None:
+        xmp = xmp_for_output(xmp, size=size, color=color.converted_to)
+    return SourceMetadata(exif=exif, xmp=xmp)
+
+
 def _save_kwargs(
     output_format: OutputFormat,
     *,
     quality: int,
-    source_metadata: SourceMetadata | None,
-    strip_metadata: bool,
-    target_profile: str | None,
+    color: _ColorPlan,
+    carried: SourceMetadata | None,
 ) -> dict[str, object]:
     if output_format == OutputFormat.JPG:
         kwargs: dict[str, object] = {"format": "JPEG", "quality": quality}
@@ -301,28 +351,22 @@ def _save_kwargs(
         kwargs = {"format": "WEBP", "quality": quality}
     else:
         kwargs = {"format": "PNG"}
-    if target_profile is not None:
-        kwargs["icc_profile"] = _profile_bytes(target_profile)
-    elif not strip_metadata:
-        if source_metadata and source_metadata.icc_profile:
-            kwargs["icc_profile"] = source_metadata.icc_profile
-        else:
-            kwargs["icc_profile"] = _profile_bytes("srgb")
-    if strip_metadata:
+    # Always passed, so no encoder falls back to a profile left in the image's info.
+    kwargs["icc_profile"] = color.output_profile if color.embed_profile else None
+    if carried is None:
         return kwargs
-    exif_formats = {OutputFormat.JPG, OutputFormat.PNG, OutputFormat.WEBP}
-    if source_metadata and source_metadata.exif and output_format in exif_formats:
-        kwargs["exif"] = source_metadata.exif
-    if source_metadata and source_metadata.xmp:
+    if carried.exif:
+        kwargs["exif"] = carried.exif
+    if carried.xmp:
         if output_format == OutputFormat.PNG:
             pnginfo = PngImagePlugin.PngInfo()
             pnginfo.add_itxt(
                 "XML:com.adobe.xmp",
-                source_metadata.xmp.decode("utf-8", errors="replace"),
+                carried.xmp.decode("utf-8", errors="replace"),
             )
             kwargs["pnginfo"] = pnginfo
-        elif output_format in {OutputFormat.JPG, OutputFormat.WEBP}:
-            kwargs["xmp"] = source_metadata.xmp
+        else:
+            kwargs["xmp"] = carried.xmp
     return kwargs
 
 
@@ -343,10 +387,17 @@ def temp_file_guard(path: Path) -> Iterator[None]:
         path.unlink(missing_ok=True)
 
 
-def _source_profile_bytes(source_metadata: SourceMetadata | None) -> bytes:
-    if source_metadata and source_metadata.icc_profile:
+def _source_profile_bytes(source_metadata: SourceMetadata) -> bytes:
+    if source_metadata.icc_profile:
         return source_metadata.icc_profile
+    # An untagged camera file that EXIF marks as Adobe RGB holds Adobe RGB pixels.
+    if source_metadata.exif and exif_declares_adobe_rgb(source_metadata.exif):
+        return _profile_bytes("adobergb")
     return _profile_bytes("srgb")
+
+
+def _profile_description(profile: bytes) -> str:
+    return ImageCms.getProfileDescription(ImageCms.ImageCmsProfile(BytesIO(profile))).strip()
 
 
 def _profile_bytes(name: str) -> bytes:

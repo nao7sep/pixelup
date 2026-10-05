@@ -373,3 +373,119 @@ def test_save_output_image_falls_back_to_an_exclusive_claim_without_hard_links(
     assert size == (1, 1)
     with Image.open(output) as saved:
         assert saved.size == (1, 1)
+
+
+def _camera_exif(*, color_space: int, interop_index: str) -> bytes:
+    exif = Image.Exif()
+    exif[0x8769] = {
+        0xA002: 2,
+        0xA003: 1,
+        0xA001: color_space,
+        0x9003: "2020:01:02 03:04:05",
+        0xA005: {1: interop_index},
+    }
+    return exif.tobytes()
+
+
+ADOBE_RGB_EXIF = _camera_exif(color_space=0xFFFF, interop_index="R03")
+MID_GREEN = (100, 150, 50)
+
+
+def _save_png(
+    tmp_path: Path,
+    metadata: SourceMetadata,
+    *,
+    strip_metadata: bool = False,
+    target_profile: str | None = None,
+    size: tuple[int, int] = (2, 1),
+) -> Image.Image:
+    output = tmp_path / "out.png"
+    save_output_image(
+        Image.new("RGB", size, MID_GREEN),
+        output_path=output,
+        output_format=OutputFormat.PNG,
+        quality=95,
+        background="white",
+        source_metadata=metadata,
+        strip_metadata=strip_metadata,
+        target_profile=target_profile,
+    )
+    with Image.open(output) as saved:
+        saved.load()
+        return saved
+
+
+def _profile_name(image: Image.Image) -> str:
+    profile = ImageCms.ImageCmsProfile(BytesIO(image.info["icc_profile"]))
+    return ImageCms.getProfileDescription(profile).strip()
+
+
+def test_kept_exif_and_xmp_carry_the_output_dimensions(tmp_path: Path) -> None:
+    output = tmp_path / "out.jpg"
+    xmp = b'<rdf:Description tiff:ImageWidth="2" tiff:ImageLength="1"/>'
+
+    save_output_image(
+        Image.new("RGB", (8, 4), "white"),
+        output_path=output,
+        output_format=OutputFormat.JPG,
+        quality=95,
+        background="white",
+        source_metadata=SourceMetadata(
+            exif=_camera_exif(color_space=1, interop_index="R98"), xmp=xmp
+        ),
+        strip_metadata=False,
+        target_profile=None,
+    )
+
+    with Image.open(output) as saved:
+        exif_ifd = saved.getexif().get_ifd(0x8769)
+        assert (exif_ifd[0xA002], exif_ifd[0xA003]) == (8, 4)
+        assert exif_ifd[0x9003] == "2020:01:02 03:04:05"
+        assert saved.info["xmp"] == b'<rdf:Description tiff:ImageWidth="8" tiff:ImageLength="4"/>'
+
+
+def test_untagged_adobe_rgb_source_is_labelled_adobe_rgb(tmp_path: Path) -> None:
+    saved = _save_png(tmp_path, SourceMetadata(exif=ADOBE_RGB_EXIF))
+
+    assert _profile_name(saved) == "PixelUp Adobe RGB (1998)"
+    assert saved.getpixel((0, 0)) == MID_GREEN
+    assert saved.getexif().get_ifd(0x8769)[0xA001] == 0xFFFF
+
+
+def test_untagged_adobe_rgb_source_converts_from_adobe_rgb(tmp_path: Path) -> None:
+    from_srgb = _save_png(tmp_path, SourceMetadata(), target_profile="srgb").getpixel((0, 0))
+    (tmp_path / "out.png").unlink()
+
+    saved = _save_png(tmp_path, SourceMetadata(exif=ADOBE_RGB_EXIF), target_profile="srgb")
+
+    assert _profile_name(saved) == "sRGB built-in"
+    assert saved.getpixel((0, 0)) != from_srgb
+    exif = saved.getexif()
+    assert exif.get_ifd(0x8769)[0xA001] == 1
+    assert exif.get_ifd(0xA005)[1] == "R98"
+
+
+def test_exif_colour_space_follows_a_conversion_away_from_srgb(tmp_path: Path) -> None:
+    srgb_exif = _camera_exif(color_space=1, interop_index="R98")
+
+    saved = _save_png(tmp_path, SourceMetadata(exif=srgb_exif), target_profile="adobergb")
+
+    exif = saved.getexif()
+    assert exif.get_ifd(0x8769)[0xA001] == 0xFFFF
+    assert exif.get_ifd(0xA005)[1] == "R03"
+
+
+def test_stripped_adobe_rgb_source_is_converted_to_srgb(tmp_path: Path) -> None:
+    saved = _save_png(tmp_path, SourceMetadata(exif=ADOBE_RGB_EXIF), strip_metadata=True)
+
+    assert "icc_profile" not in saved.info
+    assert "exif" not in saved.info
+    assert saved.getpixel((0, 0)) != MID_GREEN
+
+
+def test_unreadable_source_exif_is_carried_as_it_is(tmp_path: Path) -> None:
+    unreadable = b"Exif\x00\x00MM\x00*\x00\x00\xff\xff"
+
+    saved = _save_png(tmp_path, SourceMetadata(exif=unreadable))
+
+    assert saved.info["exif"] == unreadable
