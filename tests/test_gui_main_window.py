@@ -653,7 +653,7 @@ def test_saved_font_change_refreshes_live_layout_metrics(
             self._try_save = try_save
 
         def exec(self):
-            assert self._try_save(candidate) is True
+            assert self._try_save(candidate) is None
             return QDialog.DialogCode.Accepted
 
         def config(self):
@@ -1181,7 +1181,7 @@ def test_close_waits_for_worker_ownership_to_end(
     window.closeEvent(first)
 
     assert first.isAccepted() is False
-    assert window._window_settings.contains(window._GEOMETRY_KEY) is False
+    assert window._window_state.value(window._GEOMETRY_KEY) is None
     assert window._quit_when_workers_idle is True
     assert shutdown_calls == [True]
     assert warnings == [window]
@@ -1189,7 +1189,7 @@ def test_close_waits_for_worker_ownership_to_end(
     second = QCloseEvent()
     window.closeEvent(second)
     assert second.isAccepted() is True
-    assert window._window_settings.contains(window._GEOMETRY_KEY) is True
+    assert window._window_state.value(window._GEOMETRY_KEY) is not None
 
 
 def test_main_window_restores_geometry_saved_on_normal_close(make_window) -> None:
@@ -1212,7 +1212,7 @@ def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
 
     assert first.close()
 
-    settings = QSettings(first._window_settings.fileName(), QSettings.Format.IniFormat)
+    settings = QSettings(str(first._window_state.path), QSettings.Format.IniFormat)
     assert settings.value(first._GEOMETRY_KEY) == expected
 
     second = make_window()
@@ -1259,7 +1259,7 @@ def test_main_window_saves_geometry_on_every_accepted_close(
 
     assert window.close()
 
-    settings = QSettings(window._window_settings.fileName(), QSettings.Format.IniFormat)
+    settings = QSettings(str(window._window_state.path), QSettings.Format.IniFormat)
     assert settings.value(window._GEOMETRY_KEY) == expected
 
 
@@ -1528,5 +1528,5 @@ def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
     assert config_path().read_bytes() == saved
     assert window._flush_parameters_save() is True
     assert attempts == [JobSettings(), JobSettings()]
-    assert json.loads(config_path().read_text(encoding="utf-8")) == {}
+    assert json.loads(config_path().read_text(encoding="utf-8")) == {"format_version": 1}
     assert window.config.parameters == JobSettings()

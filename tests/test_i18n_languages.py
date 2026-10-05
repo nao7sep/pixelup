@@ -205,6 +205,16 @@ def test_the_saved_language_is_read_straight_from_config_json(tmp_path: Path) ->
     assert bootstrap.saved_preference() == "system"
 
 
+def test_a_newer_config_json_means_system_like_the_window_loader(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"format_version": 1, "language": "it"}), encoding="utf-8")
+    assert bootstrap.saved_preference() == "it"
+    config.write_text(json.dumps({"format_version": 2, "language": "it"}), encoding="utf-8")
+    assert bootstrap.saved_preference() == "system"
+    config.write_text(json.dumps({"format_version": "1", "language": "it"}), encoding="utf-8")
+    assert bootstrap.saved_preference() == "system"
+
+
 def test_settle_language_speaks_the_saved_choice_before_the_app_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

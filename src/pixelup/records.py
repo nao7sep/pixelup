@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pixelup.formats import RECORDS_FORMAT_VERSION, check_sqlite_format
+
 PAGE_SIZE = 100
 LOCK_TIMEOUT_SECONDS = 2.0
 READ_TIMEOUT_SECONDS = 10.0
@@ -188,6 +190,11 @@ class RecordsReader:
                 timeout=LOCK_TIMEOUT_SECONDS,
             )
             connection.set_progress_handler(self._interrupted, _PROGRESS_STEPS)
+            try:
+                check_sqlite_format(connection, self._database, RECORDS_FORMAT_VERSION)
+            except BaseException:
+                connection.close()
+                raise
             self._connection = connection
         return self._connection
 

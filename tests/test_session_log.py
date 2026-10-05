@@ -292,3 +292,39 @@ def test_current_session_is_the_session_every_record_carries() -> None:
     database = configure_session_logging()
 
     assert {record["session"] for record in _records(database)} == {current_session()}
+
+
+def _newer_records(database: Path) -> bytes:
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE future (anything TEXT)")
+    connection.execute("PRAGMA user_version = 2")
+    connection.commit()
+    connection.close()
+    return database.read_bytes()
+
+
+def test_the_records_database_records_its_format_version(tmp_path: Path) -> None:
+    database = configure_session_logging()
+    log.info("image.added")
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_newer_records_are_left_untouched_and_lines_go_to_the_fallback_file(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / RECORDS_FILE_NAME
+    before = _newer_records(database)
+
+    configure_session_logging()
+    log.info("image.added", input="a.png")
+
+    assert database.read_bytes() == before
+    assert not (tmp_path / f"{RECORDS_FILE_NAME}-wal").exists()
+    fallbacks = list((tmp_path / "logs").glob("*-utc.log"))
+    lines = _read_jsonl(fallbacks[0])
+    assert [line["message"] for line in lines] == ["log.session_started", "image.added"]
+    assert "format version 2" in lines[-1]["records_error"]

@@ -21,6 +21,7 @@ class ErrorCode(StrEnum):
     INVALID_ARGUMENT = "invalid_argument"
     INTERNAL_ERROR = "internal_error"
     JOB_CANCELLED = "job_cancelled"
+    STORE_NEWER_FORMAT = "store_newer_format"
 
 
 # The two codes whose message never reaches a reader: an internal failure is

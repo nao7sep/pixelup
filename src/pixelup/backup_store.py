@@ -31,6 +31,7 @@ import threading
 from pathlib import Path
 
 from pixelup.config import resolve_state_dir
+from pixelup.formats import BACKUPS_FORMAT_VERSION, check_sqlite_format, mark_sqlite_format
 from pixelup.session_log import log
 from pixelup.timestamps import utc_now_iso_ms
 
@@ -94,13 +95,22 @@ def _ensure_open() -> sqlite3.Connection | None:
         # (a job's save), and the connection is only ever touched from record(),
         # which serializes its own access. WAL + busy_timeout handle cross-process.
         opened = sqlite3.connect(file, check_same_thread=False)
-        opened.execute("PRAGMA journal_mode = WAL")
-        # busy_timeout: under the tolerated two-instance case, a contended write
-        # waits up to this long for SQLite's write lock instead of immediately
-        # failing with SQLITE_BUSY and dropping that record.
-        opened.execute("PRAGMA busy_timeout = 5000")
-        opened.executescript(_SCHEMA)
-        opened.commit()
+        try:
+            # busy_timeout: under the tolerated two-instance case, a contended write
+            # waits up to this long for SQLite's write lock instead of immediately
+            # failing with SQLITE_BUSY and dropping that record.
+            opened.execute("PRAGMA busy_timeout = 5000")
+            # Before anything writes: a store from a newer PixelUp is left exactly
+            # as it is, and recording stays off for the session.
+            unmarked = check_sqlite_format(opened, file, BACKUPS_FORMAT_VERSION)
+            opened.execute("PRAGMA journal_mode = WAL")
+            opened.executescript(_SCHEMA)
+            if unmarked:
+                mark_sqlite_format(opened, BACKUPS_FORMAT_VERSION)
+            opened.commit()
+        except BaseException:
+            opened.close()
+            raise
         _connection = opened
     except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable, never crash.
         log.warning(

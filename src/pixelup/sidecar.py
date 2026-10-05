@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pixelup import __version__
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.formats import SIDECAR_FORMAT_VERSION
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
 from pixelup.output_reservation import (
@@ -16,8 +17,6 @@ from pixelup.output_reservation import (
 )
 from pixelup.timestamps import utc_now_iso_ms
 from pixelup.upscale import UpscaleOptions
-
-SCHEMA_VERSION = 1
 
 
 def write_sidecar(
@@ -30,7 +29,7 @@ def write_sidecar(
 ) -> PublishedFile:
     sidecar_path = output_path.with_suffix(".json")
     payload = {
-        "schema_version": SCHEMA_VERSION,
+        "format_version": SIDECAR_FORMAT_VERSION,
         "app": {
             "name": "pixelup",
             "version": __version__,

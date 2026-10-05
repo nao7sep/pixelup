@@ -24,7 +24,6 @@ from PySide6.QtCore import (
     QObject,
     QPersistentModelIndex,
     QRect,
-    QSettings,
     QSize,
     Qt,
     QThread,
@@ -63,6 +62,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pixelup.formats import NewerFormatError
 from pixelup.i18n import localizer
 from pixelup.i18n.localized import localize, unlocalize
 from pixelup.i18n.message import Message
@@ -84,9 +84,10 @@ from pixelup.theme import danger_colours, surfaces, warning_text
 from pixelup.ui_common import REGULAR_SPACING, use_regular_spacing
 from pixelup.widgets import NoWheelComboBox, repolish
 from pixelup.window_placement import (
+    WindowState,
     restore_window_geometry,
     save_window_geometry,
-    window_settings,
+    window_state,
 )
 
 GEOMETRY_KEY = "recordsWindow/geometry"
@@ -212,6 +213,14 @@ def stored_signal() -> SignalInstance:
     return _stored.stored
 
 
+def load_failure_note(error: object) -> Message:
+    """What the list says when the records cannot be read: records from a newer
+    PixelUp are named as such, since reading them again will not help."""
+    if isinstance(error, dict) and error.get("newer_format"):
+        return Message("records.newerFormat")
+    return Message("records.loadFailed")
+
+
 class _ReadWorker(QObject):
     answered = Signal(int, object)
     failed = Signal(int, object)
@@ -239,6 +248,7 @@ class _ReadWorker(QObject):
                     "type": type(exc).__name__,
                     "message": str(exc),
                     "traceback": traceback.format_exc().rstrip(),
+                    "newer_format": isinstance(exc, NewerFormatError),
                 },
             )
             return
@@ -518,14 +528,14 @@ class RecordsWindow(QWidget):
 
     closed = Signal()
 
-    def __init__(self, reads: RecordsReads, settings: QSettings | None = None) -> None:
+    def __init__(self, reads: RecordsReads, state: WindowState | None = None) -> None:
         super().__init__(None, Qt.WindowType.Window)
         # Closing the main window quits PixelUp whether or not this one is open.
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         localize(self, title="records.title")
         self._reads = reads
-        self._settings = settings if settings is not None else window_settings()
+        self._state = state if state is not None else window_state()
         self._pending: dict[int, tuple[_Answer, _Answer]] = {}
         self._query = RecordsQuery()
         self._sessions: tuple[str, ...] = ()
@@ -662,12 +672,12 @@ class RecordsWindow(QWidget):
                 )
             size = size.boundedTo(available)
         self.resize(size.expandedTo(self.minimumSizeHint()))
-        restore_window_geometry(self, self._settings, GEOMETRY_KEY)
+        restore_window_geometry(self, self._state, GEOMETRY_KEY)
         self.layout().activate()
         # The saved intent, narrowed only as far as this window needs; the intent
         # itself stays saved for when there is room again.
         usable = self.splitter.width() - self.splitter.handleWidth()
-        intent = saved_list_width(self._settings.value(LIST_WIDTH_KEY, LIST_WIDTH_DEFAULT))
+        intent = saved_list_width(self._state.value(LIST_WIDTH_KEY))
         width = max(LIST_WIDTH_MIN, min(intent, usable - DETAIL_MIN_WIDTH))
         self.splitter.setSizes([width, max(DETAIL_MIN_WIDTH, usable - width)])
 
@@ -675,10 +685,7 @@ class RecordsWindow(QWidget):
     def _save_list_width(self) -> None:
         # Drag intent: window-conventions. Only a drag saves, never a resize.
         width = clamp_list_width(self.list_pane.width())
-        self._settings.setValue(LIST_WIDTH_KEY, width)
-        self._settings.sync()
-        if self._settings.status() != QSettings.Status.NoError:
-            log.warning("records.list_width_save_failed")
+        self._state.save(LIST_WIDTH_KEY, width)
 
     def bring_forward(self) -> None:
         if self.isMinimized():
@@ -692,7 +699,7 @@ class RecordsWindow(QWidget):
         if self._closed:
             return
         self._closed = True
-        save_window_geometry(self, self._settings, GEOMETRY_KEY)
+        save_window_geometry(self, self._state, GEOMETRY_KEY)
         self._search_timer.stop()
         self._live_timer.stop()
         self._pending.clear()
@@ -772,7 +779,7 @@ class RecordsWindow(QWidget):
             return
         self._read_failed("page", error)
         self._status = "failed"
-        self.list.set_note(Message("records.loadFailed"), failed=True)
+        self.list.set_note(load_failure_note(error), failed=True)
         QAccessible.updateAccessibility(QAccessibleEvent(self.list, QAccessible.Event.Alert))
 
     def _read_newest(self) -> None:

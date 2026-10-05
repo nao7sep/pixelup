@@ -162,7 +162,8 @@ def _populate(main: MainWindow, directory: Path) -> None:
 
 
 def _dialogs(manager: ModelManager) -> list[QDialog]:
-    settings = SettingsDialog(AppConfig(), try_save=lambda _candidate: False)
+    failed = Message("settings.saveFailed")
+    settings = SettingsDialog(AppConfig(), try_save=lambda _candidate: failed)
     settings.ok_button.setEnabled(True)
     settings._save()
     about = AboutDialog(opener=lambda _url: (_ for _ in ()).throw(OSError("offline")))

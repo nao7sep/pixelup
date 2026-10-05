@@ -54,6 +54,10 @@ def warn_config_reset(parent: QWidget | None) -> None:
     _show_message(parent, Message("notice.configReset"))
 
 
+def warn_config_newer(parent: QWidget | None) -> None:
+    _show_message(parent, Message("notice.configNewer"))
+
+
 def warn_jobs_stopping(parent: QWidget | None) -> None:
     _show_message(parent, Message("notice.stopping"))
 

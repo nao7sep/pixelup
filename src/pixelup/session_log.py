@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from pixelup.config import resolve_state_dir
+from pixelup.formats import RECORDS_FORMAT_VERSION, check_sqlite_format, mark_sqlite_format
 from pixelup.timestamps import to_utc_iso_ms, utc_stamp_ms
 
 LOGGER_NAME = "pixelup"
@@ -128,9 +129,14 @@ def _open_records(database: Path) -> sqlite3.Connection:
         database, timeout=5.0, isolation_level=None, check_same_thread=False
     )
     try:
+        # Before anything writes: records from a newer PixelUp are left exactly as
+        # they are, and this launch's lines go to the fallback file instead.
+        unmarked = check_sqlite_format(connection, database, RECORDS_FORMAT_VERSION)
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA synchronous = NORMAL")
         connection.executescript(_SCHEMA)
+        if unmarked:
+            mark_sqlite_format(connection, RECORDS_FORMAT_VERSION)
     except BaseException:
         connection.close()
         raise

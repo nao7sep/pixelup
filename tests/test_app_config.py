@@ -13,7 +13,8 @@ from pixelup.app_config import (
     load_app_config_result,
     save_app_config_merged,
 )
-from pixelup.errors import PixelupError
+from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 from pixelup.jobs import JobSettings, job_settings_log_payload
 from pixelup.paths import OutputFormat
 
@@ -103,7 +104,8 @@ def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
     candidate = AppConfig(parameters=JobSettings(quality=55))
     save_app_config_merged(candidate, AppConfig(), path)
     stored = json.loads(path.read_text(encoding="utf-8"))
-    assert set(stored) == {"parameters"}
+    assert set(stored) == {"format_version", "parameters"}
+    assert stored["format_version"] == 1
     assert set(stored["parameters"]) == {item.name for item in fields(JobSettings)}
     assert load_app_config(path) == candidate
 
@@ -114,13 +116,13 @@ def test_one_stored_set_uses_built_ins_for_every_other_set(tmp_path: Path) -> No
     assert load_app_config(path) == AppConfig(font_family="Menlo")
 
 
-def test_next_edit_drops_version_and_other_unknown_keys(tmp_path: Path) -> None:
+def test_next_edit_drops_unknown_keys_and_writes_the_format_version(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text('{"version": 99, "future": true, "language": "ja"}', encoding="utf-8")
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, max_concurrent_jobs=3), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "language": "ja", "max_concurrent_jobs": 3,
+        "format_version": 1, "language": "ja", "max_concurrent_jobs": 3,
     }
 
 
@@ -129,7 +131,7 @@ def test_saving_a_set_equal_to_its_built_in_deletes_only_that_set(tmp_path: Path
     previous = AppConfig(language="ja", parameters=JobSettings(quality=55))
     save_app_config_merged(previous, AppConfig(), path)
     reset = save_app_config_merged(replace(previous, parameters=JobSettings()), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {"language": "ja"}
+    assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
     assert reset == AppConfig(language="ja")
 
 
@@ -138,7 +140,7 @@ def test_the_last_set_back_at_its_built_in_leaves_an_empty_map(tmp_path: Path) -
     previous = AppConfig(parameters=JobSettings(quality=55))
     save_app_config_merged(previous, AppConfig(), path)
     save_app_config_merged(AppConfig(), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {}
+    assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1}
 
 
 def test_any_save_drops_a_stored_copy_equal_to_its_built_in(tmp_path: Path) -> None:
@@ -146,7 +148,7 @@ def test_any_save_drops_a_stored_copy_equal_to_its_built_in(tmp_path: Path) -> N
     path.write_text(json.dumps({"parameters": _parameter_map()}), encoding="utf-8")
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, language="ja"), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {"language": "ja"}
+    assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
 
 
 def test_any_save_drops_a_set_that_failed_its_check(tmp_path: Path) -> None:
@@ -155,7 +157,7 @@ def test_any_save_drops_a_set_that_failed_its_check(tmp_path: Path) -> None:
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, font_family="Menlo"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "font_family": "Menlo", "language": "ja",
+        "format_version": 1, "font_family": "Menlo", "language": "ja",
     }
 
 
@@ -258,6 +260,71 @@ def test_a_failed_quarantine_propagates_and_leaves_the_file(
     assert path.read_text(encoding="utf-8") == "{ this is not valid json"
 
 
+def test_a_config_without_a_format_version_reads_as_version_1(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text('{"language": "ja"}', encoding="utf-8")
+    result = load_app_config_result(path)
+    assert result.config == AppConfig(language="ja")
+    assert result.newer_format is None
+    path.write_text('{"format_version": 1, "language": "ja"}', encoding="utf-8")
+    assert load_app_config(path) == AppConfig(language="ja")
+
+
+@pytest.mark.parametrize("marker", ['"1"', "0", "-1", "1.5", "true", "null"])
+def test_a_format_version_that_is_not_a_version_is_quarantined(
+    tmp_path: Path, marker: str
+) -> None:
+    path = tmp_path / "config.json"
+    text = f'{{"format_version": {marker}, "language": "ja"}}'
+    path.write_text(text, encoding="utf-8")
+    result = load_app_config_result(path)
+    if marker == "null":
+        # JSON null is an absent value, which reads as 1.
+        assert result.config == AppConfig(language="ja")
+        return
+    assert result.config == AppConfig()
+    assert result.quarantined_to is not None
+    assert result.quarantined_to.read_text(encoding="utf-8") == text
+
+
+def test_a_newer_config_is_left_in_place_and_reads_as_built_ins(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    text = '{"format_version": 2, "language": "ja"}'
+    path.write_text(text, encoding="utf-8")
+
+    result = load_app_config_result(path)
+
+    assert result.config == AppConfig()
+    assert result.newer_format == 2
+    assert result.quarantined_to is None
+    assert path.read_text(encoding="utf-8") == text
+    assert [item.name for item in tmp_path.iterdir()] == ["config.json"]
+
+
+def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    text = '{"format_version": 2, "future": {"anything": true}}'
+    path.write_text(text, encoding="utf-8")
+    previous = load_app_config(path)
+
+    with pytest.raises(PixelupError) as raised:
+        save_app_config_merged(replace(previous, language="ja"), previous, path)
+
+    assert raised.value.code == ErrorCode.STORE_NEWER_FORMAT
+    assert raised.value.message.key == "error.configNewer"
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_a_save_marks_a_config_that_had_no_format_version(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text('{"language": "ja"}', encoding="utf-8")
+    previous = load_app_config(path)
+    save_app_config_merged(replace(previous, max_concurrent_jobs=2), previous, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "format_version": 1, "language": "ja", "max_concurrent_jobs": 2,
+    }
+
+
 def test_missing_config_is_not_treated_as_corrupt(tmp_path: Path) -> None:
     # The normal first run: no file, defaults, and nothing quarantined.
     result = load_app_config_result(tmp_path / "missing.json")
@@ -329,6 +396,44 @@ def _parameter_map(**updates: object) -> dict[str, object]:
 
 def _write(path: Path, **parameters: object) -> None:
     path.write_text(json.dumps({"parameters": _parameter_map(**parameters)}), encoding="utf-8")
+
+
+def test_a_newer_config_lets_the_window_open_and_is_never_written(
+    qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from pixelup.gui import MainWindow
+    from pixelup.runner import JobRunner
+    from pixelup.session_log import configure_session_logging
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
+    text = '{"format_version": 2, "language": "ja"}'
+    (home / "config.json").write_text(text, encoding="utf-8")
+
+    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    notices: list[str] = []
+    monkeypatch.setattr("pixelup.gui.warn_config_newer", lambda _parent: notices.append("shown"))
+    monkeypatch.setattr("pixelup.gui.warn_config_reset", lambda _parent: notices.append("reset"))
+    log_file = configure_session_logging()
+
+    window = MainWindow(log_file=log_file)
+    try:
+        assert window.config == AppConfig()
+        assert window._config_quarantined_to is None
+        QApplication.processEvents()
+        assert notices == ["shown"]
+
+        window.quality.setValue(window.quality.value() - 1)
+        assert window._flush_parameters_save() is False
+        assert window.parameters_result.message == Message("error.configNewer")
+        assert (home / "config.json").read_text(encoding="utf-8") == text
+    finally:
+        window._session_shutdown = True
+        window.close()
+        window.deleteLater()
 
 
 def test_invalid_utf8_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) -> None:
@@ -611,5 +716,5 @@ def test_edit_writes_the_untouched_user_set_whole_from_memory(tmp_path: Path) ->
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, language="ja"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "parameters": _parameter_map(quality=42), "language": "ja",
+        "format_version": 1, "parameters": _parameter_map(quality=42), "language": "ja",
     }

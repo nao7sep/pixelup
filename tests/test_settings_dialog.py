@@ -10,8 +10,11 @@ from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QWidge
 
 from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig, save_app_config_merged
 from pixelup.fonts import system_ui_font_family
+from pixelup.i18n.message import Message
 from pixelup.jobs import JobSettings
 from pixelup.settings_dialog import DiscardChangesDialog, SettingsDialog
+
+_FAILED = Message("settings.saveFailed")
 
 # The dialog holds only what the main window does not show: the UI font and the
 # concurrent job count. The image-processing
@@ -167,7 +170,7 @@ def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplica
     attempts: list[AppConfig] = []
     dialog = SettingsDialog(
         AppConfig(),
-        try_save=lambda candidate: attempts.append(candidate) or False,
+        try_save=lambda candidate: attempts.append(candidate) or _FAILED,
     )
     try:
         dialog.font_family.setText("Menlo")
@@ -185,7 +188,7 @@ def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplica
 
 
 def test_failed_save_grows_dialog_instead_of_compressing_controls(qapp: QApplication) -> None:
-    dialog = SettingsDialog(AppConfig(), try_save=lambda _candidate: False)
+    dialog = SettingsDialog(AppConfig(), try_save=lambda _candidate: _FAILED)
     try:
         dialog.show()
         qapp.processEvents()
@@ -205,7 +208,7 @@ def test_failed_save_grows_dialog_instead_of_compressing_controls(qapp: QApplica
 
 
 def test_successful_retry_accepts_after_an_inline_failure(qapp: QApplication) -> None:
-    outcomes = iter((False, True))
+    outcomes = iter((_FAILED, None))
     dialog = SettingsDialog(AppConfig(), try_save=lambda _candidate: next(outcomes))
     try:
         dialog.concurrent.setValue(2)
@@ -223,15 +226,17 @@ def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: P
     path = tmp_path / "config.json"
     initial = AppConfig()
 
-    def save(candidate: AppConfig) -> bool:
+    def save(candidate: AppConfig) -> Message | None:
         save_app_config_merged(candidate, initial, path)
-        return True
+        return None
 
     dialog = SettingsDialog(initial, try_save=save)
     try:
         dialog.concurrent.setValue(4)
         dialog.ok_button.click()
-        assert json.loads(path.read_text(encoding="utf-8")) == {"max_concurrent_jobs": 4}
+        assert json.loads(path.read_text(encoding="utf-8")) == {
+            "format_version": 1, "max_concurrent_jobs": 4,
+        }
     finally:
         dialog.deleteLater()
 

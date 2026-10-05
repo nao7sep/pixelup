@@ -70,7 +70,7 @@ from pixelup.app_config import (
 )
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.devices import DEVICE_CHOICES
-from pixelup.errors import PixelupError
+from pixelup.errors import PixelupError, user_text
 from pixelup.fonts import apply_ui_font
 from pixelup.i18n import localizer
 from pixelup.i18n.bootstrap import settle_language
@@ -91,6 +91,7 @@ from pixelup.jobs import (
 from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.message_dialogs import (
     show_startup_failure,
+    warn_config_newer,
     warn_config_reset,
     warn_jobs_stopping,
 )
@@ -137,7 +138,7 @@ from pixelup.widgets import (
 from pixelup.window_placement import (
     restore_window_geometry,
     save_window_geometry,
-    window_settings,
+    window_state,
 )
 
 # Horizontal slack added to a measured string so cell text never touches the
@@ -332,13 +333,15 @@ class MainWindow(QMainWindow):
 
     def __init__(self, *, log_file: Path, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
-        # A corrupt config.json is quarantined and the app runs on the built-ins rather
-        # than crashing startup (store-recovery-conventions); the loader returns where
-        # the corrupt file went so the notice below can tell the user. It is surfaced
-        # only after the window is built, so the message box has a real parent.
+        # A corrupt config.json is quarantined, and a newer PixelUp's is left alone;
+        # either way the app runs on the built-ins rather than failing startup
+        # (store-recovery-conventions), and the notice below tells the user. It is
+        # surfaced only after the window is built, so the message box has a real
+        # parent.
         load_result = load_app_config_result()
         self.config = load_result.config
         self._config_quarantined_to = load_result.quarantined_to
+        self._config_newer_format = load_result.newer_format
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. The blank
         # built-in resolves to the system UI font. setFont propagates app-wide, so
@@ -407,8 +410,8 @@ class MainWindow(QMainWindow):
             hint.height() + _WINDOW_TARGET_EXTRA_HEIGHT,
         )
         self.resize(bounded_initial_window_size(self.minimumSize(), work_area))
-        self._window_settings = window_settings()
-        restore_window_geometry(self, self._window_settings, self._GEOMETRY_KEY)
+        self._window_state = window_state()
+        restore_window_geometry(self, self._window_state, self._GEOMETRY_KEY)
         # The panel opens on what the user last left it at, not on a defaults layer:
         # config.parameters is the persisted panel, and with no stored set it is
         # JobSettings() — the built-ins.
@@ -441,6 +444,13 @@ class MainWindow(QMainWindow):
             # blocking construction ahead of the first paint. Non-fatal: the app is
             # already running on the built-ins; this only tells the user.
             QTimer.singleShot(0, self._notify_config_reset)
+        if self._config_newer_format is not None:
+            log.warning(
+                "config.newer_format",
+                path=str(config_path()),
+                format_version=self._config_newer_format,
+            )
+            QTimer.singleShot(0, self._notify_config_newer)
 
     def _retranslate(self) -> None:
         """Rewrite, after a language change, what the widget bindings do not reach."""
@@ -468,6 +478,10 @@ class MainWindow(QMainWindow):
         if self._config_quarantined_to is not None:
             warn_config_reset(self)
 
+    def _notify_config_newer(self) -> None:
+        if self._config_newer_format is not None:
+            warn_config_newer(self)
+
     def _on_commit_data_request(self, _manager: object) -> None:
         self._session_shutdown = True
 
@@ -492,7 +506,7 @@ class MainWindow(QMainWindow):
             self.activateWindow()
 
     def _accept_close(self, event: QCloseEvent) -> None:
-        save_window_geometry(self, self._window_settings, self._GEOMETRY_KEY)
+        save_window_geometry(self, self._window_state, self._GEOMETRY_KEY)
         event.accept()
 
     def show_prepared(self) -> None:
@@ -1100,8 +1114,7 @@ class MainWindow(QMainWindow):
             self.config,
             self,
             try_save=lambda candidate: self._save_config_candidate(
-                candidate,
-                surface_failure=False,
+                candidate, Message("settings.saveFailed")
             ),
             session_shutdown=self._is_session_shutdown,
         )
@@ -1437,7 +1450,10 @@ class MainWindow(QMainWindow):
             self.parameters_result.clear_result()
             return True
         candidate = replace(self.config, parameters=parameters)
-        if not self._save_config_candidate(candidate, surface_failure=surface_failure):
+        failure = self._save_config_candidate(candidate, Message("parameters.saveFailed"))
+        if failure is not None:
+            if surface_failure:
+                self.parameters_result.show_result(failure, severity="error")
             return False
         log.info(
             "parameters.saved",
@@ -1447,12 +1463,9 @@ class MainWindow(QMainWindow):
         self.parameters_result.clear_result()
         return True
 
-    def _save_config_candidate(
-        self,
-        candidate: AppConfig,
-        *,
-        surface_failure: bool = True,
-    ) -> bool:
+    def _save_config_candidate(self, candidate: AppConfig, failed: Message) -> Message | None:
+        """Save ``candidate``; ``None`` once saved, else what its surface shows, which
+        is ``failed`` unless the failure says more itself."""
         try:
             # previous=self.config: only the fields this candidate actually changed
             # from it are applied, so a sibling PixelUp window's own saved change to
@@ -1464,14 +1477,11 @@ class MainWindow(QMainWindow):
                 path=str(config_path()),
                 reason=str(exc),
             )
-            if surface_failure:
-                self.parameters_result.show_result(
-                    Message("parameters.saveFailed"),
-                    severity="error",
-                )
-            return False
+            if isinstance(exc, PixelupError):
+                return user_text(exc, internal_fallback=failed)
+            return failed
         self.config = merged
-        return True
+        return None
 
     def _reset_parameters_to_defaults(self) -> None:
         """Restore the panel to PixelUp's built-in parameters and save it like any edit.

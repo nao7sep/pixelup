@@ -327,3 +327,64 @@ def test_store_sidecars_are_the_stores_own_wal_artifacts(
     # backups.sqlite3* file present is a store artifact, never stray debris.
     assert "backups.sqlite3" in store_files
     assert store_files <= {"backups.sqlite3", "backups.sqlite3-wal", "backups.sqlite3-shm"}
+
+
+def _user_version(file: Path) -> int:
+    connection = sqlite3.connect(file)
+    try:
+        return connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+
+
+def test_a_new_store_records_its_format_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    record(home / "config.json", b"{}\n")
+    close_backup_store()
+    assert _user_version(_store_path(home)) == 1
+
+
+def test_a_store_without_a_format_version_reads_as_1_and_is_marked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    record(target, b"first\n")
+    close_backup_store()
+    connection = sqlite3.connect(_store_path(home))
+    connection.execute("PRAGMA user_version = 0")
+    connection.close()
+
+    record(target, b"second\n")
+
+    assert [row[1] for row in _rows(home, target)] == [b"first\n", b"second\n"]
+    assert _user_version(_store_path(home)) == 1
+
+
+def test_a_newer_store_is_left_untouched_and_recording_stops_with_one_warn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    store = _store_path(home)
+    connection = sqlite3.connect(store)
+    connection.execute("CREATE TABLE future (anything TEXT)")
+    connection.execute("PRAGMA user_version = 2")
+    connection.commit()
+    connection.close()
+    before = store.read_bytes()
+    warns: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "pixelup.backup_store.log.warning",
+        lambda message, **fields: warns.append((message, fields)),
+    )
+
+    record(home / "config.json", b"{}\n")
+    record(home / "config.json", b"other\n")
+    close_backup_store()
+
+    assert [message for message, _fields in warns] == ["backup_store.open_failed"]
+    assert "format version 2" in warns[0][1]["reason"]
+    assert store.read_bytes() == before
+    assert not store.with_name(f"{STORE_FILE_NAME}-wal").exists()

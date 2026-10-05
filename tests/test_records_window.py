@@ -22,6 +22,7 @@ from pixelup.app_config import AppConfig, ConfigLoadResult
 from pixelup.gui import MainWindow, is_reopen
 from pixelup.i18n import localizer
 from pixelup.i18n.languages import TAGS
+from pixelup.i18n.message import Message
 from pixelup.model_registry import ALL_MODELS
 from pixelup.records import PAGE_SIZE, RecordDetail, RecordsQuery, RecordsReader
 from pixelup.records_window import (
@@ -44,7 +45,7 @@ from pixelup.session_log import (
     log,
     set_stored_listener,
 )
-from pixelup.window_placement import window_settings
+from pixelup.window_placement import WindowState, window_state
 
 NEW = "2026-10-01T09:00:00.000Z"
 OLD = "2026-09-30T08:00:00.000Z"
@@ -126,7 +127,7 @@ def open_records(qapp: QApplication, database: Path, settings: QSettings, fast: 
 
     def make(reader: RecordsReader | None = None, *, show: bool = True) -> RecordsWindow:
         reads = RecordsReads(reader or RecordsReader(database))
-        window = RecordsWindow(reads, settings)
+        window = RecordsWindow(reads, WindowState(Path(settings.fileName())))
         created.append((window, reads))
         if show:
             window.show()
@@ -478,7 +479,7 @@ def test_an_open_window_settles_instead_of_reading_its_own_reads_forever(
     set_stored_listener(stored_signal().emit)
     reader = ScriptedReader(database)
     reads = RecordsReads(reader)
-    window = RecordsWindow(reads, QSettings(str(tmp_path / "w.ini"), QSettings.Format.IniFormat))
+    window = RecordsWindow(reads, WindowState(tmp_path / "w.ini"))
     try:
         window.show()
         _until(process_until, lambda: _loaded(window), "the first page")
@@ -525,11 +526,22 @@ def test_restores_the_saved_list_width_before_the_first_frame(
     open_records, settings: QSettings
 ) -> None:
     settings.setValue(LIST_WIDTH_KEY, LIST_WIDTH_MIN + 10)
+    settings.sync()
 
     window = open_records(show=False)
 
     assert not window.isVisible()
     assert window.list_pane.width() == LIST_WIDTH_MIN + 10
+
+
+def test_a_load_failure_names_records_from_a_newer_pixelup() -> None:
+    assert records_window.load_failure_note({"newer_format": True}) == Message(
+        "records.newerFormat"
+    )
+    assert records_window.load_failure_note({"newer_format": False}) == Message(
+        "records.loadFailed"
+    )
+    assert records_window.load_failure_note(None) == Message("records.loadFailed")
 
 
 def test_a_saved_width_is_kept_within_the_list_panes_bounds() -> None:
@@ -648,7 +660,7 @@ def test_the_records_window_reopens_where_it_was_closed(make_main, process_until
     main._open_records_window()
 
     assert main._records_window.saveGeometry() == expected
-    stored = window_settings().value(GEOMETRY_KEY)
+    stored = window_state().value(GEOMETRY_KEY)
     assert stored == expected
 
 

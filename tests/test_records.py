@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from pixelup import records
+from pixelup.formats import NewerFormatError
 from pixelup.records import (
     PAGE_SIZE,
     RecordCursor,
@@ -297,3 +298,32 @@ def test_a_log_line_is_read_back_as_it_was_written() -> None:
     assert newest.message == "image.added"
     assert detail is not None and detail.job_id == 4
     assert json.loads(detail.fields) == {"input": "a.png"}
+
+
+def test_newer_records_are_named_and_never_read(database: Path) -> None:
+    _seed(database, [{"time": OLD}])
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA user_version = 2")
+    connection.close()
+    before = database.read_bytes()
+    reader = RecordsReader(database)
+    try:
+        with pytest.raises(NewerFormatError) as raised:
+            reader.page(RecordsQuery(), None)
+    finally:
+        reader.close()
+    assert raised.value.version == 2
+    assert raised.value.path == database
+    assert database.read_bytes() == before
+
+
+def test_records_written_before_their_format_version_read_as_version_1(database: Path) -> None:
+    _seed(database, [{"time": OLD}])
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA user_version = 0")
+    connection.close()
+    reader = RecordsReader(database)
+    try:
+        assert len(reader.page(RecordsQuery(), None).records) == 1
+    finally:
+        reader.close()

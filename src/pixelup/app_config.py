@@ -12,7 +12,9 @@ from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_man
 from pixelup.devices import DEVICE_VALUES
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY
+from pixelup.formats import CONFIG_FORMAT_VERSION, format_version
 from pixelup.i18n.languages import SYSTEM, is_preference
+from pixelup.i18n.message import Message
 from pixelup.jobs import (
     JobSettings,
     job_settings_log_payload,
@@ -84,19 +86,31 @@ class AppConfig:
 @dataclass(frozen=True, slots=True)
 class ConfigLoadResult:
     """The outcome of loading ``config.json``: the settings, plus whether a corrupt
-    file had to be quarantined.
+    file had to be quarantined or a newer PixelUp's file was left alone.
 
     ``quarantined_to`` is the path the corrupt original was moved aside to
-    (``<stem>-<ms-utc>.invalid``) when the file was unreadable, else ``None``. It
-    exists so the startup shell can surface a *non-fatal* user-facing notice — the
-    settings fall back to built-ins in memory without writing a replacement file,
-    and the user should know their tweaks are inactive and where the old file went.
-    The quarantine-vs-notice decision stays here, out of the GUI: the window merely
+    (``<stem>-<ms-utc>.invalid``) when the file was unreadable, else ``None``.
+    ``newer_format`` is the file's format version when a newer PixelUp wrote it,
+    else ``None``. Either way the settings fall back to built-ins in memory, and the
+    startup shell surfaces a *non-fatal* notice so the user knows their settings
+    are inactive. The decision stays here, out of the GUI: the window merely
     reports what this pure loader already decided.
     """
 
     config: AppConfig
     quarantined_to: Path | None = None
+    newer_format: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredConfig:
+    """What ``config.json`` holds, as read: its map, or why it holds nothing usable.
+    ``exists`` is whether a file is still there to compare a save against."""
+
+    data: dict[str, Any]
+    exists: bool
+    quarantined_to: Path | None = None
+    newer_format: int | None = None
 
 
 def load_app_config(path: Path | None = None) -> AppConfig:
@@ -117,17 +131,25 @@ def load_app_config_result(path: Path | None = None) -> ConfigLoadResult:
     """
     if path is None:
         path = config_path()
-    data, quarantined_to = _read_config_map(path)
-    return ConfigLoadResult(_decode_app_config(data, path), quarantined_to)
+    stored = _read_config_map(path)
+    return ConfigLoadResult(
+        _decode_app_config(stored.data, path), stored.quarantined_to, stored.newer_format
+    )
 
 
-def _read_config_map(path: Path) -> tuple[dict[str, Any], Path | None]:
+def _read_config_map(path: Path) -> _StoredConfig:
+    """Read the stored map. A file a newer PixelUp wrote is intact data this build
+    cannot read, so it is left exactly in place (store-recovery-conventions)."""
     if not path.exists():
-        return {}, None
+        return _StoredConfig({}, exists=False)
     try:
-        return _object(json.loads(path.read_text(encoding="utf-8")), "config"), None
+        data = _object(json.loads(path.read_text(encoding="utf-8")), "config")
+        version = format_version(data.get(_FORMAT_VERSION_KEY))
     except ValueError:
-        return {}, quarantine_corrupt_file(path)
+        return _StoredConfig({}, exists=False, quarantined_to=quarantine_corrupt_file(path))
+    if version > CONFIG_FORMAT_VERSION:
+        return _StoredConfig({}, exists=True, newer_format=version)
+    return _StoredConfig(data, exists=True)
 
 
 def save_app_config_merged(
@@ -163,21 +185,33 @@ def save_app_config_merged(
             details={"path": str(path), "lock_timeout": _CONFIG_LOCK_TIMEOUT_SECONDS},
         ) from exc
     try:
-        stored, _quarantined_to = _read_config_map(path)
+        stored = _read_config_map(path)
+        if stored.newer_format is not None:
+            raise PixelupError(
+                ErrorCode.STORE_NEWER_FORMAT,
+                Message("error.configNewer"),
+                details={"path": str(path), "format_version": stored.newer_format},
+            )
         merged = replace(
-            _decode_app_config(stored, path),
+            _decode_app_config(stored.data, path),
             **{
                 key: getattr(candidate, key)
                 for key in _SET_DECODERS
                 if getattr(candidate, key) != getattr(previous, key)
             },
         )
-        data = _stored_sets(merged)
-        if data != stored:
+        sets = _stored_sets(merged)
+        # With no file and no set to store, the absence already says every set is
+        # at its built-in, so nothing is written (config-sets-conventions).
+        data = {_FORMAT_VERSION_KEY: CONFIG_FORMAT_VERSION, **sets} if sets or stored.exists else {}
+        if data != stored.data:
             write_managed_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
         return merged
     finally:
         lock.release()
+
+
+_FORMAT_VERSION_KEY = "format_version"
 
 
 def _stored_sets(config: AppConfig) -> dict[str, Any]:

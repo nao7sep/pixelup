@@ -67,6 +67,12 @@ def test_sidecar_omits_private_paths(tmp_path: Path) -> None:
     assert str(tmp_path) not in serialized
 
 
+def test_sidecar_carries_its_format_version(tmp_path: Path) -> None:
+    _path, payload = _write_sample_sidecar(tmp_path)
+    assert payload["format_version"] == 1
+    assert "schema_version" not in payload
+
+
 def test_sidecar_records_the_input_facts_read_when_the_job_started(tmp_path: Path) -> None:
     _, payload = _write_sample_sidecar(tmp_path)
     # The input on disk is a different file by now; the sidecar keeps what the job read.

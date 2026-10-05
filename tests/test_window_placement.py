@@ -1,0 +1,60 @@
+"""window.ini's format version: written with every save, absent reading as 1,
+a newer file left exactly as it is, and an unusable marker reset."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from PySide6.QtCore import QByteArray
+
+from pixelup.window_placement import FORMAT_VERSION_KEY, WindowState
+
+
+def _ini(path: Path, text: str) -> bytes:
+    path.write_text(text, encoding="utf-8")
+    return path.read_bytes()
+
+
+def test_a_save_writes_the_format_version_beside_the_value(tmp_path: Path) -> None:
+    path = tmp_path / "window.ini"
+    WindowState(path).save("recordsWindow/listWidth", 300)
+
+    text = path.read_text(encoding="utf-8")
+    assert f"[General]\n{FORMAT_VERSION_KEY}=1\n" in text
+    assert "listWidth=300" in text
+    assert int(WindowState(path).value("recordsWindow/listWidth")) == 300
+
+
+def test_a_file_without_a_format_version_reads_as_version_1(tmp_path: Path) -> None:
+    path = tmp_path / "window.ini"
+    _ini(path, "[recordsWindow]\nlistWidth=320\n")
+    assert WindowState(path).value("recordsWindow/listWidth") == "320"
+
+
+def test_a_newer_file_is_neither_read_nor_written(tmp_path: Path) -> None:
+    path = tmp_path / "window.ini"
+    before = _ini(path, "[General]\nformatVersion=2\n\n[recordsWindow]\nlistWidth=320\n")
+
+    state = WindowState(path)
+    state.save("recordsWindow/listWidth", 400)
+    state.save("mainWindow/geometry", QByteArray(b"geometry"))
+
+    assert state.value("recordsWindow/listWidth") is None
+    assert path.read_bytes() == before
+    assert [item.name for item in tmp_path.iterdir()] == ["window.ini"]
+
+
+@pytest.mark.parametrize("marker", ["one", "0", "-1", "1.5"])
+def test_an_unusable_format_version_resets_the_state(tmp_path: Path, marker: str) -> None:
+    path = tmp_path / "window.ini"
+    _ini(path, f"[General]\nformatVersion={marker}\n\n[recordsWindow]\nlistWidth=320\n")
+
+    state = WindowState(path)
+    assert state.value("recordsWindow/listWidth") is None
+
+    state.save("recordsWindow/listWidth", 400)
+    text = path.read_text(encoding="utf-8")
+    assert f"{FORMAT_VERSION_KEY}=1\n" in text
+    assert "listWidth=400" in text
+    assert "listWidth=320" not in text

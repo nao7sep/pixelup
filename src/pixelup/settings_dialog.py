@@ -21,6 +21,7 @@ from pixelup.fonts import system_ui_font_family
 from pixelup.i18n import localizer
 from pixelup.i18n.languages import LANGUAGES, SYSTEM
 from pixelup.i18n.localized import localize
+from pixelup.i18n.message import Message
 from pixelup.text_cleanup import single_line
 from pixelup.ui_common import secondary_label, use_regular_spacing
 from pixelup.widgets import NoWheelComboBox, NoWheelSpinBox
@@ -98,7 +99,7 @@ class SettingsDialog(DialogShell):
         config: AppConfig,
         parent: QWidget | None = None,
         *,
-        try_save: Callable[[AppConfig], bool] | None = None,
+        try_save: Callable[[AppConfig], Message | None] | None = None,
         session_shutdown: Callable[[], bool] = lambda: False,
     ) -> None:
         super().__init__("settings.title", parent, width=FORM_WIDTH)
@@ -216,12 +217,9 @@ class SettingsDialog(DialogShell):
         candidate = self.config()
         self.error_message.clear()
         self.error_message.hide()
-        if self._try_save is not None and not self._try_save(candidate):
-            localize(
-                self.error_message,
-                text="settings.saveFailed",
-                accessible_name="settings.saveFailed",
-            )
+        failure = None if self._try_save is None else self._try_save(candidate)
+        if failure is not None:
+            localize(self.error_message, text=failure, accessible_name=failure)
             self.error_message.show()
             # The message is body content, so the body just grew; re-measure it
             # against the same bound rather than letting Qt size past the screen.
