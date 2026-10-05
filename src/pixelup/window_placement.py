@@ -28,21 +28,24 @@ class WindowState:
     one format version (store-recovery-conventions).
 
     A file a newer PixelUp wrote is left exactly as it is: nothing is read from it
-    or written to it, so the windows open at their designed sizes. A marker that is
-    not a version makes the file's contents unusable, and it is reset.
+    or written to it, so the windows open at their designed sizes. A missing marker,
+    or one that is not a version, makes the file's contents unusable, and it is
+    reset.
     """
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self._settings = QSettings(str(path), QSettings.Format.IniFormat)
         self._newer = False
+        if not path.exists():
+            return
         stored = self._settings.value(FORMAT_VERSION_KEY)
         if self._settings.status() != QSettings.Status.NoError:
             return
         try:
             version = format_version(_ini_integer(stored))
         except ValueError:
-            log.warning("window.state_reset", path=str(path), reason="unusable formatVersion")
+            log.warning("window.state_reset", path=str(path), reason="no usable formatVersion")
             self._settings.clear()
             return
         if version > WINDOW_STATE_FORMAT_VERSION:

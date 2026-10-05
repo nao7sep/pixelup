@@ -1443,7 +1443,7 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.json").write_text(
-        json.dumps({"max_concurrent_jobs": 1, "auto_download": True,
+        json.dumps({"format_version": 1, "max_concurrent_jobs": 1, "auto_download": True,
                     "font_family": "", "parameters": {"tile": 9999}})
     )
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
@@ -1479,7 +1479,7 @@ def test_the_window_itself_takes_the_configured_font_at_launch(
     # setFont it kept the platform font, and anything inheriting from it did too.
     home = tmp_path / "home"
     home.mkdir()
-    (home / "config.json").write_text(json.dumps({"font_family": "Menlo"}))
+    (home / "config.json").write_text(json.dumps({"format_version": 1, "font_family": "Menlo"}))
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     original = qapp.font()

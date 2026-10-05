@@ -1,5 +1,5 @@
-"""window.ini's format version: written with every save, absent reading as 1,
-a newer file left exactly as it is, and an unusable marker reset."""
+"""window.ini's format version: written with every save, a newer file left
+exactly as it is, and a missing or unusable marker reset."""
 
 from __future__ import annotations
 
@@ -26,10 +26,10 @@ def test_a_save_writes_the_format_version_beside_the_value(tmp_path: Path) -> No
     assert int(WindowState(path).value("recordsWindow/listWidth")) == 300
 
 
-def test_a_file_without_a_format_version_reads_as_version_1(tmp_path: Path) -> None:
+def test_no_file_reads_as_nothing_saved(tmp_path: Path) -> None:
     path = tmp_path / "window.ini"
-    _ini(path, "[recordsWindow]\nlistWidth=320\n")
-    assert WindowState(path).value("recordsWindow/listWidth") == "320"
+    assert WindowState(path).value("recordsWindow/listWidth") is None
+    assert not path.exists()
 
 
 def test_a_newer_file_is_neither_read_nor_written(tmp_path: Path) -> None:
@@ -45,10 +45,21 @@ def test_a_newer_file_is_neither_read_nor_written(tmp_path: Path) -> None:
     assert [item.name for item in tmp_path.iterdir()] == ["window.ini"]
 
 
-@pytest.mark.parametrize("marker", ["one", "0", "-1", "1.5"])
-def test_an_unusable_format_version_resets_the_state(tmp_path: Path, marker: str) -> None:
+@pytest.mark.parametrize(
+    "general",
+    [
+        "",
+        "[General]\nformatVersion=one\n",
+        "[General]\nformatVersion=0\n",
+        "[General]\nformatVersion=-1\n",
+        "[General]\nformatVersion=1.5\n",
+    ],
+)
+def test_a_missing_or_unusable_format_version_resets_the_state(
+    tmp_path: Path, general: str
+) -> None:
     path = tmp_path / "window.ini"
-    _ini(path, f"[General]\nformatVersion={marker}\n\n[recordsWindow]\nlistWidth=320\n")
+    _ini(path, f"{general}\n[recordsWindow]\nlistWidth=320\n")
 
     state = WindowState(path)
     assert state.value("recordsWindow/listWidth") is None

@@ -197,21 +197,29 @@ def test_system_is_resolved_once_from_the_list_read_at_launch() -> None:
 
 def test_the_saved_language_is_read_straight_from_config_json(tmp_path: Path) -> None:
     assert bootstrap.saved_preference() == "system"
-    (tmp_path / "config.json").write_text(json.dumps({"language": "it"}), encoding="utf-8")
+    (tmp_path / "config.json").write_text(
+        json.dumps({"format_version": 1, "language": "it"}), encoding="utf-8"
+    )
     assert bootstrap.saved_preference() == "it"
-    (tmp_path / "config.json").write_text(json.dumps({"language": "IT"}), encoding="utf-8")
+    (tmp_path / "config.json").write_text(
+        json.dumps({"format_version": 1, "language": "IT"}), encoding="utf-8"
+    )
     assert bootstrap.saved_preference() == "system"
     (tmp_path / "config.json").write_text("{not json", encoding="utf-8")
     assert bootstrap.saved_preference() == "system"
 
 
-def test_a_newer_config_json_means_system_like_the_window_loader(tmp_path: Path) -> None:
+def test_a_newer_or_unmarked_config_json_means_system_like_the_window_loader(
+    tmp_path: Path,
+) -> None:
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"format_version": 1, "language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "it"
     config.write_text(json.dumps({"format_version": 2, "language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "system"
     config.write_text(json.dumps({"format_version": "1", "language": "it"}), encoding="utf-8")
+    assert bootstrap.saved_preference() == "system"
+    config.write_text(json.dumps({"language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "system"
 
 
@@ -223,7 +231,9 @@ def test_settle_language_speaks_the_saved_choice_before_the_app_exists(
     monkeypatch.setattr(bootstrap, "read_computer_languages", lambda: ("es-MX",))
     bootstrap.settle_language()
     assert localizer.language() == "es"
-    (tmp_path / "config.json").write_text(json.dumps({"language": "ru"}), encoding="utf-8")
+    (tmp_path / "config.json").write_text(
+        json.dumps({"format_version": 1, "language": "ru"}), encoding="utf-8"
+    )
     bootstrap.settle_language()
     assert localizer.language() == "ru"
     assert aligned == ["es", "ru"]
@@ -238,7 +248,8 @@ def test_the_language_setting_round_trips_and_an_unknown_value_means_system(
     assert load_app_config(path).language == "zh-Hans"
     # Unknown to this build is not corruption: the rest of the settings survive.
     path.write_text(
-        json.dumps({"language": "tlh", "max_concurrent_jobs": 3}), encoding="utf-8"
+        json.dumps({"format_version": 1, "language": "tlh", "max_concurrent_jobs": 3}),
+        encoding="utf-8",
     )
     loaded = load_app_config(path)
     assert (loaded.language, loaded.max_concurrent_jobs) == ("system", 3)

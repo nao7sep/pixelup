@@ -294,16 +294,16 @@ def test_current_session_is_the_session_every_record_carries() -> None:
     assert {record["session"] for record in _records(database)} == {current_session()}
 
 
-def _newer_records(database: Path) -> bytes:
+def _existing_records(database: Path, version: int) -> bytes:
     connection = sqlite3.connect(database)
-    connection.execute("CREATE TABLE future (anything TEXT)")
-    connection.execute("PRAGMA user_version = 2")
+    connection.execute("CREATE TABLE logs (anything TEXT)")
+    connection.execute(f"PRAGMA user_version = {version}")
     connection.commit()
     connection.close()
     return database.read_bytes()
 
 
-def test_the_records_database_records_its_format_version(tmp_path: Path) -> None:
+def test_the_records_database_is_stamped_at_creation(tmp_path: Path) -> None:
     database = configure_session_logging()
     log.info("image.added")
     connection = sqlite3.connect(database)
@@ -313,11 +313,12 @@ def test_the_records_database_records_its_format_version(tmp_path: Path) -> None
         connection.close()
 
 
-def test_newer_records_are_left_untouched_and_lines_go_to_the_fallback_file(
-    tmp_path: Path,
+@pytest.mark.parametrize(("version", "reason"), [(0, "no format version"), (2, "format version 2")])
+def test_unmarked_or_newer_records_are_left_untouched_and_lines_go_to_the_fallback_file(
+    tmp_path: Path, version: int, reason: str
 ) -> None:
     database = tmp_path / RECORDS_FILE_NAME
-    before = _newer_records(database)
+    before = _existing_records(database, version)
 
     configure_session_logging()
     log.info("image.added", input="a.png")
@@ -327,4 +328,4 @@ def test_newer_records_are_left_untouched_and_lines_go_to_the_fallback_file(
     fallbacks = list((tmp_path / "logs").glob("*-utc.log"))
     lines = _read_jsonl(fallbacks[0])
     assert [line["message"] for line in lines] == ["log.session_started", "image.added"]
-    assert "format version 2" in lines[-1]["records_error"]
+    assert reason in lines[-1]["records_error"]

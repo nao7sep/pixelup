@@ -346,31 +346,16 @@ def test_a_new_store_records_its_format_version(
     assert _user_version(_store_path(home)) == 1
 
 
-def test_a_store_without_a_format_version_reads_as_1_and_is_marked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("version", [0, 2])
+def test_an_unmarked_or_newer_store_is_left_untouched_with_one_warn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: int
 ) -> None:
-    home = _home(tmp_path, monkeypatch)
-    target = home / "config.json"
-    record(target, b"first\n")
-    close_backup_store()
-    connection = sqlite3.connect(_store_path(home))
-    connection.execute("PRAGMA user_version = 0")
-    connection.close()
-
-    record(target, b"second\n")
-
-    assert [row[1] for row in _rows(home, target)] == [b"first\n", b"second\n"]
-    assert _user_version(_store_path(home)) == 1
-
-
-def test_a_newer_store_is_left_untouched_and_recording_stops_with_one_warn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    # A user_version of 0 on a database that has tables is a missing marker.
     home = _home(tmp_path, monkeypatch)
     store = _store_path(home)
     connection = sqlite3.connect(store)
-    connection.execute("CREATE TABLE future (anything TEXT)")
-    connection.execute("PRAGMA user_version = 2")
+    connection.execute("CREATE TABLE backups (anything TEXT)")
+    connection.execute(f"PRAGMA user_version = {version}")
     connection.commit()
     connection.close()
     before = store.read_bytes()
@@ -385,6 +370,5 @@ def test_a_newer_store_is_left_untouched_and_recording_stops_with_one_warn(
     close_backup_store()
 
     assert [message for message, _fields in warns] == ["backup_store.open_failed"]
-    assert "format version 2" in warns[0][1]["reason"]
     assert store.read_bytes() == before
     assert not store.with_name(f"{STORE_FILE_NAME}-wal").exists()

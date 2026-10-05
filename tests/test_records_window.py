@@ -45,7 +45,7 @@ from pixelup.session_log import (
     log,
     set_stored_listener,
 )
-from pixelup.window_placement import WindowState, window_state
+from pixelup.window_placement import FORMAT_VERSION_KEY, WindowState, window_state
 
 NEW = "2026-10-01T09:00:00.000Z"
 OLD = "2026-09-30T08:00:00.000Z"
@@ -525,6 +525,7 @@ def test_narrowing_the_window_narrows_the_list_and_saves_nothing(
 def test_restores_the_saved_list_width_before_the_first_frame(
     open_records, settings: QSettings
 ) -> None:
+    settings.setValue(FORMAT_VERSION_KEY, 1)
     settings.setValue(LIST_WIDTH_KEY, LIST_WIDTH_MIN + 10)
     settings.sync()
 

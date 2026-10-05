@@ -129,14 +129,16 @@ def _open_records(database: Path) -> sqlite3.Connection:
         database, timeout=5.0, isolation_level=None, check_same_thread=False
     )
     try:
-        # Before anything writes: records from a newer PixelUp are left exactly as
-        # they are, and this launch's lines go to the fallback file instead.
-        unmarked = check_sqlite_format(connection, database, RECORDS_FORMAT_VERSION)
+        # Before anything writes: records without their marker or from a newer
+        # PixelUp are left exactly as they are, and lines go to the fallback file.
+        created = check_sqlite_format(connection, database, RECORDS_FORMAT_VERSION)
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA synchronous = NORMAL")
-        connection.executescript(_SCHEMA)
-        if unmarked:
+        # Stamped before the schema, so a second instance never sees tables
+        # without the marker.
+        if created:
             mark_sqlite_format(connection, RECORDS_FORMAT_VERSION)
+        connection.executescript(_SCHEMA)
     except BaseException:
         connection.close()
         raise

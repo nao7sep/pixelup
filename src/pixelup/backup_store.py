@@ -100,13 +100,15 @@ def _ensure_open() -> sqlite3.Connection | None:
             # waits up to this long for SQLite's write lock instead of immediately
             # failing with SQLITE_BUSY and dropping that record.
             opened.execute("PRAGMA busy_timeout = 5000")
-            # Before anything writes: a store from a newer PixelUp is left exactly
-            # as it is, and recording stays off for the session.
-            unmarked = check_sqlite_format(opened, file, BACKUPS_FORMAT_VERSION)
+            # Before anything writes: a store without its marker or from a newer
+            # PixelUp is left exactly as it is, and recording stays off for the session.
+            created = check_sqlite_format(opened, file, BACKUPS_FORMAT_VERSION)
             opened.execute("PRAGMA journal_mode = WAL")
-            opened.executescript(_SCHEMA)
-            if unmarked:
+            # Stamped before the schema, so a second instance never sees tables
+            # without the marker.
+            if created:
                 mark_sqlite_format(opened, BACKUPS_FORMAT_VERSION)
+            opened.executescript(_SCHEMA)
             opened.commit()
         except BaseException:
             opened.close()

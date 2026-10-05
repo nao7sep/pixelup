@@ -85,7 +85,7 @@ def test_missing_app_config_uses_defaults(tmp_path: Path) -> None:
 
 def test_obsolete_auto_download_key_is_ignored(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"auto_download": True}), encoding="utf-8")
+    path.write_text(json.dumps({"format_version": 1, "auto_download": True}), encoding="utf-8")
 
     result = load_app_config_result(path)
 
@@ -112,13 +112,15 @@ def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
 
 def test_one_stored_set_uses_built_ins_for_every_other_set(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text('{"font_family": "Menlo"}', encoding="utf-8")
+    path.write_text('{"format_version": 1, "font_family": "Menlo"}', encoding="utf-8")
     assert load_app_config(path) == AppConfig(font_family="Menlo")
 
 
 def test_next_edit_drops_unknown_keys_and_writes_the_format_version(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text('{"version": 99, "future": true, "language": "ja"}', encoding="utf-8")
+    path.write_text(
+        '{"format_version": 1, "version": 99, "future": true, "language": "ja"}', encoding="utf-8"
+    )
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, max_concurrent_jobs=3), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
@@ -145,7 +147,9 @@ def test_the_last_set_back_at_its_built_in_leaves_an_empty_map(tmp_path: Path) -
 
 def test_any_save_drops_a_stored_copy_equal_to_its_built_in(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"parameters": _parameter_map()}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"format_version": 1, "parameters": _parameter_map()}), encoding="utf-8"
+    )
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, language="ja"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
@@ -153,7 +157,9 @@ def test_any_save_drops_a_stored_copy_equal_to_its_built_in(tmp_path: Path) -> N
 
 def test_any_save_drops_a_set_that_failed_its_check(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text('{"max_concurrent_jobs": 99, "language": "ja"}', encoding="utf-8")
+    path.write_text(
+        '{"format_version": 1, "max_concurrent_jobs": 99, "language": "ja"}', encoding="utf-8"
+    )
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, font_family="Menlo"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
@@ -172,14 +178,16 @@ def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
 
 def test_load_app_config_cleans_font_family_as_a_single_line(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"font_family": "  Arial,\n Menlo  "}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"format_version": 1, "font_family": "  Arial,\n Menlo  "}), encoding="utf-8"
+    )
 
     assert load_app_config(path).font_family == "Arial, Menlo"
 
 
 def test_whitespace_font_family_reads_as_the_built_in(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"font_family": "   "}), encoding="utf-8")
+    path.write_text(json.dumps({"format_version": 1, "font_family": "   "}), encoding="utf-8")
 
     assert load_app_config(path) == AppConfig()
 
@@ -187,7 +195,7 @@ def test_whitespace_font_family_reads_as_the_built_in(tmp_path: Path) -> None:
 def test_load_app_config_preserves_the_legacy_font_stack(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps({"font_family": "Helvetica Neue, Segoe UI, Roboto, Arial"}),
+        json.dumps({"format_version": 1, "font_family": "Helvetica Neue, Segoe UI, Roboto, Arial"}),
         encoding="utf-8",
     )
 
@@ -196,7 +204,7 @@ def test_load_app_config_preserves_the_legacy_font_stack(tmp_path: Path) -> None
 
 def test_load_app_config_ignores_unusable_font_family(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"font_family": 42}), encoding="utf-8")
+    path.write_text(json.dumps({"format_version": 1, "font_family": 42}), encoding="utf-8")
 
     result = load_app_config_result(path)
 
@@ -260,14 +268,16 @@ def test_a_failed_quarantine_propagates_and_leaves_the_file(
     assert path.read_text(encoding="utf-8") == "{ this is not valid json"
 
 
-def test_a_config_without_a_format_version_reads_as_version_1(tmp_path: Path) -> None:
+def test_a_config_without_a_format_version_is_quarantined(tmp_path: Path) -> None:
+    # Nothing infers a version from the file's shape (store-recovery-conventions).
     path = tmp_path / "config.json"
-    path.write_text('{"language": "ja"}', encoding="utf-8")
+    text = '{"language": "ja"}'
+    path.write_text(text, encoding="utf-8")
     result = load_app_config_result(path)
-    assert result.config == AppConfig(language="ja")
-    assert result.newer_format is None
-    path.write_text('{"format_version": 1, "language": "ja"}', encoding="utf-8")
-    assert load_app_config(path) == AppConfig(language="ja")
+    assert result.config == AppConfig()
+    assert result.quarantined_to is not None
+    assert result.quarantined_to.read_text(encoding="utf-8") == text
+    assert not path.exists()
 
 
 @pytest.mark.parametrize("marker", ['"1"', "0", "-1", "1.5", "true", "null"])
@@ -278,10 +288,6 @@ def test_a_format_version_that_is_not_a_version_is_quarantined(
     text = f'{{"format_version": {marker}, "language": "ja"}}'
     path.write_text(text, encoding="utf-8")
     result = load_app_config_result(path)
-    if marker == "null":
-        # JSON null is an absent value, which reads as 1.
-        assert result.config == AppConfig(language="ja")
-        return
     assert result.config == AppConfig()
     assert result.quarantined_to is not None
     assert result.quarantined_to.read_text(encoding="utf-8") == text
@@ -313,16 +319,6 @@ def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path
     assert raised.value.code == ErrorCode.STORE_NEWER_FORMAT
     assert raised.value.message.key == "error.configNewer"
     assert path.read_text(encoding="utf-8") == text
-
-
-def test_a_save_marks_a_config_that_had_no_format_version(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    path.write_text('{"language": "ja"}', encoding="utf-8")
-    previous = load_app_config(path)
-    save_app_config_merged(replace(previous, max_concurrent_jobs=2), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1, "language": "ja", "max_concurrent_jobs": 2,
-    }
 
 
 def test_missing_config_is_not_treated_as_corrupt(tmp_path: Path) -> None:
@@ -395,7 +391,10 @@ def _parameter_map(**updates: object) -> dict[str, object]:
 
 
 def _write(path: Path, **parameters: object) -> None:
-    path.write_text(json.dumps({"parameters": _parameter_map(**parameters)}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"format_version": 1, "parameters": _parameter_map(**parameters)}),
+        encoding="utf-8",
+    )
 
 
 def test_a_newer_config_lets_the_window_open_and_is_never_written(
@@ -501,7 +500,9 @@ def test_present_malformed_set_falls_back_without_costing_other_sets(
     tmp_path: Path, data: dict[str, object], caplog: pytest.LogCaptureFixture
 ) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"font_family": "Menlo", **data}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"format_version": 1, "font_family": "Menlo", **data}), encoding="utf-8"
+    )
     original = path.read_bytes()
     result = load_app_config_result(path)
     assert result.config == AppConfig(font_family="Menlo")
@@ -517,6 +518,7 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
     path.write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "max_concurrent_jobs": 4,
                 "future_setting": {"future": True},
                 "parameters": _parameter_map(scale=2, future_parameter="ignored"),
@@ -538,6 +540,7 @@ def test_obsolete_face_enhance_field_is_ignored(tmp_path: Path) -> None:
     path.write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "parameters": _parameter_map(face_enhance=True, strip_metadata=False),
             }
         ),
@@ -588,7 +591,15 @@ def test_old_flat_keys_are_inert(tmp_path: Path) -> None:
     # are simply not read any more, and must not leak back in as parameters.
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps({"output_format": "webp", "quality": 10, "tile": 1024, "device": "cpu"}),
+        json.dumps(
+            {
+                "format_version": 1,
+                "output_format": "webp",
+                "quality": 10,
+                "tile": 1024,
+                "device": "cpu",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -700,7 +711,9 @@ def test_partial_parameters_read_as_the_built_in_with_a_warning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     path = tmp_path / "config.json"
-    path.write_text('{"language": "ja", "parameters": {"scale": 2}}', encoding="utf-8")
+    path.write_text(
+        '{"format_version": 1, "language": "ja", "parameters": {"scale": 2}}', encoding="utf-8"
+    )
     result = load_app_config_result(path)
     assert result.config == AppConfig(language="ja")
     assert result.quarantined_to is None
@@ -712,7 +725,9 @@ def test_partial_parameters_read_as_the_built_in_with_a_warning(
 def test_edit_writes_the_untouched_user_set_whole_from_memory(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     stored_parameters = _parameter_map(quality=42, future_parameter="dropped")
-    path.write_text(json.dumps({"parameters": stored_parameters}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"format_version": 1, "parameters": stored_parameters}), encoding="utf-8"
+    )
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, language="ja"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {

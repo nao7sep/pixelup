@@ -317,13 +317,14 @@ def test_newer_records_are_named_and_never_read(database: Path) -> None:
     assert database.read_bytes() == before
 
 
-def test_records_written_before_their_format_version_read_as_version_1(database: Path) -> None:
+def test_records_without_their_format_version_are_unreadable(database: Path) -> None:
     _seed(database, [{"time": OLD}])
     connection = sqlite3.connect(database)
     connection.execute("PRAGMA user_version = 0")
     connection.close()
     reader = RecordsReader(database)
     try:
-        assert len(reader.page(RecordsQuery(), None).records) == 1
+        with pytest.raises(ValueError, match="no format version"):
+            reader.page(RecordsQuery(), None)
     finally:
         reader.close()
