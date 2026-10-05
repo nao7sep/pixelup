@@ -6,6 +6,7 @@ import shutil
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -147,12 +148,12 @@ def save_output_image(
     encoded = _prepare_image_for_save(
         image, output_format=output_format, background=background, color=color
     )
-    save_kwargs = _save_kwargs(
-        output_format,
-        quality=quality,
-        color=color,
-        carried=None if strip_metadata else _carried_metadata(source_metadata, encoded.size, color),
-    )
+    carried = None
+    if not strip_metadata:
+        # One moment, in this computer's local time, stamps every modification date.
+        modified = datetime.now().astimezone()
+        carried = _carried_metadata(source_metadata, encoded.size, color, modified)
+    save_kwargs = _save_kwargs(output_format, quality=quality, color=color, carried=carried)
     temp_path = _temp_output_path(output_path)
     try:
         with temp_file_guard(temp_path):
@@ -322,19 +323,20 @@ def _carried_metadata(
     source_metadata: SourceMetadata,
     size: tuple[int, int],
     color: _ColorPlan,
+    modified: datetime,
 ) -> SourceMetadata:
     """The source's EXIF and XMP as the output carries them: describing the output."""
     exif = source_metadata.exif
     if exif is not None:
         try:
-            exif = exif_for_output(exif, size=size, color=color.converted_to)
+            exif = exif_for_output(exif, size=size, color=color.converted_to, modified=modified)
         except ValueError as exc:
             # A block that is not a readable TIFF structure names no dimension or colour
             # space any reader could use, so it is carried as it is.
             log.debug("metadata.exif_unreadable", reason=str(exc))
     xmp = source_metadata.xmp
     if xmp is not None:
-        xmp = xmp_for_output(xmp, size=size, color=color.converted_to)
+        xmp = xmp_for_output(xmp, size=size, color=color.converted_to, modified=modified)
     return SourceMetadata(exif=exif, xmp=xmp)
 
 

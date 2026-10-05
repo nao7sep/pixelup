@@ -441,7 +441,33 @@ def test_kept_exif_and_xmp_carry_the_output_dimensions(tmp_path: Path) -> None:
         exif_ifd = saved.getexif().get_ifd(0x8769)
         assert (exif_ifd[0xA002], exif_ifd[0xA003]) == (8, 4)
         assert exif_ifd[0x9003] == "2020:01:02 03:04:05"
-        assert saved.info["xmp"] == b'<rdf:Description tiff:ImageWidth="8" tiff:ImageLength="4"/>'
+        assert saved.info["xmp"].startswith(
+            b'<rdf:Description tiff:ImageWidth="8" tiff:ImageLength="4"'
+        )
+
+
+def test_kept_metadata_dates_are_one_local_moment(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    xmp = b'<rdf:Description xmp:ModifyDate="2021-01-01T00:00:00Z"/>'
+    before = datetime.now().astimezone().replace(microsecond=0)
+
+    saved = _save_png(
+        tmp_path,
+        SourceMetadata(exif=_camera_exif(color_space=1, interop_index="R98"), xmp=xmp),
+    )
+
+    exif = saved.getexif()
+    offset = exif.get_ifd(0x8769)[0x9010]
+    stamp = datetime.strptime(exif[0x0132] + offset, "%Y:%m:%d %H:%M:%S%z")
+    assert before <= stamp <= datetime.now().astimezone()
+    assert offset == before.isoformat()[-6:]
+    assert exif.get_ifd(0x8769)[0x9003] == "2020:01:02 03:04:05"
+    iso = stamp.isoformat().encode()
+    assert saved.info["xmp"] == (
+        b'<rdf:Description xmp:ModifyDate="' + iso + b'"'
+        b' xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:MetadataDate="' + iso + b'"/>'
+    )
 
 
 def test_untagged_adobe_rgb_source_is_labelled_adobe_rgb(tmp_path: Path) -> None:

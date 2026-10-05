@@ -1,7 +1,9 @@
 """Source EXIF and XMP made to describe a derived output (content-lifecycle-conventions).
 
-EXIF is patched in place rather than re-serialized, so maker notes, whose offsets point
-into the block, and the IFD1 thumbnail survive. Only tags the source already has change.
+EXIF is patched rather than re-serialized, so maker notes, whose offsets point into the
+block, and the IFD1 thumbnail survive: a value of the same size is written in place, and an
+IFD that gains or resizes an entry is rewritten at the end of the block. Descriptive tags
+change only where the source has them; the modification dates are always written.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import re
 import struct
 from dataclasses import dataclass
+from datetime import datetime
 from xml.sax.saxutils import escape
 
 EXIF_PREFIX = b"Exif\x00\x00"
@@ -20,7 +23,9 @@ _ASCII = 2
 _IFD = 13
 _TAG_IMAGE_WIDTH = 0x0100
 _TAG_IMAGE_LENGTH = 0x0101
+_TAG_DATE_TIME = 0x0132
 _TAG_EXIF_IFD = 0x8769
+_TAG_OFFSET_TIME = 0x9010
 _TAG_COLOR_SPACE = 0xA001
 _TAG_PIXEL_X_DIMENSION = 0xA002
 _TAG_PIXEL_Y_DIMENSION = 0xA003
@@ -33,6 +38,7 @@ _COLOR_SPACE_SRGB = 1
 _COLOR_SPACE_ADOBE_RGB_NONSTANDARD = 2
 _COLOR_SPACE_UNCALIBRATED = 0xFFFF
 _INTEROP_INDEX = {"srgb": b"R98\x00", "adobergb": b"R03\x00"}
+_XMP_NAMESPACE = b"http://ns.adobe.com/xap/1.0/"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,10 +70,18 @@ def exif_declares_adobe_rgb(exif: bytes) -> bool:
         return False
 
 
-def exif_for_output(exif: bytes, *, size: tuple[int, int], color: OutputColor | None) -> bytes:
+def exif_for_output(
+    exif: bytes,
+    *,
+    size: tuple[int, int],
+    color: OutputColor | None,
+    modified: datetime,
+) -> bytes:
     """The source EXIF describing an output of ``size``, converted to ``color`` when given.
 
-    Raises ValueError when the block is not a readable TIFF structure.
+    DateTime is written as ``modified``'s local wall-clock time with OffsetTime beside it;
+    the capture dates and their offsets are kept. Raises ValueError when the block is not
+    a readable TIFF structure.
     """
     tiff = _Tiff(exif)
     width, height = size
@@ -87,11 +101,22 @@ def exif_for_output(exif: bytes, *, size: tuple[int, int], color: OutputColor | 
             interop_ifd = tiff.sub_ifd(entries, _TAG_INTEROP_IFD)
             if interop_ifd is not None:
                 tiff.set_interop_index(interop_ifd, _INTEROP_INDEX.get(color.name))
+    tiff.set_ascii(_IFD0_POINTER, _TAG_DATE_TIME, modified.strftime("%Y:%m:%d %H:%M:%S"))
+    tiff.set_ascii(tiff.exif_ifd_pointer(), _TAG_OFFSET_TIME, _offset(modified))
     return EXIF_PREFIX + bytes(tiff.data)
 
 
-def xmp_for_output(xmp: bytes, *, size: tuple[int, int], color: OutputColor | None) -> bytes:
-    """The source XMP describing an output of ``size``, converted to ``color`` when given."""
+def xmp_for_output(
+    xmp: bytes,
+    *,
+    size: tuple[int, int],
+    color: OutputColor | None,
+    modified: datetime,
+) -> bytes:
+    """The source XMP describing an output of ``size``, converted to ``color`` when given.
+
+    xmp:ModifyDate and xmp:MetadataDate are written as ``modified`` with its offset.
+    """
     width, height = size
     values: dict[bytes, str] = {
         b"tiff:ImageWidth": str(width),
@@ -105,21 +130,44 @@ def xmp_for_output(xmp: bytes, *, size: tuple[int, int], color: OutputColor | No
         )
         values[b"photoshop:ICCProfile"] = color.description
     for name, value in values.items():
-        xmp = _set_xmp_property(xmp, name, value)
+        xmp = _replace_xmp_property(xmp, name, value)
+    stamp = modified.strftime("%Y-%m-%dT%H:%M:%S") + _offset(modified)
+    for name in (b"xmp:ModifyDate", b"xmp:MetadataDate"):
+        xmp = _write_xmp_property(xmp, name, stamp)
     return xmp
 
 
-def _set_xmp_property(xmp: bytes, name: bytes, value: str) -> bytes:
+def _offset(moment: datetime) -> str:
+    if moment.utcoffset() is None:
+        raise ValueError("a modification time needs its UTC offset")
+    return moment.isoformat()[-6:]
+
+
+def _write_xmp_property(xmp: bytes, name: bytes, value: str) -> bytes:
+    """Replace the property, or add it to the first rdf:Description when it is absent."""
+    replaced = _replace_xmp_property(xmp, name, value)
+    if replaced != xmp or re.search(rb"[\s<]" + re.escape(name) + rb"[\s=>]", xmp):
+        return replaced
+    start = re.search(rb"<rdf:Description\b[^>]*?(?=/?>)", xmp)
+    if start is None:
+        # Not XMP PixelUp can place a property in; carried as it is.
+        return xmp
+    added = b" " + name + b'="' + _xml_attribute(value) + b'"'
+    if b"xmlns:xmp=" not in start[0]:
+        added = b' xmlns:xmp="' + _XMP_NAMESPACE + b'"' + added
+    return xmp[: start.end()] + added + xmp[start.end() :]
+
+
+def _xml_attribute(value: str) -> bytes:
+    return escape(value, {'"': "&quot;", "'": "&apos;"}).encode("utf-8")
+
+
+def _replace_xmp_property(xmp: bytes, name: bytes, value: str) -> bytes:
     quoted = re.escape(name)
     attribute = re.compile(rb"(\s" + quoted + rb"\s*=\s*)([\"'])(.*?)\2", re.DOTALL)
     element = re.compile(rb"(<" + quoted + rb">)([^<]*)(</" + quoted + rb">)")
     xmp = attribute.sub(
-        lambda match: (
-            match[1]
-            + match[2]
-            + escape(value, {'"': "&quot;", "'": "&apos;"}).encode("utf-8")
-            + match[2]
-        ),
+        lambda match: match[1] + match[2] + _xml_attribute(value) + match[2],
         xmp,
     )
     return element.sub(
@@ -128,8 +176,11 @@ def _set_xmp_property(xmp: bytes, name: bytes, value: str) -> bytes:
     )
 
 
+_IFD0_POINTER = 4  # Where the TIFF header stores IFD0's offset.
+
+
 class _Tiff:
-    """A bounds-checked view of an EXIF TIFF structure that patches values in place."""
+    """A bounds-checked view of an EXIF TIFF structure that patches it without moving data."""
 
     def __init__(self, exif: bytes) -> None:
         body = exif[len(EXIF_PREFIX) :] if exif.startswith(EXIF_PREFIX) else exif
@@ -143,7 +194,7 @@ class _Tiff:
             raise ValueError("not a TIFF byte order")
         if self._unpack("H", 2) != 42:
             raise ValueError("not a TIFF header")
-        self.first_ifd = self._unpack("I", 4)
+        self.first_ifd = self._unpack("I", _IFD0_POINTER)
 
     def entries(self, ifd: int) -> dict[int, int]:
         """Each tag in the IFD at ``ifd``, mapped to its entry's offset."""
@@ -201,6 +252,54 @@ class _Tiff:
         self.data[entry : end - 8] = self.data[entry + 12 : end + 4]
         self.data[end - 8 : end + 4] = bytes(12)
         self.data[ifd : ifd + 2] = struct.pack(self._order + "H", count - 1)
+
+    def exif_ifd_pointer(self) -> int:
+        """Where IFD0 stores the Exif IFD's offset, adding an empty Exif IFD when there is none."""
+        if self.sub_ifd(self.entries(self.first_ifd), _TAG_EXIF_IFD) is None:
+            empty = self._append(struct.pack(self._order + "HI", 0, 0))
+            self._set_entry(
+                _IFD0_POINTER, _TAG_EXIF_IFD, _LONG, 1, struct.pack(self._order + "I", empty)
+            )
+        return self.entries(self.first_ifd)[_TAG_EXIF_IFD] + 8
+
+    def set_ascii(self, pointer: int, tag: int, text: str) -> None:
+        """Set ``tag`` in the IFD whose offset is stored at ``pointer``."""
+        value = text.encode("ascii") + b"\x00"
+        self._set_entry(pointer, tag, _ASCII, len(value), value)
+
+    def _set_entry(self, pointer: int, tag: int, kind: int, count: int, value: bytes) -> None:
+        ifd = self._unpack("I", pointer)
+        entries = self.entries(ifd)
+        entry = entries.get(tag)
+        if entry is not None and self._type(entry) == kind and self._count(entry) == count:
+            offset = entry + 8 if len(value) <= 4 else self._unpack("I", entry + 8)
+            self._check(offset, len(value))
+            self.data[offset : offset + len(value)] = value
+            return
+        # The IFD gains or resizes an entry, so it is rewritten at the end of the block and
+        # its pointer moved there; every value it points to stays where it is.
+        field = value.ljust(4, b"\x00") if len(value) <= 4 else self._pack_offset(value)
+        raw = {existing: bytes(self.data[at : at + 12]) for existing, at in entries.items()}
+        raw[tag] = struct.pack(self._order + "HHI", tag, kind, count) + field
+        next_ifd = self._unpack("I", ifd + 2 + 12 * len(entries))
+        rewritten = self._append(
+            struct.pack(self._order + "H", len(raw))
+            + b"".join(raw[key] for key in sorted(raw))
+            + struct.pack(self._order + "I", next_ifd)
+        )
+        self.data[pointer : pointer + 4] = struct.pack(self._order + "I", rewritten)
+        if pointer == _IFD0_POINTER:
+            self.first_ifd = rewritten
+
+    def _pack_offset(self, value: bytes) -> bytes:
+        return struct.pack(self._order + "I", self._append(value))
+
+    def _append(self, payload: bytes) -> int:
+        if len(self.data) % 2:
+            self.data.append(0)  # TIFF offsets are word-aligned.
+        offset = len(self.data)
+        self.data += payload
+        return offset
 
     def _type(self, entry: int) -> int:
         return self._unpack("H", entry + 2)
