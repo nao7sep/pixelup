@@ -489,11 +489,23 @@ def test_kept_exif_and_xmp_carry_the_output_dimensions(tmp_path: Path) -> None:
         )
 
 
-def test_kept_metadata_dates_are_one_local_moment(tmp_path: Path) -> None:
-    from datetime import datetime
+def test_kept_metadata_dates_are_one_local_moment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timedelta, timezone
 
+    class _LocalMoment(datetime):
+        # Already in the local zone the clock below reports, whatever the computer's is.
+        def astimezone(self, tz: object = None) -> datetime:  # type: ignore[override]
+            return self
+
+    class _Clock:
+        @staticmethod
+        def now() -> datetime:
+            return _LocalMoment(2026, 10, 5, 21, 30, 15, 250000, timezone(timedelta(hours=9)))
+
+    monkeypatch.setattr("pixelup.imaging.datetime", _Clock)
     xmp = b'<rdf:Description xmp:ModifyDate="2021-01-01T00:00:00Z"/>'
-    before = datetime.now().astimezone().replace(microsecond=0)
 
     saved = _save_png(
         tmp_path,
@@ -501,15 +513,13 @@ def test_kept_metadata_dates_are_one_local_moment(tmp_path: Path) -> None:
     )
 
     exif = saved.getexif()
-    offset = exif.get_ifd(0x8769)[0x9010]
-    stamp = datetime.strptime(exif[0x0132] + offset, "%Y:%m:%d %H:%M:%S%z")
-    assert before <= stamp <= datetime.now().astimezone()
-    assert offset == before.isoformat()[-6:]
+    assert exif[0x0132] == "2026:10:05 21:30:15"
+    assert exif.get_ifd(0x8769)[0x9010] == "+09:00"
     assert exif.get_ifd(0x8769)[0x9003] == "2020:01:02 03:04:05"
-    iso = stamp.isoformat().encode()
+    stamp = b"2026-10-05T21:30:15+09:00"
     assert saved.info["xmp"] == (
-        b'<rdf:Description xmp:ModifyDate="' + iso + b'"'
-        b' xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:MetadataDate="' + iso + b'"/>'
+        b'<rdf:Description xmp:ModifyDate="' + stamp + b'"'
+        b' xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:MetadataDate="' + stamp + b'"/>'
     )
 
 

@@ -2,8 +2,7 @@ import json
 import shutil
 import sqlite3
 import sys
-import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -60,22 +59,29 @@ def test_configure_writes_records_under_the_storage_root(tmp_path: Path) -> None
     assert parsed.tzinfo is not None
 
 
-def test_every_record_carries_its_launch_session() -> None:
+def test_every_record_carries_its_launch_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A session is named by its start millisecond; two launches one millisecond apart.
+    launches = iter(
+        (
+            datetime(2026, 10, 5, 12, 0, 0, 0, tzinfo=UTC),
+            datetime(2026, 10, 5, 12, 0, 0, 1000, tzinfo=UTC),
+        )
+    )
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:  # type: ignore[override]
+            return next(launches)
+
+    monkeypatch.setattr("pixelup.session_log.datetime", _Clock)
     database = configure_session_logging()
     log.info("first.launch")
-    time.sleep(0.002)  # a session is named by its start millisecond
     configure_session_logging()
     log.info("second.launch")
 
     records = _records(database)
-    first = {entry["session"] for entry in records[:2]}
-    second = {entry["session"] for entry in records[2:]}
-    assert len(first) == 1
-    assert len(second) == 1
-    assert first != second
-    session = first.pop()
-    assert session.endswith("Z")
-    assert session <= records[0]["time"]
+    assert {entry["session"] for entry in records[:2]} == {"2026-10-05T12:00:00.000Z"}
+    assert {entry["session"] for entry in records[2:]} == {"2026-10-05T12:00:00.001Z"}
 
 
 def test_domain_ids_are_columns() -> None:
