@@ -9,6 +9,7 @@ import pytest
 
 from pixelup import config as config_module
 from pixelup.config import (
+    RuntimeDirs,
     ensure_models_dir,
     ensure_temp_dir,
     quarantine_corrupt_file,
@@ -52,6 +53,36 @@ def test_resolve_runtime_dirs_composes_both(
 def test_override_expands_user() -> None:
     resolved = resolve_models_dir(Path("~/pixelup-models"))
     assert resolved == (Path.home() / "pixelup-models").resolve()
+
+
+def test_relative_runtime_overrides_anchor_to_home_from_any_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    # Path.home() and a leading ~ both read these.
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    env = {"PIXELUP_MODELS_DIR": "models", "PIXELUP_TEMP_DIR": "~/work"}
+    expected = RuntimeDirs(
+        models_dir=(fake_home / "models").resolve(), temp_dir=(fake_home / "work").resolve()
+    )
+    for working_directory in (tmp_path / "one", tmp_path / "two"):
+        working_directory.mkdir()
+        monkeypatch.chdir(working_directory)
+        assert resolve_runtime_dirs(env=env) == expected
+        assert resolve_runtime_dirs(
+            models_dir=Path("models"), temp_dir=Path("work"), env={}
+        ) == expected
+
+
+def test_runtime_override_with_unset_env_reference_is_a_reported_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PIXELUP_NOPE", raising=False)
+    with pytest.raises(PixelupError) as exc_info:
+        resolve_models_dir(None, {"PIXELUP_MODELS_DIR": "$PIXELUP_NOPE/models"})
+    assert exc_info.value.message.value("variable") == "PIXELUP_MODELS_DIR"
 
 
 def test_resolve_state_dir_expands_and_resolves_override() -> None:

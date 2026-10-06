@@ -78,11 +78,16 @@ def _resolve_dir(
     env: dict[str, str] | None,
 ) -> Path:
     if override is not None:
-        return override.expanduser().resolve()
+        return _anchored_to_home(override.expanduser())
     source_env = env if env is not None else os.environ
     if env_value := source_env.get(env_name):
-        return Path(env_value).expanduser().resolve()
+        return _anchored_to_home(_expand_override(env_value, env_name))
     return _default_state_dir(source_env).joinpath(leaf).resolve()
+
+
+def _anchored_to_home(path: Path) -> Path:
+    """``path`` made absolute against the home directory, never the working directory."""
+    return (path if path.is_absolute() else Path.home() / path).resolve()
 
 
 def _default_state_dir(env: dict[str, str] | None = None) -> Path:
@@ -99,15 +104,12 @@ def _default_state_dir(env: dict[str, str] | None = None) -> Path:
     source_env = env if env is not None else os.environ
     override = source_env.get(HOME_ENV, "")
     if override.strip():
-        root = _expand_home_override(override.strip())
-        if not root.is_absolute():
-            root = Path.home() / root
-        return _ensure_state_root(root.resolve())
+        return _ensure_state_root(_anchored_to_home(_expand_override(override.strip(), HOME_ENV)))
     return _ensure_state_root((Path.home() / f".{APP_NAME}").resolve())
 
 
-def _expand_home_override(raw: str) -> Path:
-    """Expand ``~`` and environment references in a raw ``PIXELUP_DATA_DIR`` value.
+def _expand_override(raw: str, variable: str) -> Path:
+    """Expand ``~`` and environment references in the raw value of ``variable``.
 
     An unset variable referenced in the value (``$FOO``, ``${FOO}``, ``%FOO%``)
     is left literal by ``os.path.expandvars`` rather than raising, and a
@@ -122,8 +124,8 @@ def _expand_home_override(raw: str) -> Path:
     if not expanded or _UNRESOLVED_ENV_REF.search(expanded):
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
-            Message.of("error.homeUnusable", variable=HOME_ENV),
-            hint=Message.of("error.hintHomeVariables", variable=HOME_ENV),
+            Message.of("error.homeUnusable", variable=variable),
+            hint=Message.of("error.hintHomeVariables", variable=variable),
             details={"value": raw, "expanded": expanded},
         )
     return Path(expanded)
