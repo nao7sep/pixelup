@@ -1451,7 +1451,7 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
     notices: list[str] = []
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset",
-        lambda _parent: notices.append("shown"),
+        lambda _parent, _path: notices.append("shown"),
     )
     log_file = configure_session_logging()
 

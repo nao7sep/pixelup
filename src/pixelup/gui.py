@@ -476,11 +476,11 @@ class MainWindow(QMainWindow):
 
     def _notify_config_reset(self) -> None:
         if self._config_quarantined_to is not None:
-            warn_config_reset(self)
+            warn_config_reset(self, self._config_quarantined_to)
 
     def _notify_config_newer(self) -> None:
         if self._config_newer_format is not None:
-            warn_config_newer(self)
+            warn_config_newer(self, config_path())
 
     def _on_commit_data_request(self, _manager: object) -> None:
         self._session_shutdown = True

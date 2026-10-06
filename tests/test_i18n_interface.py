@@ -60,7 +60,10 @@ _KEY_SHAPE = re.compile(
 
 # Words that read the same in every language: names, standards, file formats,
 # key tokens, and the languages' own names in the picker.
+# A path is shown as it is: the settings file a recovery notice names.
+_QUARANTINED_CONFIG = "config-20261006-011652-123-utc.invalid"
 _LITERAL_WORDS = (
+    _QUARANTINED_CONFIG,
     *sorted(UPSCALE_MODELS, key=len, reverse=True),
     "PIXELUP_DATA_DIR",
     "PixelUp",
@@ -181,7 +184,7 @@ def _dialogs(manager: ModelManager) -> list[QDialog]:
         QuitConfirmDialog(0),
         QuitConfirmDialog(3),
         DiscardChangesDialog(),
-        MessageDialog("app.name", Message("notice.configReset")),
+        MessageDialog("app.name", Message.of("notice.configReset", path=_QUARANTINED_CONFIG)),
         StartupFailureDialog(
             Message("error.storageCreateFailed"),
             Message.of("error.hintHomeWritableLocation", variable="PIXELUP_DATA_DIR"),

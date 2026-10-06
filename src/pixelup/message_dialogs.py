@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QDialogButtonBox,
     QLabel,
@@ -50,12 +52,12 @@ def _show_message(parent: QWidget | None, message: Message) -> None:
     MessageDialog("app.name", message, parent=parent).exec()
 
 
-def warn_config_reset(parent: QWidget | None) -> None:
-    _show_message(parent, Message("notice.configReset"))
+def warn_config_reset(parent: QWidget | None, quarantined_to: Path) -> None:
+    _show_message(parent, Message.of("notice.configReset", path=str(quarantined_to)))
 
 
-def warn_config_newer(parent: QWidget | None) -> None:
-    _show_message(parent, Message("notice.configNewer"))
+def warn_config_newer(parent: QWidget | None, path: Path) -> None:
+    _show_message(parent, Message.of("notice.configNewer", path=str(path)))
 
 
 def warn_jobs_stopping(parent: QWidget | None) -> None:

@@ -382,7 +382,7 @@ def test_corrupt_config_lets_window_open(
     notices: list[str] = []
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset",
-        lambda _parent: notices.append("shown"),
+        lambda _parent, path: notices.append(path),
     )
     log_file = configure_session_logging()
 
@@ -397,7 +397,7 @@ def test_corrupt_config_lets_window_open(
         assert not (home / "config.json").exists()
         # The deferred non-fatal notice fires once the event loop turns.
         QApplication.processEvents()
-        assert notices == ["shown"]
+        assert notices == [window._config_quarantined_to]
     finally:
         window._session_shutdown = True
         window.close()
@@ -445,8 +445,12 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
 
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     notices: list[str] = []
-    monkeypatch.setattr("pixelup.gui.warn_config_newer", lambda _parent: notices.append("shown"))
-    monkeypatch.setattr("pixelup.gui.warn_config_reset", lambda _parent: notices.append("reset"))
+    monkeypatch.setattr(
+        "pixelup.gui.warn_config_newer", lambda _parent, path: notices.append(path)
+    )
+    monkeypatch.setattr(
+        "pixelup.gui.warn_config_reset", lambda _parent, path: notices.append("reset")
+    )
     log_file = configure_session_logging()
 
     window = MainWindow(log_file=log_file)
@@ -454,7 +458,7 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
         assert window.config == AppConfig()
         assert window._config_quarantined_to is None
         QApplication.processEvents()
-        assert notices == ["shown"]
+        assert notices == [home / "config.json"]
 
         window.quality.setValue(window.quality.value() - 1)
         assert window._flush_parameters_save() is False

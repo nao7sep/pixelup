@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
@@ -18,7 +20,8 @@ def test_config_reset_uses_an_icon_free_authored_dialog(
         lambda dialog: shown.append(dialog),
     )
 
-    message_dialogs.warn_config_reset(None)
+    quarantined = Path.home() / ".pixelup" / "config-20261006-011652-123-utc.invalid"
+    message_dialogs.warn_config_reset(None, quarantined)
 
     assert len(shown) == 1
     dialog = shown[0]
@@ -28,9 +31,8 @@ def test_config_reset_uses_an_icon_free_authored_dialog(
         assert dialog.findChildren(QMessageBox) == []
         assert text == (
             "Your settings file was unreadable and has been reset to defaults.\n\n"
-            "A preserved copy remains available, and its location is recorded in the log."
+            f"The unreadable file was kept as:\n{quarantined}"
         )
-        assert ".invalid" not in text
     finally:
         dialog.deleteLater()
 
