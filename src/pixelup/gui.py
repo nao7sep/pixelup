@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
+import threading
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from itertools import count
 from pathlib import Path
@@ -114,9 +116,10 @@ from pixelup.parameters import (
 )
 from pixelup.parameters_help_dialog import ParametersHelpDialog
 from pixelup.paths import absolute_user_path
-from pixelup.quit_dialog import QuitConfirmDialog
+from pixelup.quit_dialog import QuitConfirmDialog, QuitSaveFailedDialog
 from pixelup.records_window import RecordsReads, RecordsWindow, records_reads, stored_signal
 from pixelup.runner import JobRunner
+from pixelup.session_end import os_session_ending
 from pixelup.session_log import configure_session_logging, log, set_stored_listener
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
@@ -155,6 +158,25 @@ _NAME_MIN_WIDTH = 180
 # backup record, so the writes are coalesced. Long enough to absorb typing "100" or
 # "0.75", short enough that the save is landed by the time the user has moved on.
 _PARAMETERS_SAVE_DELAY_MS = 500
+
+# How long a quit may take once it is under way, under the five or so seconds an OS
+# gives an app to end at logout or shutdown (unsaved-edits-conventions, Quitting).
+QUIT_BUDGET_S = 4.0
+
+
+def _start_quit_watchdog(seconds: float, expire: Callable[[], None]) -> None:
+    """Call ``expire`` after ``seconds`` on a thread of its own, so the bound holds
+    even while the window's thread is held in a wait."""
+    timer = threading.Timer(seconds, expire)
+    timer.daemon = True
+    timer.start()
+
+
+def _exit_now() -> None:
+    """End the process at once. A worker thread still running cannot be joined, and
+    an ordinary exit with one alive aborts."""
+    logging.shutdown()
+    os._exit(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,6 +400,7 @@ class MainWindow(QMainWindow):
         self.runner.finished.connect(self._job_finished)
         self.runner.idle.connect(self._close_when_workers_stop)
         self._quit_when_workers_idle = False
+        self._quit_bounded = False
         self._session_shutdown = False
         # Coalesces the Parameters panel's edits into one save (see
         # _PARAMETERS_SAVE_DELAY_MS). Built before the UI, because building the panel
@@ -483,7 +506,9 @@ class MainWindow(QMainWindow):
             warn_config_newer(self, config_path())
 
     def _on_commit_data_request(self, _manager: object) -> None:
-        self._session_shutdown = True
+        # Asked again for every quit on macOS, the user's own included, so each
+        # request decides afresh (see session_end).
+        self._session_shutdown = os_session_ending()
 
     def event(self, event: QEvent) -> bool:
         if event.type() == QEvent.Type.WindowActivate:
@@ -524,7 +549,9 @@ class MainWindow(QMainWindow):
         return self._session_shutdown or (app is not None and app.isSavingSession())
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        session_shutdown = self._is_session_shutdown()
+        # Every quit arrives here: the menu's Quit, Cmd+Q, the Dock's Quit, closing
+        # the window, and the OS ending the session (unsaved-edits-conventions,
+        # Quitting).
         if self._quit_when_workers_idle:
             if self._workers_clean_for_quit():
                 self._accept_close(event)
@@ -532,29 +559,52 @@ class MainWindow(QMainWindow):
                 event.ignore()
             return
 
-        # Land any edit still inside the debounce window before the app can go away.
-        # A direct close stays open on failure so the user can retry; OS session
-        # shutdown remains non-modal and records the failure in the session log.
-        if not self._flush_parameters_save(surface_failure=not session_shutdown):
-            if not session_shutdown:
-                event.ignore()
-                return
-        if session_shutdown:
+        if self._is_session_shutdown():
+            # Nothing asks: the bound starts before the save, the save's failure is
+            # only logged, and the quit is never refused, since refusing it cancels
+            # a macOS logout.
+            self._bound_quit()
             log.info("quit.session_shutdown")
-            self._finish_or_defer_close(event, surface_wait=False)
+            self._flush_parameters_save(surface_failure=False)
+            self._finish_or_defer_close(event, session_shutdown=True)
             return
-        if not self._images_by_path:
-            self._finish_or_defer_close(event, surface_wait=True)
-            return
-        active = sum(1 for job in self.jobs if job.status in {"pending", "running", "cancelling"})
-        if QuitConfirmDialog(active, self).exec() == QDialog.DialogCode.Accepted:
-            log.info("quit.confirmed", active_jobs=active)
-            self._finish_or_defer_close(event, surface_wait=True)
-        else:
+
+        # Land any edit still inside the debounce window before the app can go away.
+        if not self._save_parameters_for_quit():
             log.info("quit.cancelled")
             event.ignore()
+            return
+        if self._images_by_path:
+            active = sum(
+                1 for job in self.jobs if job.status in {"pending", "running", "cancelling"}
+            )
+            if QuitConfirmDialog(active, self).exec() != QDialog.DialogCode.Accepted:
+                log.info("quit.cancelled")
+                event.ignore()
+                return
+            log.info("quit.confirmed", active_jobs=active)
+        self._finish_or_defer_close(event, session_shutdown=False)
 
-    def _finish_or_defer_close(self, event: QCloseEvent, *, surface_wait: bool) -> None:
+    def _save_parameters_for_quit(self) -> bool:
+        """Save the panel for a quit the user started; whether the quit goes on.
+
+        A failed save holds the quit and asks: Retry tries again, Quit anyway goes
+        on without the edits, and Cancel keeps PixelUp open with them still shown.
+        """
+        while not self._flush_parameters_save():
+            choice = QuitSaveFailedDialog(self).choose()
+            if choice == "cancel":
+                return False
+            if choice == "quit_anyway":
+                log.warning(
+                    "quit.parameters_unsaved",
+                    values=job_settings_log_payload(self.current_job_settings()),
+                )
+                return True
+        return True
+
+    def _finish_or_defer_close(self, event: QCloseEvent, *, session_shutdown: bool) -> None:
+        self._bound_quit()
         self.runner.begin_shutdown()
         self.model_manager.begin_shutdown()
         if self._records_window is not None:
@@ -562,10 +612,44 @@ class MainWindow(QMainWindow):
         if self._workers_clean_for_quit():
             self._accept_close(event)
             return
-        self._quit_when_workers_idle = True
         event.ignore()
-        if surface_wait:
-            warn_jobs_stopping(self)
+        if session_shutdown:
+            self._force_exit()
+            return
+        self._quit_when_workers_idle = True
+        warn_jobs_stopping(self)
+
+    def _bound_quit(self) -> None:
+        """Start the quit's one bound, once; past it PixelUp exits regardless."""
+        if self._quit_bounded:
+            return
+        self._quit_bounded = True
+        _start_quit_watchdog(QUIT_BUDGET_S, self._force_exit)
+
+    def _force_exit(self) -> None:
+        """Log the work still running, then end the process.
+
+        Runs on the watchdog's thread when the bound expires, so what it reads may be
+        changing under it; the exit happens whatever the reading does.
+        """
+        try:
+            log.warning(
+                "quit.forced_exit",
+                budget_seconds=QUIT_BUDGET_S,
+                running_jobs=[
+                    {"job_id": job.id, "output": str(job.output_path)}
+                    for job in list(self.jobs)
+                    if job.status in {"running", "cancelling"}
+                ],
+                model_installs=[
+                    list(operation.artifact_names)
+                    for operation in list(self.model_manager.in_progress_operations)
+                ],
+            )
+        except Exception:  # noqa: BLE001 - the exit must happen whatever the log does.
+            log.exception("quit.forced_exit_log_failed")
+        finally:
+            _exit_now()
 
     def _close_when_workers_stop(self) -> None:
         if self._quit_when_workers_idle and self._workers_clean_for_quit():

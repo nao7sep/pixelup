@@ -699,7 +699,7 @@ def test_a_second_quit_while_a_read_is_still_in_flight_waits_for_it(
     main.show()
     main._open_records_window()
     assert reader_holder[0].waiting.wait(WAIT_S)
-    main._session_shutdown = True
+    monkeypatch.setattr(gui, "warn_jobs_stopping", lambda _parent: None)
 
     first = QCloseEvent()
     main.closeEvent(first)
@@ -717,7 +717,7 @@ def test_a_second_quit_while_a_read_is_still_in_flight_waits_for_it(
 def test_no_records_window_opens_once_quitting_has_begun(make_main, monkeypatch) -> None:
     main = make_main()
     monkeypatch.setattr(main.runner, "cleanup_for_quit", lambda: False)
-    main._session_shutdown = True
+    monkeypatch.setattr(gui, "warn_jobs_stopping", lambda _parent: None)
     main.close()
 
     main._open_records_window()

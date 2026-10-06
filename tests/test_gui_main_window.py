@@ -1192,6 +1192,236 @@ def test_close_waits_for_worker_ownership_to_end(
     assert window._window_state.value(window._GEOMETRY_KEY) is not None
 
 
+class _ChoicesDialog:
+    """Stands in for QuitSaveFailedDialog, answering from a script."""
+
+    def __init__(self, answers: list[str]) -> None:
+        self.answers = answers
+        self.shown = 0
+
+    def __call__(self, _parent: object) -> _ChoicesDialog:
+        return self
+
+    def choose(self) -> str:
+        self.shown += 1
+        return self.answers.pop(0)
+
+
+def _never(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("asked during an OS session end")
+
+
+def _fields(caplog: pytest.LogCaptureFixture, message: str) -> list[dict]:
+    return [record.fields for record in caplog.records if record.getMessage() == message]
+
+
+@pytest.mark.parametrize("os_ending", [True, False])
+def test_each_commit_request_says_afresh_whether_the_os_is_ending_the_session(
+    make_window, monkeypatch: pytest.MonkeyPatch, os_ending: bool
+) -> None:
+    # macOS asks for every quit, Cmd+Q and the Dock's included, so an earlier
+    # logout that did not end PixelUp must not make a later Quit silent.
+    window = make_window()
+    window._session_shutdown = not os_ending
+    monkeypatch.setattr(gui, "os_session_ending", lambda: os_ending)
+
+    window._on_commit_data_request(None)
+
+    assert window._session_shutdown is os_ending
+
+
+def test_a_failed_save_holds_a_user_quit_until_cancel(
+    make_window, monkeypatch: pytest.MonkeyPatch, quit_bound
+) -> None:
+    window = make_window()
+    window.quality.setValue(10)
+    monkeypatch.setattr(gui, "save_app_config_merged", lambda *_: (_ for _ in ()).throw(
+        OSError("read-only")
+    ))
+    dialog = _ChoicesDialog(["cancel"])
+    monkeypatch.setattr(gui, "QuitSaveFailedDialog", dialog)
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert event.isAccepted() is False
+    assert dialog.shown == 1
+    assert window.parameters_result.isVisibleTo(window)
+    assert window.current_job_settings().quality == 10
+    # Nothing of the quit began: no bound, no shutdown, the queue still runs.
+    assert quit_bound.started == []
+    assert window.runner._shutting_down is False
+
+
+def test_retry_saves_and_the_quit_goes_on(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    window.quality.setValue(10)
+    real_save = gui.save_app_config_merged
+    attempts: list[int] = []
+
+    def fail_once(candidate, previous):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("read-only")
+        return real_save(candidate, previous)
+
+    monkeypatch.setattr(gui, "save_app_config_merged", fail_once)
+    dialog = _ChoicesDialog(["retry"])
+    monkeypatch.setattr(gui, "QuitSaveFailedDialog", dialog)
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert event.isAccepted() is True
+    assert len(attempts) == 2
+    assert load_app_config(config_path()).parameters.quality == 10
+
+
+def test_quit_anyway_quits_without_the_save_and_logs_what_was_lost(
+    make_window, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    window = make_window()
+    window.quality.setValue(10)
+    monkeypatch.setattr(gui, "save_app_config_merged", lambda *_: (_ for _ in ()).throw(
+        OSError("read-only")
+    ))
+    dialog = _ChoicesDialog(["retry", "quit_anyway"])
+    monkeypatch.setattr(gui, "QuitSaveFailedDialog", dialog)
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert event.isAccepted() is True
+    assert dialog.shown == 2
+    assert not config_path().exists()
+    [lost] = _fields(caplog, "quit.parameters_unsaved")
+    assert lost["values"]["quality"] == 10
+
+
+def test_a_user_quit_waits_for_running_work_only_until_the_bound(
+    make_window,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quit_bound,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    window.open_paths([image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    window._queue_selected_image()
+    window.jobs[0].status = "running"
+    monkeypatch.setattr(gui, "QuitConfirmDialog", lambda *_: SimpleNamespace(
+        exec=lambda: QDialog.DialogCode.Accepted
+    ))
+    monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: False)
+    notices: list[object] = []
+    monkeypatch.setattr(gui, "warn_jobs_stopping", notices.append)
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    # The quit is under way and bounded; the window waits for the worker.
+    assert event.isAccepted() is False
+    assert window._quit_when_workers_idle is True
+    assert notices == [window]
+    assert quit_bound.started == [gui.QUIT_BUDGET_S]
+    assert quit_bound.exits == 0
+
+    quit_bound.expire()
+
+    assert quit_bound.exits == 1
+    [forced] = _fields(caplog, "quit.forced_exit")
+    assert forced["running_jobs"] == [
+        {"job_id": window.jobs[0].id, "output": str(window.jobs[0].output_path)}
+    ]
+
+
+def test_the_bound_starts_once_however_often_the_quit_is_asked(
+    make_window, monkeypatch: pytest.MonkeyPatch, quit_bound
+) -> None:
+    window = make_window()
+    monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: False)
+    monkeypatch.setattr(gui, "warn_jobs_stopping", lambda _parent: None)
+
+    window.closeEvent(QCloseEvent())
+    window.closeEvent(QCloseEvent())
+
+    assert quit_bound.started == [gui.QUIT_BUDGET_S]
+
+
+def test_an_os_session_end_never_asks_and_logs_the_failed_save(
+    make_window,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quit_bound,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    window = make_window()
+    window.open_paths([_png(tmp_path, "a.png")])
+    window.quality.setValue(10)
+    bounded_before_save: list[bool] = []
+
+    def failing_save(*_args: object) -> AppConfig:
+        bounded_before_save.append(quit_bound.started == [gui.QUIT_BUDGET_S])
+        raise OSError("read-only")
+
+    monkeypatch.setattr(gui, "save_app_config_merged", failing_save)
+    for name in ("QuitConfirmDialog", "QuitSaveFailedDialog", "warn_jobs_stopping"):
+        monkeypatch.setattr(gui, name, _never)
+    window._session_shutdown = True
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert event.isAccepted() is True
+    assert bounded_before_save == [True]
+    assert _fields(caplog, "config.save_failed")
+    assert quit_bound.exits == 0
+
+
+def test_an_os_session_end_with_work_still_running_exits_rather_than_refusing(
+    make_window, monkeypatch: pytest.MonkeyPatch, quit_bound, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Refusing the close would cancel a macOS logout, and waiting on would outlast
+    # what the OS allows, so the worker is left to the exit.
+    window = make_window()
+    monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: False)
+    monkeypatch.setattr(gui, "warn_jobs_stopping", _never)
+    window._session_shutdown = True
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert quit_bound.exits == 1
+    assert _fields(caplog, "quit.forced_exit")
+    assert window._quit_when_workers_idle is False
+
+
+def test_a_quit_that_settles_in_time_never_forces_the_exit(make_window, quit_bound) -> None:
+    window = make_window()
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert event.isAccepted() is True
+    assert quit_bound.started == [gui.QUIT_BUDGET_S]
+    assert quit_bound.exits == 0
+
+
+def test_the_forced_exit_happens_even_when_its_log_fails(
+    make_window, monkeypatch: pytest.MonkeyPatch, quit_bound
+) -> None:
+    window = make_window()
+    monkeypatch.setattr(window, "jobs", None)  # what the watchdog reads is mid-change
+
+    window._force_exit()
+
+    assert quit_bound.exits == 1
+
+
 def test_main_window_restores_geometry_saved_on_normal_close(make_window) -> None:
     first = make_window()
     # The offscreen Qt test screen is only 800 px wide and the content-derived

@@ -243,3 +243,35 @@ def _english_interface(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(bootstrap, "align_appkit", lambda tag: None)
     yield
     localizer.use("en", ("en",))
+
+
+class QuitBound:
+    """The quit's bound on a clock the test runs: nothing expires until ``expire()``,
+    and the forced exit is counted instead of ending the test run."""
+
+    def __init__(self) -> None:
+        self.started: list[float] = []
+        self.exits = 0
+        self._expire: list[Callable[[], None]] = []
+
+    def start(self, seconds: float, expire: Callable[[], None]) -> None:
+        self.started.append(seconds)
+        self._expire.append(expire)
+
+    def expire(self) -> None:
+        for expire in self._expire:
+            expire()
+
+    def exit(self) -> None:
+        self.exits += 1
+
+
+@pytest.fixture(autouse=True)
+def quit_bound(monkeypatch: pytest.MonkeyPatch) -> QuitBound:
+    """No test's quit starts a real watchdog or ends the process running the tests."""
+    from pixelup import gui
+
+    bound = QuitBound()
+    monkeypatch.setattr(gui, "_start_quit_watchdog", bound.start)
+    monkeypatch.setattr(gui, "_exit_now", bound.exit)
+    return bound

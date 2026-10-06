@@ -46,7 +46,7 @@ from pixelup.model_management import GENERAL_DENOISE_MODEL, UPSCALE_MODELS
 from pixelup.model_manager import ModelManager
 from pixelup.model_registry import ALL_MODELS
 from pixelup.parameters_help_dialog import ParametersHelpDialog
-from pixelup.quit_dialog import QuitConfirmDialog
+from pixelup.quit_dialog import QuitConfirmDialog, QuitSaveFailedDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
 from pixelup.settings_dialog import DiscardChangesDialog, SettingsDialog
@@ -183,6 +183,7 @@ def _dialogs(manager: ModelManager) -> list[QDialog]:
         ParametersHelpDialog(),
         QuitConfirmDialog(0),
         QuitConfirmDialog(3),
+        QuitSaveFailedDialog(),
         DiscardChangesDialog(),
         MessageDialog("app.name", Message.of("notice.configReset", path=_QUARANTINED_CONFIG)),
         StartupFailureDialog(

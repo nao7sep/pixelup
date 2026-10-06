@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
@@ -45,3 +47,51 @@ class QuitConfirmDialog(DialogShell):
         # The safe action, so a reflexive Enter or Space never quits.
         self.set_initial_focus(cancel_button)
         self.fit()
+
+
+QuitSaveChoice = Literal["cancel", "retry", "quit_anyway"]
+
+
+class QuitSaveFailedDialog(DialogShell):
+    """A quit the user started, held because the parameters did not save
+    (unsaved-edits-conventions, Quitting).
+
+    ``choose()`` runs the dialog and names the answer; Escape and the title bar's
+    close answer Cancel, which keeps PixelUp open with the edits still shown.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("app.name", parent, width=NOTICE_WIDTH)
+        self._choice: QuitSaveChoice = "cancel"
+
+        message = localize(QLabel(), text="quit.saveFailed")
+        message.setWordWrap(True)
+        self.body_layout.addWidget(message)
+
+        cancel_button = localize(QPushButton(), text="quit.cancel")
+        cancel_button.clicked.connect(self.reject)
+
+        retry_button = localize(QPushButton(), text="quit.retry")
+        retry_button.setProperty("role", "primary")
+        retry_button.setDefault(True)
+        retry_button.clicked.connect(lambda: self._answer("retry"))
+
+        quit_button = localize(QPushButton(), text="quit.quitAnyway")
+        quit_button.setProperty("role", "danger-confirm")
+        quit_button.clicked.connect(lambda: self._answer("quit_anyway"))
+
+        self.add_footer_widget(cancel_button)
+        self.add_footer_widget(retry_button)
+        self.add_footer_widget(quit_button)
+        # Retry keeps the edits, so a reflexive Enter can only try the save again.
+        self.set_initial_focus(retry_button)
+        self.fit()
+
+    def _answer(self, choice: QuitSaveChoice) -> None:
+        self._choice = choice
+        self.accept()
+
+    def choose(self) -> QuitSaveChoice:
+        self._choice = "cancel"
+        self.exec()
+        return self._choice

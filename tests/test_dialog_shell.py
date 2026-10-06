@@ -22,7 +22,7 @@ from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.message_dialogs import MessageDialog, StartupFailureDialog
 from pixelup.model_manager import ModelManager
 from pixelup.parameters_help_dialog import ParametersHelpDialog
-from pixelup.quit_dialog import QuitConfirmDialog
+from pixelup.quit_dialog import QuitConfirmDialog, QuitSaveFailedDialog
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
 
@@ -31,6 +31,7 @@ from pixelup.shortcuts_dialog import ShortcutsDialog
 BUILDERS = {
     "about": lambda: AboutDialog(),
     "quit": lambda: QuitConfirmDialog(2),
+    "quit-save-failed": lambda: QuitSaveFailedDialog(),
     "shortcuts": lambda: ShortcutsDialog(),
     "settings": lambda: SettingsDialog(AppConfig()),
     "parameters-help": lambda: ParametersHelpDialog(),
