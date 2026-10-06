@@ -1,4 +1,5 @@
 import struct
+import xml.etree.ElementTree as ElementTree
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -168,6 +169,23 @@ def test_xmp_without_dates_gains_them_on_its_first_description() -> None:
         b' xmp:ModifyDate="' + STAMP + b'" xmp:MetadataDate="' + STAMP + b'"'
         b"/><rdf:Description/></rdf:RDF>"
     )
+
+
+def test_xmp_dates_are_added_after_a_quoted_attribute_holding_a_greater_than_sign() -> None:
+    source = (
+        b'<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        b'<rdf:Description rdf:about=""'
+        b' xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:Headline="5 > 3"/>'
+        b"</rdf:RDF></x:xmpmeta>"
+    )
+
+    output = xmp_for_output(source, size=(1, 1), color=None, modified=MODIFIED)
+
+    description = ElementTree.fromstring(output)[0][0]
+    assert description.get("{http://ns.adobe.com/photoshop/1.0/}Headline") == "5 > 3"
+    assert description.get("{http://ns.adobe.com/xap/1.0/}ModifyDate") == STAMP.decode()
+    assert description.get("{http://ns.adobe.com/xap/1.0/}MetadataDate") == STAMP.decode()
 
 
 def test_xmp_colour_space_follows_a_conversion() -> None:

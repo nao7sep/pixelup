@@ -148,7 +148,8 @@ def _write_xmp_property(xmp: bytes, name: bytes, value: str) -> bytes:
     replaced = _replace_xmp_property(xmp, name, value)
     if replaced != xmp or re.search(rb"[\s<]" + re.escape(name) + rb"[\s=>]", xmp):
         return replaced
-    start = re.search(rb"<rdf:Description\b[^>]*?(?=/?>)", xmp)
+    # A quoted attribute value may hold ">", so the start tag ends only outside quotes.
+    start = re.search(rb"<rdf:Description\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*?(?=/?>)", xmp)
     if start is None:
         # Not XMP PixelUp can place a property in; carried as it is.
         return xmp
