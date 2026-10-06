@@ -75,6 +75,42 @@ def test_exif_without_dates_gains_them_and_keeps_every_other_value() -> None:
     assert output.get_ifd(EXIF_IFD) == {0x9010: "+09:00"}
 
 
+def test_exif_modification_fraction_follows_the_output_and_capture_facts_stay() -> None:
+    # Big-endian, hand-built with a maker note and an IFD1 thumbnail, whose offsets point
+    # into the block, and all three fractional-second tags.
+    maker_note = b"MAKER-NOTE-BYTES"
+    thumbnail = b"\xff\xd8thumbnail\xff\xd9"
+    header = b"MM\x00*" + struct.pack(">I", 8)
+    ifd0 = struct.pack(">H", 1) + struct.pack(">HHII", EXIF_IFD, 4, 1, 26) + struct.pack(">I", 96)
+    exif_ifd = (
+        struct.pack(">H", 4)
+        + struct.pack(">HHII", 0x927C, 7, len(maker_note), 80)
+        + struct.pack(">HHI", 0x9290, 2, 4) + b"123\x00"
+        + struct.pack(">HHI", 0x9291, 2, 4) + b"456\x00"
+        + struct.pack(">HHI", 0x9292, 2, 4) + b"789\x00"
+        + bytes(4)
+    )
+    ifd1 = (
+        struct.pack(">H", 2)
+        + struct.pack(">HHII", 0x0201, 4, 1, 126)
+        + struct.pack(">HHII", 0x0202, 4, 1, len(thumbnail))
+        + bytes(4)
+    )
+    source = header + ifd0 + exif_ifd + maker_note + ifd1 + thumbnail
+    modified = MODIFIED.replace(microsecond=250000)
+
+    output = exif_for_output(source, size=(8, 4), color=None, modified=modified)
+
+    exif = read_exif(output)
+    exif_ifd_values = exif.get_ifd(EXIF_IFD)
+    assert exif_ifd_values[0x9290] == "250"
+    assert (exif_ifd_values[0x9291], exif_ifd_values[0x9292]) == ("456", "789")
+    assert exif_ifd_values[0x927C] == maker_note
+    ifd1_values = exif.get_ifd(-1)  # IFD1
+    start, length = ifd1_values[0x0201], ifd1_values[0x0202]
+    assert output[6 + start : 6 + start + length] == thumbnail
+
+
 def test_exif_needs_a_modification_time_with_its_offset() -> None:
     with pytest.raises(ValueError):
         exif_for_output(camera_exif(), size=(1, 1), color=None, modified=datetime(2026, 1, 1))

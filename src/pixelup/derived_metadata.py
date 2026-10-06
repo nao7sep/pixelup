@@ -26,6 +26,7 @@ _TAG_IMAGE_LENGTH = 0x0101
 _TAG_DATE_TIME = 0x0132
 _TAG_EXIF_IFD = 0x8769
 _TAG_OFFSET_TIME = 0x9010
+_TAG_SUBSEC_TIME = 0x9290
 _TAG_COLOR_SPACE = 0xA001
 _TAG_PIXEL_X_DIMENSION = 0xA002
 _TAG_PIXEL_Y_DIMENSION = 0xA003
@@ -79,9 +80,10 @@ def exif_for_output(
 ) -> bytes:
     """The source EXIF describing an output of ``size``, converted to ``color`` when given.
 
-    DateTime is written as ``modified``'s local wall-clock time with OffsetTime beside it;
-    the capture dates and their offsets are kept. Raises ValueError when the block is not
-    a readable TIFF structure.
+    DateTime is written as ``modified``'s local wall-clock time with OffsetTime beside it,
+    and an existing SubsecTime as its fraction, in the source's number of digits; the
+    capture dates, their offsets and fractions are kept. Raises ValueError when the block
+    is not a readable TIFF structure.
     """
     tiff = _Tiff(exif)
     width, height = size
@@ -89,8 +91,10 @@ def exif_for_output(
     tiff.set_integer(ifd0.get(_TAG_IMAGE_WIDTH), width)
     tiff.set_integer(ifd0.get(_TAG_IMAGE_LENGTH), height)
     exif_ifd = tiff.sub_ifd(ifd0, _TAG_EXIF_IFD)
+    subsec = None
     if exif_ifd is not None:
         entries = tiff.entries(exif_ifd)
+        subsec = tiff.ascii(entries.get(_TAG_SUBSEC_TIME))
         tiff.set_integer(entries.get(_TAG_PIXEL_X_DIMENSION), width)
         tiff.set_integer(entries.get(_TAG_PIXEL_Y_DIMENSION), height)
         if color is not None:
@@ -103,6 +107,10 @@ def exif_for_output(
                 tiff.set_interop_index(interop_ifd, _INTEROP_INDEX.get(color.name))
     tiff.set_ascii(_IFD0_POINTER, _TAG_DATE_TIME, modified.strftime("%Y:%m:%d %H:%M:%S"))
     tiff.set_ascii(tiff.exif_ifd_pointer(), _TAG_OFFSET_TIME, _offset(modified))
+    if subsec is not None:
+        digits = len(subsec.rstrip(b"\x00")) or 1
+        fraction = f"{modified.microsecond:06d}".ljust(digits, "0")[:digits]
+        tiff.set_ascii(tiff.exif_ifd_pointer(), _TAG_SUBSEC_TIME, fraction)
     return EXIF_PREFIX + bytes(tiff.data)
 
 
