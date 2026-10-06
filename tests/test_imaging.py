@@ -2,13 +2,22 @@ import errno
 import os
 import re
 from io import BytesIO
+from itertools import product
 from pathlib import Path
+from struct import pack
 
 import pytest
 from PIL import Image, ImageCms
 
 from pixelup.errors import PixelupError
-from pixelup.imaging import SourceMetadata, _profile_bytes, save_output_image
+from pixelup.icc_profiles import D50_XYZ, _description_tag, _profile_with_tags, _xyz_tag
+from pixelup.imaging import (
+    SourceMetadata,
+    _profile_bytes,
+    load_source_metadata,
+    rgb_pixels,
+    save_output_image,
+)
 from pixelup.paths import OutputFormat
 
 
@@ -515,3 +524,107 @@ def test_unreadable_source_exif_is_carried_as_it_is(tmp_path: Path) -> None:
     saved = _save_png(tmp_path, SourceMetadata(exif=unreadable))
 
     assert saved.info["exif"] == unreadable
+
+
+def _profile_for(space: bytes, pcs: bytes, tags: list[tuple[str, bytes]]) -> bytes:
+    profile = bytearray(_profile_with_tags([("desc", _description_tag("Input")), *tags]))
+    profile[16:24] = space + pcs
+    return bytes(profile)
+
+
+# A gamma 2.2 grayscale profile, and a CMYK profile whose any ink darkens to neutral grey.
+GRAY_PROFILE = _profile_for(
+    b"GRAY",
+    b"XYZ ",
+    [("wtpt", _xyz_tag(D50_XYZ)), ("kTRC", b"curv" + bytes(4) + pack(">IH", 1, 0x0233))],
+)
+_LUT_TABLE = bytes(range(256))
+CMYK_PROFILE = _profile_for(
+    b"CMYK",
+    b"Lab ",
+    [
+        ("wtpt", _xyz_tag(D50_XYZ)),
+        (
+            "A2B0",
+            b"mft1"
+            + bytes(4)
+            + bytes((4, 3, 2, 0))
+            + b"".join(pack(">i", v) for v in (65536, 0, 0, 0, 65536, 0, 0, 0, 65536))
+            + _LUT_TABLE * 4
+            + b"".join(
+                bytes((255 - 255 * max(corner), 128, 128))
+                for corner in product((0, 1), repeat=4)
+            )
+            + _LUT_TABLE * 3,
+        ),
+    ],
+)
+
+
+@pytest.mark.parametrize(
+    ("mode", "pixel", "profile", "suffix"),
+    [
+        ("CMYK", (255, 0, 0, 0), CMYK_PROFILE, ".jpg"),
+        ("LA", (255, 128), GRAY_PROFILE, ".png"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("strip_metadata", "target_profile", "output_profile"),
+    [
+        (False, None, "sRGB built-in"),
+        (False, "adobergb", "PixelUp Adobe RGB (1998)"),
+        (True, None, None),
+    ],
+)
+def test_non_rgb_input_is_decoded_through_its_profile_and_output_profile_describes_it(
+    tmp_path: Path,
+    mode: str,
+    pixel: tuple[int, ...],
+    profile: bytes,
+    suffix: str,
+    strip_metadata: bool,
+    target_profile: str | None,
+    output_profile: str | None,
+) -> None:
+    source = tmp_path / f"in{suffix}"
+    Image.new(mode, (2, 1), pixel).save(source, icc_profile=profile, exif=ADOBE_RGB_EXIF)
+    output = tmp_path / "out.png"
+
+    with Image.open(source) as image:
+        decoded = rgb_pixels(image)
+    metadata = load_source_metadata(source)
+    save_output_image(
+        decoded,
+        output_path=output,
+        output_format=OutputFormat.PNG,
+        quality=95,
+        background="white",
+        source_metadata=metadata,
+        strip_metadata=strip_metadata,
+        target_profile=target_profile,
+    )
+
+    assert decoded.mode == ("RGBA" if "A" in mode else "RGB")
+    red, green, blue = decoded.getpixel((0, 0))[:3]
+    # Converted through the profile: the cyan ink and the grey level read as neutral grey.
+    assert red == green == blue
+    assert metadata.icc_profile == _profile_bytes("srgb")
+    with Image.open(output) as saved:
+        if output_profile is None:
+            assert "icc_profile" not in saved.info
+        else:
+            assert _profile_name(saved) == output_profile
+            # The carried EXIF names the output's colour space, not the source's.
+            color_space = saved.getexif().get_ifd(0x8769)[0xA001]
+            assert color_space == (1 if target_profile is None else 0xFFFF)
+
+
+def test_inference_reads_a_non_rgb_input_through_its_profile(tmp_path: Path) -> None:
+    from pixelup.inference import _read_input_image
+
+    source = tmp_path / "in.jpg"
+    Image.new("CMYK", (2, 1), (255, 0, 0, 0)).save(source, icc_profile=CMYK_PROFILE)
+
+    blue, green, red = _read_input_image(source)[0, 0]
+
+    assert blue == green == red

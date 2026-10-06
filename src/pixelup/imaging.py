@@ -39,6 +39,9 @@ class SourceMetadata:
     icc_profile: bytes | None = None
     exif: bytes | None = None
     xmp: bytes | None = None
+    # Decoding converts pixels in a non-RGB profile to sRGB (rgb_pixels), and icc_profile
+    # is then sRGB's: the profile of the pixels the output is made from.
+    decoded_to_srgb: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +113,41 @@ def image_from_bgr_array(array: Any) -> Image.Image:
     )
 
 
+def rgb_pixels(image: Image.Image) -> Image.Image:
+    """The image as RGB or RGBA pixels, in the profile ``load_source_metadata`` reports.
+
+    Pixels in a non-RGB ICC profile, such as CMYK or grayscale, are converted through it
+    to sRGB. Raises ImageCms.PyCMSError when the profile cannot convert the pixels.
+    """
+    if image.mode in {"RGB", "RGBA"}:
+        return image
+    profile = _non_rgb_profile(image)
+    if profile is None:
+        return image.convert("RGBA" if "A" in image.getbands() else "RGB")
+    pixels = image.convert("L") if profile.profile.xcolor_space == "GRAY" else image
+    rgb = ImageCms.profileToProfile(
+        pixels,
+        profile,
+        ImageCms.ImageCmsProfile(BytesIO(_profile_bytes("srgb"))),
+        outputMode="RGB",
+    )
+    if "A" in image.getbands():
+        rgb.putalpha(image.getchannel("A"))
+    return rgb
+
+
+def _non_rgb_profile(image: Image.Image) -> ImageCms.ImageCmsProfile | None:
+    """The ICC profile decoding converts the image's pixels through, if any."""
+    icc_profile = image.info.get("icc_profile")
+    if image.mode in {"RGB", "RGBA"} or not isinstance(icc_profile, bytes) or not icc_profile:
+        return None
+    try:
+        profile = ImageCms.ImageCmsProfile(BytesIO(icc_profile))
+    except (OSError, ImageCms.PyCMSError):
+        return None
+    return None if profile.profile.xcolor_space == "RGB " else profile
+
+
 def load_source_metadata(path: Path) -> SourceMetadata:
     register_image_plugins()
     try:
@@ -117,15 +155,19 @@ def load_source_metadata(path: Path) -> SourceMetadata:
             icc_profile = image.info.get("icc_profile")
             exif = image.info.get("exif")
             xmp = image.info.get("xmp")
+            decoded_to_srgb = _non_rgb_profile(image) is not None
     except (OSError, UnidentifiedImageError) as exc:
         # Source metadata is optional; an unreadable header is not a failure of
         # the upscale. Note it at debug for diagnosis without alarming a run.
         log.debug("metadata.read_failed", input=str(path), reason=str(exc))
         return SourceMetadata()
+    if decoded_to_srgb:
+        icc_profile = _profile_bytes("srgb")
     return SourceMetadata(
         icc_profile=icc_profile if isinstance(icc_profile, bytes) else None,
         exif=exif if isinstance(exif, bytes) else None,
         xmp=xmp if isinstance(xmp, bytes) else None,
+        decoded_to_srgb=decoded_to_srgb,
     )
 
 
@@ -264,7 +306,12 @@ def _plan_color(
         return _ColorPlan(
             source_profile, _profile_bytes("srgb"), embed_profile=False, converted_to=None
         )
-    return _ColorPlan(source_profile, source_profile, embed_profile=True, converted_to=None)
+    converted_to = None
+    if source_metadata.decoded_to_srgb:
+        converted_to = OutputColor("srgb", _profile_description(source_profile))
+    return _ColorPlan(
+        source_profile, source_profile, embed_profile=True, converted_to=converted_to
+    )
 
 
 def _prepare_image_for_save(

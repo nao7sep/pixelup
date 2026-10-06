@@ -9,12 +9,12 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageCms, UnidentifiedImageError
 
 from pixelup.devices import resolve_device, to_torch_device
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
-from pixelup.imaging import register_image_plugins
+from pixelup.imaging import register_image_plugins, rgb_pixels
 from pixelup.models import model_file
 from pixelup.realesrgan_models import RRDBNet, SRVGGNetCompact
 from pixelup.realesrgan_runtime import RealESRGANer
@@ -280,9 +280,7 @@ def _read_input_image(path: Path) -> Any:
     register_image_plugins()
     try:
         with Image.open(path) as image:
-            if image.mode not in {"RGB", "RGBA"}:
-                image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
-            array = np.array(image)
+            array = np.array(rgb_pixels(image))
     except UnidentifiedImageError as exc:
         raise PixelupError(
             ErrorCode.INPUT_INVALID_FORMAT,
@@ -295,7 +293,7 @@ def _read_input_image(path: Path) -> Any:
             Message("error.inputUnreadable"),
             details={"input": str(path), "reason": str(exc)},
         ) from exc
-    except OSError as exc:
+    except (OSError, ImageCms.PyCMSError) as exc:
         raise PixelupError(
             ErrorCode.INPUT_UNREADABLE,
             Message("error.inputOpenFailed"),
