@@ -167,6 +167,8 @@ def run_upscale(
         output_size=list(plan.output_size),
         output_format=plan.output_format.value,
         device=plan.device,
+        input_sha256=input_sha256,
+        input_size_bytes=input_size_bytes,
     )
     for warning in plan_warnings(options, plan):
         log.warning("upscale.warning", input=str(plan.input_path), text=english().of(warning))

@@ -301,3 +301,51 @@ def test_run_upscale_hashes_the_input_before_processing(
     assert input_path.read_bytes() != original
     assert result["input_sha256"] == hashlib.sha256(original).hexdigest()
     assert result["input_size_bytes"] == len(original)
+
+
+def test_the_planned_record_keeps_the_input_version_when_inference_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+    import json
+    import sqlite3
+
+    from pixelup import upscale as upscale_module
+    from pixelup.errors import ErrorCode
+    from pixelup.session_log import configure_session_logging
+    from pixelup.upscale import run_upscale
+
+    database = configure_session_logging()
+    input_path = tmp_path / "input.png"
+    models_dir = tmp_path / "models"
+    temp_dir = tmp_path / "temp"
+    models_dir.mkdir(exist_ok=True)
+    temp_dir.mkdir(exist_ok=True)
+    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    Image.new("RGB", (4, 4), "white").save(input_path)
+    original = input_path.read_bytes()
+
+    def edit_input_then_fail(*args: object, **kwargs: object) -> object:
+        Image.new("RGB", (4, 4), "black").save(input_path)
+        raise PixelupError(ErrorCode.INTERNAL_ERROR, "Inference failed.")
+
+    monkeypatch.setattr(upscale_module, "run_inference", edit_input_then_fail)
+
+    with pytest.raises(PixelupError):
+        run_upscale(
+            options(input_path, str(tmp_path / "output.png"), model="custom-model"),
+            RuntimeDirs(models_dir, temp_dir),
+        )
+
+    connection = sqlite3.connect(database)
+    try:
+        (fields,) = connection.execute(
+            "SELECT fields FROM logs WHERE message = 'upscale.planned'"
+        ).fetchone()
+    finally:
+        connection.close()
+    planned = json.loads(fields)
+    assert input_path.read_bytes() != original
+    assert planned["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert planned["input_size_bytes"] == len(original)
