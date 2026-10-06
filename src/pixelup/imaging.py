@@ -27,7 +27,7 @@ from pixelup.output_reservation import (
     PublishedFile,
     assert_output_bundle_available,
     assert_output_bundle_claims_current,
-    published_file,
+    close_published_file,
     remove_published_file,
 )
 from pixelup.paths import OutputFormat
@@ -257,16 +257,18 @@ def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedFi
         descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     except FileExistsError as exc:
         raise _output_exists(output_path) from exc
-    published = published_file(output_path, descriptor)
     try:
-        with temp_path.open("rb") as source_file, os.fdopen(descriptor, "wb") as output_file:
+        with (
+            temp_path.open("rb") as source_file,
+            os.fdopen(descriptor, "wb", closefd=False) as output_file,
+        ):
             shutil.copyfileobj(source_file, output_file)
             output_file.flush()
             os.fsync(output_file.fileno())
     except Exception:
-        remove_published_file(published)
+        remove_published_file(close_published_file(output_path, descriptor))
         raise
-    return published
+    return close_published_file(output_path, descriptor)
 
 
 def _fsync_file(path: Path) -> None:

@@ -14,6 +14,7 @@ from filelock import FileLock, Timeout
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
+from pixelup.session_log import log
 
 CancelCheck = Callable[[], bool]
 WaitingCallback = Callable[[], None]
@@ -115,6 +116,14 @@ def published_file_is_current(published: PublishedFile) -> bool:
 
 
 def remove_published_file(published: PublishedFile) -> bool:
+    """Remove a file PixelUp published, if the path still names it; False leaves it in place."""
+    removed = _remove_published_file(published)
+    if not removed:
+        log.warning("output.cleanup_left_file", path=str(published.path))
+    return removed
+
+
+def _remove_published_file(published: PublishedFile) -> bool:
     claim = published.path.with_name(f".{uuid.uuid4().hex}.pixelup-claim")
     try:
         # Capture and verify PixelUp's inode without mutating the public path. Besides
@@ -122,7 +131,7 @@ def remove_published_file(published: PublishedFile) -> bool:
         # this filesystem before a later rename can displace an external winner.
         os.link(published.path, claim, follow_symlinks=False)
     except OSError:
-        return False
+        return _remove_without_hard_link(published)
 
     removed = False
     try:
@@ -158,6 +167,21 @@ def remove_published_file(published: PublishedFile) -> bool:
     return removed
 
 
+def _remove_without_hard_link(published: PublishedFile) -> bool:
+    """Cleanup on a volume without hard links, such as exFAT or FAT.
+
+    The caller holds the bundle reservation, so no other PixelUp job writes this bundle;
+    the identity check immediately before the unlink is what proves the entry is ours.
+    """
+    if not published_file_is_current(published):
+        return False
+    try:
+        os.unlink(published.path)
+    except OSError:
+        return False
+    return True
+
+
 def _restore_displaced_file(hold: Path, destination: Path) -> None:
     """Restore a non-owned entry without replacing a later destination winner.
 
@@ -175,8 +199,16 @@ def _restore_displaced_file(hold: Path, destination: Path) -> None:
         pass
 
 
-def published_file(path: Path, descriptor: int) -> PublishedFile:
-    current = os.fstat(descriptor)
+def close_published_file(path: Path, descriptor: int) -> PublishedFile:
+    """The claim on ``path`` for the descriptor that created it, which is then closed.
+
+    Called once the bytes are written, written or failed: an exFAT or FAT file id
+    changes when the first bytes are (storage-path-conventions).
+    """
+    try:
+        current = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
     return PublishedFile(path, current.st_dev, current.st_ino)
 
 

@@ -357,6 +357,40 @@ def test_save_output_image_treats_a_broken_symlink_as_occupied(
     assert Path(target) == tmp_path / "missing.png"
 
 
+def test_save_output_image_without_hard_links_removes_a_partly_copied_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "out.png"
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "hard links unsupported")
+
+    def disk_full(source: object, target: object) -> None:
+        target.write(b"partial")  # type: ignore[attr-defined]
+        target.flush()  # type: ignore[attr-defined]
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr("pixelup.imaging.os.link", unsupported_link)
+    monkeypatch.setattr("pixelup.output_reservation.os.link", unsupported_link)
+    monkeypatch.setattr("pixelup.imaging.shutil.copyfileobj", disk_full)
+
+    with pytest.raises(PixelupError) as excinfo:
+        save_output_image(
+            Image.new("RGB", (1, 1), "white"),
+            output_path=output,
+            output_format=OutputFormat.PNG,
+            quality=95,
+            background="white",
+            source_metadata=SourceMetadata(),
+            strip_metadata=True,
+            target_profile=None,
+        )
+
+    assert excinfo.value.code == "output_unwritable"
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_save_output_image_falls_back_to_an_exclusive_claim_without_hard_links(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

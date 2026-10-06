@@ -11,7 +11,7 @@ from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
 from pixelup.output_reservation import (
     PublishedFile,
-    published_file,
+    close_published_file,
     published_file_is_current,
     remove_published_file,
 )
@@ -94,38 +94,22 @@ def write_sidecar(
             details={"sidecar": str(sidecar_path), "reason": str(exc)},
         ) from exc
 
-    claim: PublishedFile | None = None
-    descriptor_open = True
     try:
-        claim = published_file(sidecar_path, descriptor)
-        file = os.fdopen(descriptor, "w", encoding="utf-8")
-        descriptor_open = False  # fdopen owns and closes it from here.
-        with file:
+        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as file:
             file.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
             file.flush()
             os.fsync(file.fileno())
     except OSError as exc:
-        if descriptor_open:
-            os.close(descriptor)
-            descriptor_open = False
-        if claim is not None:
-            remove_published_file(claim)
+        remove_published_file(close_published_file(sidecar_path, descriptor))
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
             Message("error.sidecarWriteFailed"),
             details={"sidecar": str(sidecar_path), "reason": str(exc)},
         ) from exc
     except Exception:
-        if descriptor_open:
-            os.close(descriptor)
-            descriptor_open = False
-        if claim is not None:
-            remove_published_file(claim)
+        remove_published_file(close_published_file(sidecar_path, descriptor))
         raise
-    finally:
-        if descriptor_open:
-            os.close(descriptor)
-    assert claim is not None
+    claim = close_published_file(sidecar_path, descriptor)
     if not published_file_is_current(claim):
         remove_published_file(claim)
         raise PixelupError(

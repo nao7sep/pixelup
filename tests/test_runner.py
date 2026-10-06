@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 from contextlib import contextmanager
 from itertools import count
@@ -468,13 +469,21 @@ def test_worker_rejects_occupied_output_before_inference(
     assert "already exists" in finished[0][2]
 
 
+@pytest.mark.parametrize("hard_links", [True, False])
 def test_worker_removes_its_image_when_sidecar_publication_loses(
     qapp: QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     _session_log: None,
+    hard_links: bool,
 ) -> None:
     job = _make_job(9, tmp_path)
+    if not hard_links:
+
+        def unsupported_link(*args: object, **kwargs: object) -> None:
+            raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+        monkeypatch.setattr("pixelup.output_reservation.os.link", unsupported_link)
 
     def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
         job.output_path.write_bytes(b"pixelup")

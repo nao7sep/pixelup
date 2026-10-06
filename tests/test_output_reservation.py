@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import multiprocessing
 import os
 from pathlib import Path
@@ -115,7 +116,7 @@ def test_case_variant_broken_symlink_occupies_the_normalized_bundle(
 
 
 @pytest.mark.parametrize("name", ["result.png", "result.json"])
-def test_claimed_cleanup_refuses_without_hard_links_before_public_mutation(
+def test_claimed_cleanup_without_hard_links_removes_only_its_own_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     name: str,
@@ -124,20 +125,25 @@ def test_claimed_cleanup_refuses_without_hard_links_before_public_mutation(
     path.write_bytes(b"pixelup")
     identity = os.lstat(path)
     claim = PublishedFile(path, identity.st_dev, identity.st_ino)
-    moves: list[tuple[object, ...]] = []
 
     def hard_links_unavailable(*_args: object, **_kwargs: object) -> None:
-        raise OSError("hard links unavailable")
+        raise OSError(errno.EOPNOTSUPP, "hard links unavailable")
 
     monkeypatch.setattr("pixelup.output_reservation.os.link", hard_links_unavailable)
-    monkeypatch.setattr(
-        "pixelup.output_reservation.os.rename", lambda *args: moves.append(args)
-    )
+    winner = tmp_path / "winner.tmp"
+    winner.write_bytes(b"external winner")
+    os.replace(winner, path)
 
     assert remove_published_file(claim) is False
-    assert path.read_bytes() == b"pixelup"
-    assert moves == []
-    assert list(tmp_path.glob("*.pixelup-*")) == []
+    assert path.read_bytes() == b"external winner"
+
+    path.unlink()
+    path.write_bytes(b"pixelup")
+    identity = os.lstat(path)
+    claim = PublishedFile(path, identity.st_dev, identity.st_ino)
+
+    assert remove_published_file(claim) is True
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize("name", ["result.png", "result.json"])

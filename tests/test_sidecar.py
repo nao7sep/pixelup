@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import re
@@ -98,6 +99,26 @@ def test_sidecar_does_not_replace_an_existing_file(tmp_path: Path) -> None:
 
     assert excinfo.value.code == "output_exists"
     assert sidecar.read_bytes() == original
+
+
+def test_sidecar_write_failure_without_hard_links_leaves_no_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def disk_full(_descriptor: int) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+    monkeypatch.setattr("pixelup.sidecar.os.fsync", disk_full)
+    monkeypatch.setattr("pixelup.output_reservation.os.link", unsupported_link)
+
+    with pytest.raises(PixelupError) as excinfo:
+        _write_sample_sidecar(tmp_path)
+
+    assert excinfo.value.code == "output_unwritable"
+    assert not (tmp_path / "source-realesr-general-x4v3-4x.json").exists()
 
 
 def test_sidecar_failure_cleanup_preserves_an_exact_boundary_replacement(
