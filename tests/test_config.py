@@ -202,6 +202,32 @@ def test_pixelup_home_with_empty_env_reference_is_a_reported_error(
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
 
 
+@pytest.mark.parametrize("reference", ["$PIXELUP_ROOT", "${PIXELUP_ROOT}", "%PIXELUP_ROOT%"])
+def test_pixelup_home_expands_every_reference_syntax(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: str
+) -> None:
+    monkeypatch.setenv("PIXELUP_ROOT", str(tmp_path / "profile"))
+    monkeypatch.setenv("PIXELUP_DATA_DIR", f"{reference}/pixelup")
+
+    assert resolve_state_dir() == (tmp_path / "profile" / "pixelup").resolve()
+
+
+@pytest.mark.parametrize("reference", ["$PIXELUP_ROOT", "${PIXELUP_ROOT}", "%PIXELUP_ROOT%"])
+@pytest.mark.parametrize("value", ["", None])
+def test_pixelup_home_with_an_empty_or_absent_reference_is_a_reported_error(
+    monkeypatch: pytest.MonkeyPatch, reference: str, value: str | None
+) -> None:
+    if value is None:
+        monkeypatch.delenv("PIXELUP_ROOT", raising=False)
+    else:
+        monkeypatch.setenv("PIXELUP_ROOT", value)
+    monkeypatch.setenv("PIXELUP_DATA_DIR", f"{reference}/pixelup")
+
+    with pytest.raises(PixelupError) as exc_info:
+        resolve_state_dir()
+    assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
+
+
 def test_ensure_models_dir_creates_directory(tmp_path: Path) -> None:
     target = tmp_path / "nested" / "models"
     assert ensure_models_dir(target) == target

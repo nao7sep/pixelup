@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,10 +20,8 @@ HOME_ENV = "PIXELUP_DATA_DIR"
 MODELS_ENV = "PIXELUP_MODELS_DIR"
 TEMP_ENV = "PIXELUP_TEMP_DIR"
 
-# An env reference left over after expansion — $VAR, ${VAR}, or %VAR% — means
-# the referenced variable was unset (os.path.expandvars leaves an unset
-# reference literal rather than raising).
-_UNRESOLVED_ENV_REF = re.compile(r"\$\{\w+\}|\$\w+|%\w+%")
+# An environment reference in a path override: ${VAR}, $VAR or %VAR%.
+_ENV_REF = re.compile(r"\$\{(\w+)\}|\$(\w+)|%(\w+)%")
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +80,7 @@ def _resolve_dir(
         return _anchored_to_home(override.expanduser())
     source_env = env if env is not None else os.environ
     if env_value := source_env.get(env_name):
-        return _anchored_to_home(_expand_override(env_value, env_name))
+        return _anchored_to_home(_expand_override(env_value, env_name, source_env))
     return _default_state_dir(source_env).joinpath(leaf).resolve()
 
 
@@ -104,24 +103,30 @@ def _default_state_dir(env: dict[str, str] | None = None) -> Path:
     source_env = env if env is not None else os.environ
     override = source_env.get(HOME_ENV, "")
     if override.strip():
-        return _ensure_state_root(_anchored_to_home(_expand_override(override.strip(), HOME_ENV)))
+        expanded = _expand_override(override.strip(), HOME_ENV, source_env)
+        return _ensure_state_root(_anchored_to_home(expanded))
     return _ensure_state_root((Path.home() / f".{APP_NAME}").resolve())
 
 
-def _expand_override(raw: str, variable: str) -> Path:
+def _expand_override(raw: str, variable: str, env: Mapping[str, str]) -> Path:
     """Expand ``~`` and environment references in the raw value of ``variable``.
 
-    An unset variable referenced in the value (``$FOO``, ``${FOO}``, ``%FOO%``)
-    is left literal by ``os.path.expandvars`` rather than raising, and a
-    variable that is set but empty silently expands to nothing — which, once
-    the caller falls back to anchoring a non-absolute result against the home
-    directory, would otherwise collapse the storage root onto bare ``$HOME``.
-    Per the storage-path-conventions, an override that does not resolve to a
-    usable directory is a startup error, never a silent fallback, so both
-    cases raise here instead of producing a path.
+    ``$FOO``, ``${FOO}`` and ``%FOO%`` are all expanded on every platform; the host's
+    ``os.path.expandvars`` leaves ``%FOO%`` literal on macOS. A reference to a
+    variable that is unset or empty does not resolve to the path the user meant, so
+    per the storage-path-conventions it is a startup error, never a fallback.
     """
-    expanded = os.path.expandvars(os.path.expanduser(raw))
-    if not expanded or _UNRESOLVED_ENV_REF.search(expanded):
+    unresolved = False
+
+    def value(match: re.Match[str]) -> str:
+        nonlocal unresolved
+        name = next(group for group in match.groups() if group is not None)
+        found = env.get(name, "")
+        unresolved = unresolved or not found
+        return found
+
+    expanded = _ENV_REF.sub(value, os.path.expanduser(raw))
+    if not expanded or unresolved:
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
             Message.of("error.homeUnusable", variable=variable),
