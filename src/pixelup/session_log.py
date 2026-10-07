@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from pixelup.config import resolve_state_dir
-from pixelup.formats import RECORDS_FORMAT_VERSION, check_sqlite_format, mark_sqlite_format
+from pixelup.formats import (
+    RECORDS_FORMAT_VERSION,
+    check_sqlite_format,
+    open_sqlite_store,
+    rollback_sqlite,
+)
 from pixelup.timestamps import to_utc_iso_ms, utc_stamp_ms
 
 LOGGER_NAME = "pixelup"
@@ -121,28 +126,7 @@ def _entry(record: logging.LogRecord) -> dict[str, Any]:
 
 
 def _open_records(database: Path) -> sqlite3.Connection:
-    database.parent.mkdir(parents=True, exist_ok=True)
-    # check_same_thread=False: job and download threads log too; logging.Handler
-    # holds its own lock around every emit, so the connection is never shared at
-    # once. The timeout bounds a write that waits on a second PixelUp instance.
-    connection = sqlite3.connect(
-        database, timeout=5.0, isolation_level=None, check_same_thread=False
-    )
-    try:
-        # Before anything writes: records without their marker or from a newer
-        # PixelUp are left exactly as they are, and lines go to the fallback file.
-        created = check_sqlite_format(connection, database, RECORDS_FORMAT_VERSION)
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = NORMAL")
-        # Stamped before the schema, so a second instance never sees tables
-        # without the marker.
-        if created:
-            mark_sqlite_format(connection, RECORDS_FORMAT_VERSION)
-        connection.executescript(_SCHEMA)
-    except BaseException:
-        connection.close()
-        raise
-    return connection
+    return open_sqlite_store(database, RECORDS_FORMAT_VERSION, _SCHEMA)
 
 
 class RecordsHandler(logging.Handler):
@@ -182,22 +166,39 @@ class RecordsHandler(logging.Handler):
         if self._connection is None:
             self._connection = _open_records(self._database)
         fields = {key: value for key, value in entry.items() if key not in _COLUMNS}
-        self._connection.execute(
-            "INSERT INTO logs (session, time, level, message, job_id, operation_id, fields)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                self.session,
-                entry["time"],
-                entry["level"],
-                entry["message"],
-                entry.get("job_id"),
-                entry.get("operation_id"),
-                _dumps(fields),
-            ),
-        )
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            check_sqlite_format(self._connection, self._database, RECORDS_FORMAT_VERSION)
+            self._connection.execute(
+                "INSERT INTO logs (session, time, level, message, job_id, operation_id, fields)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    self.session,
+                    entry["time"],
+                    entry["level"],
+                    entry["message"],
+                    entry.get("job_id"),
+                    entry.get("operation_id"),
+                    _dumps(fields),
+                ),
+            )
+            self._connection.commit()
+        except BaseException as exc:
+            rollback_sqlite(self._connection, exc)
+            raise
 
     def _fall_back(self, entry: dict[str, Any], exc: Exception) -> None:
-        line = _dumps({**entry, "session": self.session, "records_error": repr(exc)}) + "\n"
+        line = (
+            _dumps(
+                {
+                    **entry,
+                    "session": self.session,
+                    "records_error": repr(exc),
+                    "records_error_details": _error_object((type(exc), exc, exc.__traceback__)),
+                }
+            )
+            + "\n"
+        )
         # not recorded: the fallback file is append-mode, never the managed-text
         # atomic-write path (data-backup-conventions).
         try:

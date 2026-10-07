@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pixelup.formats import RECORDS_FORMAT_VERSION, check_sqlite_format
+from pixelup.formats import RECORDS_FORMAT_VERSION, check_sqlite_format, rollback_sqlite
 
 PAGE_SIZE = 100
 LOCK_TIMEOUT_SECONDS = 2.0
@@ -177,8 +177,19 @@ class RecordsReader:
 
     def _bounded[T](self, read: Callable[[sqlite3.Connection], T]) -> T:
         self._deadline = time.monotonic() + READ_TIMEOUT_SECONDS
+        connection = None
         try:
-            return read(self._open())
+            connection = self._open()
+            connection.execute("BEGIN")
+            check_sqlite_format(connection, self._database, RECORDS_FORMAT_VERSION)
+            result = read(connection)
+        except BaseException as exc:
+            if connection is not None:
+                rollback_sqlite(connection, exc)
+            raise
+        else:
+            connection.rollback()
+            return result
         finally:
             self._deadline = None
 

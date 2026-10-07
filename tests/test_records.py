@@ -328,3 +328,44 @@ def test_records_without_their_format_version_are_unreadable(database: Path) -> 
             reader.page(RecordsQuery(), None)
     finally:
         reader.close()
+
+
+@pytest.mark.parametrize("version", [0, -1, 2])
+def test_cached_reader_rechecks_marker_before_later_page(database: Path, version: int) -> None:
+    _seed(database, [{"time": OLD}])
+    reader = RecordsReader(database)
+    try:
+        assert reader.page(RecordsQuery(), None).records
+        with sqlite3.connect(database) as sibling:
+            sibling.execute(f"PRAGMA user_version = {version}")
+        with pytest.raises(NewerFormatError if version == 2 else ValueError):
+            reader.page(RecordsQuery(), None)
+    finally:
+        reader.close()
+
+
+def test_reader_primary_survives_failed_rollback_and_deadline_always_clears(
+    database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(database, [{"time": OLD}])
+    reader = RecordsReader(database)
+    connection = reader._open()
+    primary = sqlite3.OperationalError("primary read failure")
+
+    class FailingCleanup:
+        def execute(self, sql, *args):
+            return connection.execute(sql, *args)
+
+        def rollback(self):
+            connection.rollback()
+            raise sqlite3.OperationalError("cleanup rollback failure")
+
+    monkeypatch.setattr(reader, "_open", lambda: FailingCleanup())
+    try:
+        with pytest.raises(sqlite3.OperationalError) as raised:
+            reader._bounded(lambda _: (_ for _ in ()).throw(primary))
+        assert raised.value is primary
+        assert "cleanup rollback failure" in raised.value.__notes__[0]
+        assert reader._deadline is None
+    finally:
+        reader.close()

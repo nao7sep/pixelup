@@ -17,8 +17,8 @@ Two absolute musts drive every line below (they are not best-effort aspirations)
 - It never breaks a save and never crashes the app. The save has already
   succeeded — the file is on disk before :func:`record` is called — so any
   failure here (the DB is locked, the disk is full, an insert throws) is caught,
-  logged once at ``warn``, and swallowed. A lost record self-heals on the next
-  save of that file, whose content will differ from the last recorded row.
+  logged once at ``warn``, and swallowed. Recording then stays disabled for
+  this session.
 - It logs only failures. A successful record logs NOTHING; a line per save would
   flood the log.
 """
@@ -31,7 +31,7 @@ import threading
 from pathlib import Path
 
 from pixelup.config import resolve_state_dir
-from pixelup.formats import BACKUPS_FORMAT_VERSION, check_sqlite_format, mark_sqlite_format
+from pixelup.formats import BACKUPS_FORMAT_VERSION, check_sqlite_format, open_sqlite_store
 from pixelup.session_log import log
 from pixelup.timestamps import utc_now_iso_ms
 
@@ -55,7 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_backups_path_id ON backups (path, id);
 """
 
 # Module-level singleton, resolved once. A `None` connection means recording is
-# disabled for this session because the store could not be opened — a single warn
+# disabled for this session because opening or recording failed — a single warn
 # was already logged; every later `record` becomes a no-op rather than retrying
 # (and re-logging) a broken open on every save.
 _connection: sqlite3.Connection | None = None
@@ -91,28 +91,7 @@ def _ensure_open() -> sqlite3.Connection | None:
         # resolve_state_dir() already created the root; be defensive anyway in case
         # the store is the first thing written on a fresh root.
         file.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False: the record hook may fire from a worker thread
-        # (a job's save), and the connection is only ever touched from record(),
-        # which serializes its own access. WAL + busy_timeout handle cross-process.
-        opened = sqlite3.connect(file, check_same_thread=False)
-        try:
-            # busy_timeout: under the tolerated two-instance case, a contended write
-            # waits up to this long for SQLite's write lock instead of immediately
-            # failing with SQLITE_BUSY and dropping that record.
-            opened.execute("PRAGMA busy_timeout = 5000")
-            # Before anything writes: a store without its marker or from a newer
-            # PixelUp is left exactly as it is, and recording stays off for the session.
-            created = check_sqlite_format(opened, file, BACKUPS_FORMAT_VERSION)
-            opened.execute("PRAGMA journal_mode = WAL")
-            # Stamped before the schema, so a second instance never sees tables
-            # without the marker.
-            if created:
-                mark_sqlite_format(opened, BACKUPS_FORMAT_VERSION)
-            opened.executescript(_SCHEMA)
-            opened.commit()
-        except BaseException:
-            opened.close()
-            raise
+        opened = open_sqlite_store(file, BACKUPS_FORMAT_VERSION, _SCHEMA)
         _connection = opened
     except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable, never crash.
         log.warning(
@@ -144,6 +123,7 @@ def record(absolute_path: Path, data: bytes) -> None:
     ``warn`` (file + reason), and swallowed. It never raises, never crashes the
     app, and never breaks the save.
     """
+    global _connection
     path_text = str(absolute_path)
     with _record_gate:
         store = _ensure_open()
@@ -155,6 +135,7 @@ def record(absolute_path: Path, data: bytes) -> None:
             # Without one transaction around SELECT + INSERT, two instances can both
             # observe the same latest hash and append the same successor.
             store.execute("BEGIN IMMEDIATE")
+            check_sqlite_format(store, _store_file(), BACKUPS_FORMAT_VERSION)
             row = store.execute(
                 "SELECT content_sha256 FROM backups WHERE path = ? ORDER BY id DESC LIMIT 1",
                 (path_text,),
@@ -170,6 +151,11 @@ def record(absolute_path: Path, data: bytes) -> None:
             try:
                 store.rollback()
             except Exception:  # noqa: BLE001 - rollback is best-effort after a record failure.
+                pass
+            _connection = None
+            try:
+                store.close()
+            except Exception:
                 pass
             log.warning(
                 "backup_store.record_failed",

@@ -109,7 +109,7 @@ def test_content_blob_is_byte_identical_including_crlf_and_non_utf8(
     # A CR/LF line ending, a UTF-8 BOM, and a lone 0x80 byte that is NOT valid
     # UTF-8: the whole point of a BLOB is that none of these are normalized,
     # dropped, or corrupted the way a decoded-string round-trip would.
-    payload = b"\xef\xbb\xbf{\r\n  \"quality\": 95\r\n}\x80"
+    payload = b'\xef\xbb\xbf{\r\n  "quality": 95\r\n}\x80'
 
     record(target, payload)
 
@@ -143,9 +143,7 @@ def test_written_at_utc_is_serialized_iso_ms_not_the_filename_stamp(
     assert "-utc" not in written_at
 
 
-def test_dedup_skips_an_unchanged_re_save(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_dedup_skips_an_unchanged_re_save(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
     payload = b'{"quality": 95}\n'
@@ -156,9 +154,7 @@ def test_dedup_skips_an_unchanged_re_save(
     assert len(_rows(home, target)) == 1
 
 
-def test_a_changed_save_inserts_a_new_row(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_changed_save_inserts_a_new_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
 
@@ -180,9 +176,7 @@ def test_latest_check_and_insert_are_one_immediate_transaction(
     monkeypatch.setattr(
         sqlite3,
         "connect",
-        lambda *args, **kwargs: _RecordingConnection(
-            real_connect(*args, **kwargs), statements
-        ),
+        lambda *args, **kwargs: _RecordingConnection(real_connect(*args, **kwargs), statements),
     )
 
     record(home / "config.json", b"{}\n")
@@ -219,9 +213,7 @@ def test_concurrent_in_process_records_share_one_connection_safely(
     assert len(_rows(home, target)) == 1
 
 
-def test_a_revert_inserts_a_new_row(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_revert_inserts_a_new_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
     original = b'{"quality": 95}\n'
@@ -238,9 +230,7 @@ def test_a_revert_inserts_a_new_row(
     assert [bytes(r[1]) for r in rows] == [original, edited, original]
 
 
-def test_two_paths_dedup_independently(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_two_paths_dedup_independently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _home(tmp_path, monkeypatch)
     a = home / "config.json"
     b = home / "other.json"
@@ -372,3 +362,49 @@ def test_an_unmarked_or_newer_store_is_left_untouched_with_one_warn(
     assert [message for message, _fields in warns] == ["backup_store.open_failed"]
     assert store.read_bytes() == before
     assert not store.with_name(f"{STORE_FILE_NAME}-wal").exists()
+
+
+@pytest.mark.parametrize("version", [0, -1, 2])
+def test_cached_store_rechecks_marker_and_disables_recording_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: int
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    record(target, b"first")
+    with sqlite3.connect(_store_path(home)) as sibling:
+        sibling.execute(f"PRAGMA user_version = {version}")
+    warns: list[str] = []
+    monkeypatch.setattr(
+        "pixelup.backup_store.log.warning", lambda message, **_: warns.append(message)
+    )
+
+    record(target, b"second")
+    record(target, b"third")
+
+    assert warns == ["backup_store.record_failed"]
+    with sqlite3.connect(_store_path(home)) as reader:
+        assert reader.execute("SELECT content FROM backups").fetchall() == [(b"first",)]
+        assert reader.execute("PRAGMA user_version").fetchone()[0] == version
+
+
+def test_insert_failure_disables_later_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    real_connect = sqlite3.connect
+    attempts: list[str] = []
+
+    class FailingInsert(_FailInsertConnection):
+        def execute(self, sql: str, *rest: Any) -> Any:
+            if sql.lstrip().upper().startswith("INSERT"):
+                attempts.append(sql)
+            return super().execute(sql, *rest)
+
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *args, **kwargs: FailingInsert(real_connect(*args, **kwargs))
+    )
+    monkeypatch.setattr("pixelup.backup_store.log.warning", lambda *args, **kwargs: None)
+    record(home / "config.json", b"first")
+    record(home / "config.json", b"second")
+
+    assert len(attempts) == 1

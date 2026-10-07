@@ -69,3 +69,28 @@ def test_a_missing_or_unusable_format_version_resets_the_state(
     assert f"{FORMAT_VERSION_KEY}=1\n" in text
     assert "listWidth=400" in text
     assert "listWidth=320" not in text
+
+
+@pytest.mark.parametrize("initial", ["[General]\nformatVersion=1\n", "[state]\nold=1\n"])
+def test_save_rechecks_a_newer_file_after_construction(tmp_path: Path, initial: str) -> None:
+    path = tmp_path / "window.ini"
+    _ini(path, initial)
+    state = WindowState(path)
+    before = _ini(path, "[General]\nformatVersion=2\n\n[state]\nnew=kept\n")
+
+    state.save("state/old", "replacement")
+    del state
+
+    assert path.read_bytes() == before
+
+
+def test_loading_invalid_state_never_defers_a_destructive_flush(tmp_path: Path) -> None:
+    path = tmp_path / "window.ini"
+    _ini(path, "[state]\nold=1\n")
+    state = WindowState(path)
+    assert state.value("state/old") is None
+    before = _ini(path, "[General]\nformatVersion=2\n\n[state]\nnew=kept\n")
+
+    del state
+
+    assert path.read_bytes() == before

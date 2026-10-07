@@ -335,3 +335,51 @@ def test_unmarked_or_newer_records_are_left_untouched_and_lines_go_to_the_fallba
     lines = _read_jsonl(fallbacks[0])
     assert [line["message"] for line in lines] == ["log.session_started", "image.added"]
     assert reason in lines[-1]["records_error"]
+
+
+@pytest.mark.parametrize("version", [0, -1, 2])
+def test_cached_logger_rechecks_marker_before_insert(tmp_path: Path, version: int) -> None:
+    database = configure_session_logging()
+    with sqlite3.connect(database) as sibling:
+        sibling.execute(f"PRAGMA user_version = {version}")
+    before = _records(database)
+
+    log.info("after.external.upgrade", value="fallback")
+
+    assert _records(database) == before
+    lines = _read_jsonl(next((tmp_path / "logs").glob("*-utc.log")))
+    assert lines[-1]["message"] == "after.external.upgrade"
+    assert "records_error" in lines[-1]
+
+
+def test_insert_and_rollback_failure_falls_back_with_primary_and_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import logging
+
+    from pixelup.session_log import RecordsHandler, _open_records
+
+    database = tmp_path / "records.sqlite3"
+    connection = _open_records(database)
+
+    class FailingCleanup:
+        def execute(self, sql, *args):
+            if sql.startswith("INSERT"):
+                raise sqlite3.OperationalError("primary insert failure")
+            return connection.execute(sql, *args)
+
+        def rollback(self):
+            connection.rollback()
+            raise sqlite3.OperationalError("cleanup rollback failure")
+
+    handler = RecordsHandler(database, session="session", fallback=tmp_path / "fallback.log")
+    handler._connection = FailingCleanup()
+    try:
+        handler.emit(logging.LogRecord("pixelup", logging.INFO, "", 0, "entry", (), None))
+    finally:
+        handler._connection = None
+        connection.close()
+        handler.close()
+    line = _read_jsonl(tmp_path / "fallback.log")[0]
+    assert "primary insert failure" in line["records_error"]
+    assert "cleanup rollback failure" in line["records_error_details"]["traceback"]

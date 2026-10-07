@@ -37,6 +37,7 @@ class WindowState:
         self.path = path
         self._settings = QSettings(str(path), QSettings.Format.IniFormat)
         self._newer = False
+        self._usable = True
         if not path.exists():
             return
         stored = self._settings.value(FORMAT_VERSION_KEY)
@@ -46,7 +47,7 @@ class WindowState:
             version = format_version(_ini_integer(stored))
         except ValueError:
             log.warning("window.state_reset", path=str(path), reason="no usable formatVersion")
-            self._settings.clear()
+            self._usable = False
             return
         if version > WINDOW_STATE_FORMAT_VERSION:
             self._newer = True
@@ -54,7 +55,7 @@ class WindowState:
 
     def value(self, key: str) -> object | None:
         """The saved value, or ``None`` when there is none this build may use."""
-        if self._newer:
+        if self._newer or not self._usable:
             return None
         value = self._settings.value(key)
         if self._settings.status() != QSettings.Status.NoError:
@@ -65,11 +66,34 @@ class WindowState:
     def save(self, key: str, value: object) -> None:
         if self._newer:
             return
-        self._settings.setValue(FORMAT_VERSION_KEY, WINDOW_STATE_FORMAT_VERSION)
-        self._settings.setValue(key, value)
-        self._settings.sync()
-        if self._settings.status() != QSettings.Status.NoError:
+        settings = QSettings(str(self.path), QSettings.Format.IniFormat)
+        settings.sync()
+        if settings.status() != QSettings.Status.NoError:
             log.warning("window.state_save_failed", key=key)
+            return
+        reset = False
+        if self.path.exists():
+            try:
+                version = format_version(_ini_integer(settings.value(FORMAT_VERSION_KEY)))
+            except ValueError:
+                reset = True
+            else:
+                if version > WINDOW_STATE_FORMAT_VERSION:
+                    self._newer = True
+                    log.warning(
+                        "window.state_newer_format", path=str(self.path), format_version=version
+                    )
+                    return
+        if reset:
+            settings.clear()
+        settings.setValue(FORMAT_VERSION_KEY, WINDOW_STATE_FORMAT_VERSION)
+        settings.setValue(key, value)
+        settings.sync()
+        if settings.status() != QSettings.Status.NoError:
+            log.warning("window.state_save_failed", key=key)
+        else:
+            self._settings = settings
+            self._usable = True
 
 
 def _ini_integer(value: object) -> object:
