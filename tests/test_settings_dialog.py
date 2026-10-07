@@ -170,7 +170,9 @@ def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplica
     attempts: list[AppConfig] = []
     dialog = SettingsDialog(
         AppConfig(),
-        try_save=lambda candidate: attempts.append(candidate) or _FAILED,
+        try_save=lambda candidate, finished, waiting: finished(
+            attempts.append(candidate) or _FAILED
+        ),
     )
     try:
         dialog.font_family.setText("Menlo")
@@ -188,7 +190,9 @@ def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplica
 
 
 def test_failed_save_grows_dialog_instead_of_compressing_controls(qapp: QApplication) -> None:
-    dialog = SettingsDialog(AppConfig(), try_save=lambda _candidate: _FAILED)
+    dialog = SettingsDialog(
+        AppConfig(), try_save=lambda _candidate, finished, waiting: finished(_FAILED)
+    )
     try:
         dialog.show()
         qapp.processEvents()
@@ -209,7 +213,9 @@ def test_failed_save_grows_dialog_instead_of_compressing_controls(qapp: QApplica
 
 def test_successful_retry_accepts_after_an_inline_failure(qapp: QApplication) -> None:
     outcomes = iter((_FAILED, None))
-    dialog = SettingsDialog(AppConfig(), try_save=lambda _candidate: next(outcomes))
+    dialog = SettingsDialog(
+        AppConfig(), try_save=lambda _candidate, finished, waiting: finished(next(outcomes))
+    )
     try:
         dialog.concurrent.setValue(2)
         dialog.ok_button.click()
@@ -226,20 +232,20 @@ def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: P
     path = tmp_path / "config.json"
     initial = AppConfig()
 
-    def save(candidate: AppConfig) -> Message | None:
+    def save(candidate: AppConfig, finished, waiting) -> None:
         save_app_config_merged(candidate, initial, path)
-        return None
+        finished(None)
 
     dialog = SettingsDialog(initial, try_save=save)
     try:
         dialog.concurrent.setValue(4)
         dialog.ok_button.click()
         assert json.loads(path.read_text(encoding="utf-8")) == {
-            "format_version": 1, "max_concurrent_jobs": 4,
+            "format_version": 1,
+            "max_concurrent_jobs": 4,
         }
     finally:
         dialog.deleteLater()
-
 
 
 def test_footer_puts_cancel_before_ok_on_every_platform(qapp: QApplication) -> None:
@@ -344,3 +350,33 @@ def test_discard_confirmation_focuses_keep_editing_and_puts_discard_last(
         assert confirm.result() == int(QDialog.DialogCode.Rejected)
     finally:
         confirm.deleteLater()
+
+
+def test_async_save_owns_commit_and_late_success_keeps_a_newer_draft(qapp: QApplication) -> None:
+    callbacks = []
+
+    def save(candidate, finished, waiting):
+        callbacks.append((candidate, finished, waiting))
+
+    dialog = SettingsDialog(AppConfig(), try_save=save)
+    try:
+        dialog.font_family.setText("Menlo")
+        dialog.ok_button.click()
+        dialog._save()
+        assert len(callbacks) == 1
+        assert not dialog.ok_button.isEnabled()
+        assert not dialog.font_family.isEnabled()
+        callbacks[0][2]()
+        assert dialog.font_family.isEnabled()
+        dialog.font_family.setText("Arial")
+        callbacks[0][1](None)
+        assert dialog.result() == 0
+        assert dialog.font_family.text() == "Arial"
+        assert dialog.error_message.isHidden()
+        dialog.ok_button.click()
+        callbacks[0][1](None)
+        assert dialog.result() == 0
+        callbacks[1][1](None)
+        assert dialog.result() == QDialog.DialogCode.Accepted
+    finally:
+        dialog.deleteLater()

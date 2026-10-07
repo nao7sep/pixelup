@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import errno
 import os
-import shutil
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -23,6 +22,7 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
 from pixelup.nanoid import nanoid
+from pixelup.output_cleanup import open_output_handle, output_cleanup
 from pixelup.output_reservation import (
     PublishedFile,
     assert_output_bundle_available,
@@ -198,9 +198,11 @@ def save_output_image(
     save_kwargs = _save_kwargs(output_format, quality=quality, color=color, carried=carried)
     temp_path = _temp_output_path(output_path)
     try:
-        with temp_file_guard(temp_path):
-            encoded.save(temp_path, **save_kwargs)
-            _fsync_file(temp_path)
+        with temp_file_guard(temp_path) as (staged, final_mode):
+            encoded.save(staged, **save_kwargs)
+            staged.flush()
+            os.fsync(staged.fileno())
+            output_cleanup.check_open()
             # not recorded: this is the harvest-then-discard OUTPUT image, a binary
             # written for the user at a user-chosen location — not managed text the
             # app owns and reloads as state. Binaries are out of scope for the text
@@ -209,6 +211,8 @@ def save_output_image(
             # immediately before publication. The final path itself is still
             # claimed atomically below, so an exact-boundary winner is preserved.
             assert_output_bundle_available(output_path)
+            if os.name != "nt":
+                os.fchmod(staged.fileno(), final_mode)
             published = _publish_image_no_clobber(temp_path, output_path)
             try:
                 assert_output_bundle_claims_current(output_path, (published,))
@@ -232,6 +236,7 @@ def save_output_image(
 
 def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedFile:
     source = os.stat(temp_path)
+    output_cleanup.check_open()
     try:
         # A hard-link publish is atomic, no-clobber, and keeps the already-fsynced
         # staged bytes invisible at the final name until the single link operation.
@@ -254,29 +259,30 @@ def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedFi
     # an atomic O_EXCL path claim. Bytes are copied through the claimed descriptor,
     # so deleting/replacing the pathname cannot make PixelUp overwrite the winner.
     try:
-        descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        descriptor = open_output_handle(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     except FileExistsError as exc:
         raise _output_exists(output_path) from exc
     try:
+        output_cleanup.admit(descriptor, output_path, staging=False)
         with (
-            temp_path.open("rb") as source_file,
+            os.fdopen(open_output_handle(temp_path, os.O_RDONLY), "rb") as source_file,
             os.fdopen(descriptor, "wb", closefd=False) as output_file,
         ):
-            shutil.copyfileobj(source_file, output_file)
+            _copy_staged(source_file, output_file)
             output_file.flush()
             os.fsync(output_file.fileno())
     except Exception:
         remove_published_file(close_published_file(output_path, descriptor))
         raise
+    finally:
+        output_cleanup.release(descriptor)
     return close_published_file(output_path, descriptor)
 
 
-def _fsync_file(path: Path) -> None:
-    # Windows maps fsync to _commit, which rejects a read-only descriptor even
-    # though Unix accepts one. The staged file is ours and already complete, so
-    # reopen it read/write solely for the cross-platform durability boundary.
-    with path.open("r+b") as file:
-        os.fsync(file.fileno())
+def _copy_staged(source_file: Any, output_file: Any) -> None:
+    while chunk := source_file.read(1024 * 1024):
+        output_cleanup.check_open()
+        output_file.write(chunk)
 
 
 def _output_exists(output_path: Path) -> PixelupError:
@@ -311,9 +317,7 @@ def _plan_color(
     converted_to = None
     if source_metadata.decoded_to_srgb:
         converted_to = OutputColor("srgb", _profile_description(source_profile))
-    return _ColorPlan(
-        source_profile, source_profile, embed_profile=True, converted_to=converted_to
-    )
+    return _ColorPlan(source_profile, source_profile, embed_profile=True, converted_to=converted_to)
 
 
 def _prepare_image_for_save(
@@ -431,11 +435,37 @@ def _temp_output_path(output_path: Path) -> Path:
 
 
 @contextmanager
-def temp_file_guard(path: Path) -> Iterator[None]:
+def temp_file_guard(path: Path) -> Iterator[tuple[Any, int]]:
+    output_cleanup.check_open()
+    descriptor = open_output_handle(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    primary: BaseException | None = None
     try:
-        yield
+        output_cleanup.admit(descriptor, path, staging=True)
+        # Capture ordinary creation's umask-filtered mode before keeping staged
+        # image bytes private; hardlink publication later restores this exact mode.
+        final_mode = os.fstat(descriptor).st_mode & 0o777
+        if os.name != "nt":
+            os.fchmod(descriptor, final_mode & 0o600)
+        with os.fdopen(descriptor, "wb", closefd=False) as staged:
+            yield staged, final_mode
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
-        path.unlink(missing_ok=True)
+        output_cleanup.release(descriptor)
+        cleanup_error: BaseException | None = None
+        for cleanup in (lambda: os.close(descriptor), lambda: path.unlink(missing_ok=True)):
+            try:
+                cleanup()
+            except OSError as exc:
+                if primary is not None:
+                    primary.add_note(f"Output staging cleanup failed: {exc!r}")
+                elif cleanup_error is None:
+                    cleanup_error = exc
+                else:
+                    cleanup_error.add_note(f"Output staging cleanup failed: {exc!r}")
+        if primary is None and cleanup_error is not None:
+            raise cleanup_error
 
 
 def _source_profile_bytes(source_metadata: SourceMetadata) -> bytes:

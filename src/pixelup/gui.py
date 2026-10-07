@@ -71,6 +71,7 @@ from pixelup.app_config import (
     save_app_config_merged,
 )
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
+from pixelup.config_save import ConfigSave, ConfigSaveOutcome
 from pixelup.devices import DEVICE_CHOICES
 from pixelup.errors import PixelupError, user_text
 from pixelup.fonts import apply_ui_font
@@ -94,6 +95,7 @@ from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.message_dialogs import (
     show_startup_failure,
     warn_config_newer,
+    warn_config_recovered_save,
     warn_config_reset,
     warn_jobs_stopping,
 )
@@ -102,6 +104,7 @@ from pixelup.model_management import (
     required_artifact_names,
 )
 from pixelup.model_manager import ModelManager
+from pixelup.output_cleanup import output_cleanup
 from pixelup.parameters import (
     ALPHA_MODE_CHOICES,
     DEFAULT_SCALE,
@@ -175,7 +178,6 @@ def _start_quit_watchdog(seconds: float, expire: Callable[[], None]) -> None:
 def _exit_now() -> None:
     """End the process at once. A worker thread still running cannot be joined, and
     an ordinary exit with one alive aborts."""
-    logging.shutdown()
     os._exit(0)
 
 
@@ -362,6 +364,12 @@ class MainWindow(QMainWindow):
         # parent.
         load_result = load_app_config_result()
         self.config = load_result.config
+        self._config_save: ConfigSave | None = None
+        self._config_save_callback: Callable[[Message | None], None] | None = None
+        self._config_save_failure: Message | None = None
+        self._config_save_pending: Callable[[], None] | None = None
+        self._parameter_edit_generation = 0
+        self._saving_parameter_generation = 0
         self._config_quarantined_to = load_result.quarantined_to
         self._config_newer_format = load_result.newer_format
         # Apply the configured UI font (family-only; the explicit size lives in
@@ -399,6 +407,11 @@ class MainWindow(QMainWindow):
         self.runner.progress.connect(self._job_progress)
         self.runner.finished.connect(self._job_finished)
         self.runner.idle.connect(self._close_when_workers_stop)
+        output_cleanup.finished.connect(self._close_when_workers_stop)
+        self._closing = False
+        self._quit_ready = False
+        self._quit_dialog = None
+        self._os_close_accepted = False
         self._quit_when_workers_idle = False
         self._quit_bounded = False
         self._session_shutdown = False
@@ -509,6 +522,18 @@ class MainWindow(QMainWindow):
         # Asked again for every quit on macOS, the user's own included, so each
         # request decides afresh (see session_end).
         self._session_shutdown = os_session_ending()
+        if self._session_shutdown and self._closing:
+            self._bound_quit()
+            self._dismiss_session_question()
+            self._quit_ready = True
+            QTimer.singleShot(0, self.close)
+
+    def _dismiss_session_question(self) -> None:
+        if self._quit_dialog is not None:
+            self._quit_dialog.reject()
+        modal = QApplication.activeModalWidget()
+        if isinstance(modal, QDialog) and self.isAncestorOf(modal):
+            modal.reject()
 
     def event(self, event: QEvent) -> bool:
         if event.type() == QEvent.Type.WindowActivate:
@@ -546,67 +571,87 @@ class MainWindow(QMainWindow):
 
     def _is_session_shutdown(self) -> bool:
         app = QGuiApplication.instance()
-        return self._session_shutdown or (app is not None and app.isSavingSession())
+        if sys.platform == "darwin":
+            # Cocoa also starts Qt session handling for ordinary Cmd+Q.
+            return self._session_shutdown
+        return app is not None and app.isSavingSession()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # Every quit arrives here: the menu's Quit, Cmd+Q, the Dock's Quit, closing
-        # the window, and the OS ending the session (unsaved-edits-conventions,
-        # Quitting).
-        if self._quit_when_workers_idle:
-            if self._workers_clean_for_quit():
-                self._accept_close(event)
-            else:
-                event.ignore()
-            return
-
         if self._is_session_shutdown():
-            # Nothing asks: the bound starts before the save, the save's failure is
-            # only logged, and the quit is never refused, since refusing it cancels
-            # a macOS logout.
+            self._closing = True
+            self._quit_ready = True
             self._bound_quit()
+            self._dismiss_session_question()
             log.info("quit.session_shutdown")
-            self._flush_parameters_save(surface_failure=False)
+            if self._config_save is None:
+                self._flush_parameters_save(surface_failure=False)
             self._finish_or_defer_close(event, session_shutdown=True)
             return
-
-        # Land any edit still inside the debounce window before the app can go away.
-        if not self._save_parameters_for_quit():
-            log.info("quit.cancelled")
-            event.ignore()
+        if self._quit_when_workers_idle or self._quit_ready:
+            self._finish_or_defer_close(event, session_shutdown=False)
             return
+        event.ignore()
+        if self._closing:
+            return
+        self._closing = True
+        self._flush_parameters_save(
+            finished=self._user_quit_save_finished,
+            waiting=lambda: self._user_quit_save_finished(False),
+        )
+        if self._quit_ready:
+            self._finish_or_defer_close(event, session_shutdown=False)
+
+    def _user_quit_save_finished(self, saved: bool) -> None:
+        if self._quit_ready or not self._closing:
+            return
+        if self._is_session_shutdown():
+            self._quit_ready = True
+            self.close()
+            return
+        if not saved:
+            dialog = QuitSaveFailedDialog(self)
+            self._quit_dialog = dialog
+            choice = dialog.choose()
+            self._quit_dialog = None
+            if self._is_session_shutdown():
+                self._quit_ready = True
+                self.close()
+                return
+            if choice == "cancel":
+                self._closing = False
+                log.info("quit.cancelled")
+                return
+            if choice == "retry":
+                self._flush_parameters_save(
+                    finished=self._user_quit_save_finished,
+                    waiting=lambda: self._user_quit_save_finished(False),
+                )
+                return
+            log.warning(
+                "quit.parameters_unsaved",
+                values=job_settings_log_payload(self.current_job_settings()),
+            )
         if self._images_by_path:
             active = sum(
                 1 for job in self.jobs if job.status in {"pending", "running", "cancelling"}
             )
-            if QuitConfirmDialog(active, self).exec() != QDialog.DialogCode.Accepted:
+            dialog = QuitConfirmDialog(active, self)
+            self._quit_dialog = dialog
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            self._quit_dialog = None
+            if not accepted and not self._is_session_shutdown():
+                self._closing = False
                 log.info("quit.cancelled")
-                event.ignore()
                 return
             log.info("quit.confirmed", active_jobs=active)
-        self._finish_or_defer_close(event, session_shutdown=False)
-
-    def _save_parameters_for_quit(self) -> bool:
-        """Save the panel for a quit the user started; whether the quit goes on.
-
-        A failed save holds the quit and asks: Retry tries again, Quit anyway goes
-        on without the edits, and Cancel keeps PixelUp open with them still shown.
-        """
-        while not self._flush_parameters_save():
-            choice = QuitSaveFailedDialog(self).choose()
-            if choice == "cancel":
-                return False
-            if choice == "quit_anyway":
-                log.warning(
-                    "quit.parameters_unsaved",
-                    values=job_settings_log_payload(self.current_job_settings()),
-                )
-                return True
-        return True
+        self._quit_ready = True
+        QTimer.singleShot(0, self.close)
 
     def _finish_or_defer_close(self, event: QCloseEvent, *, session_shutdown: bool) -> None:
         self._bound_quit()
         self.runner.begin_shutdown()
         self.model_manager.begin_shutdown()
+        output_cleanup.begin_shutdown()
         if self._records_window is not None:
             self._records_window.close()
         if self._workers_clean_for_quit():
@@ -614,10 +659,15 @@ class MainWindow(QMainWindow):
             return
         event.ignore()
         if session_shutdown:
-            self._force_exit()
+            # Accept the OS close while the process retains its owners until settlement
+            # or the one hard deadline. Hiding the last window must not destroy workers.
+            QApplication.instance().setQuitOnLastWindowClosed(False)
+            self._os_close_accepted = True
+            self._accept_close(event)
             return
-        self._quit_when_workers_idle = True
-        warn_jobs_stopping(self)
+        if not self._quit_when_workers_idle:
+            self._quit_when_workers_idle = True
+            warn_jobs_stopping(self)
 
     def _bound_quit(self) -> None:
         """Start the quit's one bound, once; past it PixelUp exits regardless."""
@@ -627,11 +677,15 @@ class MainWindow(QMainWindow):
         _start_quit_watchdog(QUIT_BUDGET_S, self._force_exit)
 
     def _force_exit(self) -> None:
-        """Log the work still running, then end the process.
+        # Diagnostics may wait on a handler or volume; they cannot own the hard exit.
+        try:
+            threading.Thread(
+                target=self._log_forced_exit, name="pixelup-quit-log", daemon=True
+            ).start()
+        finally:
+            _exit_now()
 
-        Runs on the watchdog's thread when the bound expires, so what it reads may be
-        changing under it; the exit happens whatever the reading does.
-        """
+    def _log_forced_exit(self) -> None:
         try:
             log.warning(
                 "quit.forced_exit",
@@ -646,18 +700,21 @@ class MainWindow(QMainWindow):
                     for operation in list(self.model_manager.in_progress_operations)
                 ],
             )
-        except Exception:  # noqa: BLE001 - the exit must happen whatever the log does.
-            log.exception("quit.forced_exit_log_failed")
-        finally:
-            _exit_now()
+        except Exception:
+            # Forced exit is already under way; another diagnostic sink could stall too.
+            pass
 
     def _close_when_workers_stop(self) -> None:
-        if self._quit_when_workers_idle and self._workers_clean_for_quit():
+        if self._os_close_accepted and self._workers_clean_for_quit():
+            QApplication.instance().quit()
+        elif self._quit_when_workers_idle and self._workers_clean_for_quit():
             QTimer.singleShot(0, self.close)
 
     def _workers_clean_for_quit(self) -> bool:
         return (
-            self.runner.cleanup_for_quit()
+            self._config_save is None
+            and output_cleanup.settled
+            and self.runner.cleanup_for_quit()
             and self.model_manager.cleanup_for_quit()
             and (self._records_reads is None or self._records_reads.stop())
         )
@@ -1029,10 +1086,10 @@ class MainWindow(QMainWindow):
         self.queue_all_selected_models_button = localize(
             QPushButton(), text="actions.queueAllSelectedModels"
         )
-        self.queue_all_selected_models_button.clicked.connect(self._queue_all_images_selected_models)
-        self.queue_all_all_models_button = localize(
-            QPushButton(), text="actions.queueAllAllModels"
+        self.queue_all_selected_models_button.clicked.connect(
+            self._queue_all_images_selected_models
         )
+        self.queue_all_all_models_button = localize(QPushButton(), text="actions.queueAllAllModels")
         self.queue_all_all_models_button.clicked.connect(self._queue_all_images_all_models)
         self.retry_button = localize(QPushButton(), text="actions.retryFailed")
         self.retry_button.clicked.connect(self._retry_failed)
@@ -1168,9 +1225,7 @@ class MainWindow(QMainWindow):
         handle = self.windowHandle()
         if handle is not None:
             margins = handle.frameMargins()
-            available -= QSize(
-                margins.left() + margins.right(), margins.top() + margins.bottom()
-            )
+            available -= QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
         return available.expandedTo(QSize(1, 1))
 
     def _open_dialog(self) -> None:
@@ -1190,15 +1245,18 @@ class MainWindow(QMainWindow):
         # Land any pending panel edit first, so the config the dialog opens on — and
         # carries the unshown settings through from — is the current one. Otherwise a
         # debounce firing behind the modal would be undone on OK.
-        if not self._flush_parameters_save():
+        self._flush_parameters_save(finished=self._open_settings_after_save)
+
+    def _open_settings_after_save(self, saved: bool) -> None:
+        if not saved or self._quit_bounded:
             return
         log.info("settings.dialog_opened")
         previous_config = self.config
         dialog = SettingsDialog(
             self.config,
             self,
-            try_save=lambda candidate: self._save_config_candidate(
-                candidate, Message("settings.saveFailed")
+            try_save=lambda candidate, finished, waiting: self._save_config_candidate(
+                candidate, Message("settings.saveFailed"), finished, waiting
             ),
             session_shutdown=self._is_session_shutdown,
         )
@@ -1257,11 +1315,8 @@ class MainWindow(QMainWindow):
     def _models_dialog_finished(self, dialog: ManagedModelsDialog) -> None:
         if self._active_models_dialog is dialog:
             self._active_models_dialog = None
-        if (
-            self._pending_model_work is not None
-            and not self.model_manager.in_progress_for(
-                self._pending_model_work.required_artifacts
-            )
+        if self._pending_model_work is not None and not self.model_manager.in_progress_for(
+            self._pending_model_work.required_artifacts
         ):
             log.info("models.pending_work_abandoned")
             self._pending_model_work = None
@@ -1310,14 +1365,8 @@ class MainWindow(QMainWindow):
         missing = ready < total
         if self.model_manager.in_progress_operations:
             completed, operation_total = self.model_manager.aggregate_progress()
-            progress = (
-                0
-                if operation_total <= 0
-                else min(100, completed * 100 // operation_total)
-            )
-            self._show_model_status(
-                Message.of("models.installing", progress=progress), severity=""
-            )
+            progress = 0 if operation_total <= 0 else min(100, completed * 100 // operation_total)
+            self._show_model_status(Message.of("models.installing", progress=progress), severity="")
             localize(
                 self.manage_models_button,
                 accessible_name=Message.of("models.installingAccessible", progress=progress),
@@ -1418,8 +1467,7 @@ class MainWindow(QMainWindow):
     def _update_selected_image(self) -> None:
         path = self._selected_path()
         if self._remove_result_path is not None and (
-            path != self._remove_result_path
-            or not self._has_active_jobs(self._remove_result_path)
+            path != self._remove_result_path or not self._has_active_jobs(self._remove_result_path)
         ):
             self._remove_result_path = None
             self.remove_result.clear_result()
@@ -1507,6 +1555,7 @@ class MainWindow(QMainWindow):
         self._update_reset_button()
 
     def _parameters_edited(self) -> None:
+        self._parameter_edit_generation += 1
         self._parameters_save_timer.start()
         self._update_reset_button()
 
@@ -1514,58 +1563,125 @@ class MainWindow(QMainWindow):
         """Reset is off while the panel already holds the built-in parameters."""
         self.reset_parameters_button.setEnabled(self.current_job_settings() != JobSettings())
 
-    def _flush_parameters_save(self, *, surface_failure: bool = True) -> bool:
-        """Save any pending panel edit now, cancelling the debounce."""
+    def _flush_parameters_save(
+        self,
+        *,
+        surface_failure: bool = True,
+        finished: Callable[[bool], None] | None = None,
+        waiting: Callable[[], None] | None = None,
+    ) -> None:
         self._parameters_save_timer.stop()
-        return self._save_parameters(surface_failure=surface_failure)
+        self._save_parameters(surface_failure=surface_failure, finished=finished, waiting=waiting)
 
-    def _save_parameters(self, *, surface_failure: bool = True) -> bool:
-        """Persist the Parameters panel as the user has it.
-
-        The panel is durable user intent, so it lives in config.json like every other
-        preference. This never touches an already-queued job: a job snapshots the panel
-        through current_job_settings() at the moment it is created (see _enqueue_jobs),
-        and holds its own frozen JobSettings from then on. Saving is a no-op when the
-        panel already matches the saved config, which is what makes it safe to call from
-        the startup apply, from close, and from the settings dialog.
-        """
+    def _save_parameters(
+        self,
+        *,
+        surface_failure: bool = True,
+        finished: Callable[[bool], None] | None = None,
+        waiting: Callable[[], None] | None = None,
+    ) -> None:
         parameters = self.current_job_settings()
-        if parameters == self.config.parameters:
+        if parameters == self.config.parameters and self._config_save is None:
             self.parameters_result.clear_result()
-            return True
-        candidate = replace(self.config, parameters=parameters)
-        failure = self._save_config_candidate(candidate, Message("parameters.saveFailed"))
-        if failure is not None:
-            if surface_failure:
-                self.parameters_result.show_result(failure, severity="error")
-            return False
-        log.info(
-            "parameters.saved",
-            path=str(config_path()),
-            values=job_settings_log_payload(parameters),
-        )
-        self.parameters_result.clear_result()
-        return True
+            if finished is not None:
+                finished(True)
+            return
 
-    def _save_config_candidate(self, candidate: AppConfig, failed: Message) -> Message | None:
-        """Save ``candidate``; ``None`` once saved, else what its surface shows, which
-        is ``failed`` unless the failure says more itself."""
-        try:
-            # previous=self.config: only the fields this candidate actually changed
-            # from it are applied, so a sibling PixelUp window's own saved change to
-            # some other field is never clobbered (PU-3).
-            merged = save_app_config_merged(candidate, self.config)
-        except Exception as exc:  # noqa: BLE001 - persistence failure must remain in the UI.
-            log.warning(
-                "config.save_failed",
-                path=str(config_path()),
-                reason=str(exc),
+        def saved(failure: Message | None) -> None:
+            if failure is not None:
+                if surface_failure:
+                    self.parameters_result.show_result(failure, severity="error")
+            else:
+                log.info(
+                    "parameters.saved",
+                    path=str(config_path()),
+                    values=job_settings_log_payload(parameters),
+                )
+                self.parameters_result.clear_result()
+            if finished is not None:
+                if failure is None and self.current_job_settings() != self.config.parameters:
+                    # Quit and Settings opening need the visible panel's latest basis,
+                    # rather than authorizing from an older save's successful result.
+                    self._flush_parameters_save(
+                        surface_failure=surface_failure, finished=finished, waiting=waiting
+                    )
+                else:
+                    finished(failure is None)
+
+        def pending() -> None:
+            if surface_failure:
+                self.parameters_result.show_result(
+                    Message("notice.configSaving"), severity="warning"
+                )
+            if waiting is not None:
+                waiting()
+
+        self._save_config_candidate(
+            replace(self.config, parameters=parameters),
+            Message("parameters.saveFailed"),
+            saved,
+            pending,
+        )
+
+    def _save_config_candidate(
+        self,
+        candidate: AppConfig,
+        failed: Message,
+        finished: Callable[[Message | None], None],
+        waiting: Callable[[], None] | None = None,
+    ) -> None:
+        if self._config_save is not None:
+            finished(Message("notice.configSaving"))
+            return
+        operation = ConfigSave(candidate, self.config, save_app_config_merged)
+        self._config_save = operation
+        self._config_save_callback = finished
+        self._config_save_pending = waiting
+        self._config_save_failure = failed
+        self._saving_parameter_generation = self._parameter_edit_generation
+        operation.completed.connect(self._config_saved)
+        operation.timed_out.connect(self._config_save_timed_out)
+        operation.start()
+
+    @Slot()
+    def _config_save_timed_out(self) -> None:
+        pending = self._config_save_pending
+        self._config_save_pending = None
+        if pending is not None:
+            pending()
+
+    @Slot(object)
+    def _config_saved(self, outcome: ConfigSaveOutcome) -> None:
+        operation = self._config_save
+        if operation is None:
+            return
+        callback = self._config_save_callback
+        failed = self._config_save_failure
+        self._config_save = None
+        self._config_save_callback = None
+        self._config_save_pending = None
+        failure = None
+        if outcome.error is not None:
+            exc = outcome.error
+            log.warning("config.save_failed", path=str(config_path()), reason=str(exc))
+            failure = (
+                user_text(exc, internal_fallback=failed)
+                if isinstance(exc, PixelupError)
+                else failed
             )
-            if isinstance(exc, PixelupError):
-                return user_text(exc, internal_fallback=failed)
-            return failed
-        self.config = merged
-        return None
+        elif self.config == operation.previous:
+            self.config = outcome.result.config
+            if outcome.result.quarantined_to is not None and not self._quit_bounded:
+                recovered_path = outcome.result.quarantined_to
+                QTimer.singleShot(0, lambda: warn_config_recovered_save(self, recovered_path))
+        if self._parameter_edit_generation != self._saving_parameter_generation:
+            self._parameters_save_timer.start()
+        elif callback is None and failure is None:
+            self.parameters_result.clear_result()
+        if callback is not None:
+            callback(failure)
+        operation.deleteLater()
+        self._close_when_workers_stop()
 
     def _reset_parameters_to_defaults(self) -> None:
         """Restore the panel to PixelUp's built-in parameters and save it like any edit.
@@ -1838,9 +1954,8 @@ class MainWindow(QMainWindow):
         has_images = bool(self._image_order)
         has_selected_image = self._selected_path() is not None
         has_selected_models = bool(self._selected_models())
-        if (
-            (self._queue_action_issue == "images" and has_selected_image)
-            or (self._queue_action_issue == "models" and has_selected_models)
+        if (self._queue_action_issue == "images" and has_selected_image) or (
+            self._queue_action_issue == "models" and has_selected_models
         ):
             self._queue_action_issue = None
             self.queue_action_result.clear_result()
@@ -2066,7 +2181,10 @@ def main() -> int:
             detail, hint = Message("startup.storageUnreadable"), None
         show_startup_failure(detail, hint)
         return 1
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        logging.shutdown()
 
 
 if __name__ == "__main__":

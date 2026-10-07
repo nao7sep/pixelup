@@ -87,9 +87,7 @@ def test_startup_failure_caps_only_the_body_for_long_copy(
         assert dialog.buttons.isVisibleTo(dialog)
 
         outer = dialog.layout()
-        assert outer.indexOf(dialog.buttons.parentWidget()) > outer.indexOf(
-            dialog.body_scroll
-        )
+        assert outer.indexOf(dialog.buttons.parentWidget()) > outer.indexOf(dialog.body_scroll)
 
         # And the remedy for a body this long is the scroll bar, not an edge to
         # drag: the surface is fixed, so nothing is left hanging on the user
@@ -97,4 +95,17 @@ def test_startup_failure_caps_only_the_body_for_long_copy(
         assert dialog.minimumSize() == dialog.maximumSize() == dialog.size()
     finally:
         dialog.close()
+        dialog.deleteLater()
+
+
+def test_recovery_path_is_always_plain_text(qapp: QApplication) -> None:
+    from pixelup.i18n.message import Message
+
+    path = "<b>settings & capture</b>.invalid"
+    dialog = MessageDialog("app.name", Message.of("notice.configRecoveredOnSave", path=path))
+    try:
+        assert dialog.message_label.textFormat() == Qt.TextFormat.PlainText
+        assert path in dialog.message_label.text()
+        assert dialog.hint_label.textFormat() == Qt.TextFormat.PlainText
+    finally:
         dialog.deleteLater()

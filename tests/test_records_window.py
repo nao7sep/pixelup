@@ -672,7 +672,7 @@ def test_closing_the_main_window_closes_the_records_window_and_ends_its_reads(
     main._open_records_window()
     records = main._records_window
     reads = main._records_reads
-    main._session_shutdown = True
+    main._is_session_shutdown = lambda: True
 
     assert main.close() is True
 

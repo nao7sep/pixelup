@@ -98,7 +98,7 @@ def test_obsolete_auto_download_key_is_ignored(tmp_path: Path) -> None:
 
 def test_unchanged_defaults_write_no_file(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    assert save_app_config_merged(AppConfig(), AppConfig(), path) == AppConfig()
+    assert save_app_config_merged(AppConfig(), AppConfig(), path).config == AppConfig()
     assert not path.exists()
 
 
@@ -146,7 +146,9 @@ def test_next_edit_drops_unknown_keys_and_writes_the_format_version(tmp_path: Pa
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, max_concurrent_jobs=3), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1, "language": "ja", "max_concurrent_jobs": 3,
+        "format_version": 1,
+        "language": "ja",
+        "max_concurrent_jobs": 3,
     }
 
 
@@ -154,7 +156,9 @@ def test_saving_a_set_equal_to_its_built_in_deletes_only_that_set(tmp_path: Path
     path = tmp_path / "config.json"
     previous = AppConfig(language="ja", parameters=JobSettings(quality=55))
     save_app_config_merged(previous, AppConfig(), path)
-    reset = save_app_config_merged(replace(previous, parameters=JobSettings()), previous, path)
+    reset = save_app_config_merged(
+        replace(previous, parameters=JobSettings()), previous, path
+    ).config
     assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
     assert reset == AppConfig(language="ja")
 
@@ -185,7 +189,9 @@ def test_any_save_drops_a_set_that_failed_its_check(tmp_path: Path) -> None:
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, font_family="Menlo"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1, "font_family": "Menlo", "language": "ja",
+        "format_version": 1,
+        "font_family": "Menlo",
+        "language": "ja",
     }
 
 
@@ -303,9 +309,7 @@ def test_a_config_without_a_format_version_is_quarantined(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("marker", ['"1"', "0", "-1", "1.5", "true", "null"])
-def test_a_format_version_that_is_not_a_version_is_quarantined(
-    tmp_path: Path, marker: str
-) -> None:
+def test_a_format_version_that_is_not_a_version_is_quarantined(tmp_path: Path, marker: str) -> None:
     path = tmp_path / "config.json"
     text = f'{{"format_version": {marker}, "language": "ja"}}'
     path.write_text(text, encoding="utf-8")
@@ -326,7 +330,7 @@ def test_a_newer_config_is_left_in_place_and_reads_as_built_ins(tmp_path: Path) 
     assert result.newer_format == 2
     assert result.quarantined_to is None
     assert path.read_text(encoding="utf-8") == text
-    assert [item.name for item in tmp_path.iterdir()] == ["config.json"]
+    assert {item.name for item in tmp_path.iterdir()} == {"config.json", "config.json.lock"}
 
 
 def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path) -> None:
@@ -390,7 +394,7 @@ def test_corrupt_config_lets_window_open(
         QApplication.processEvents()
         assert notices == [window._config_quarantined_to]
     finally:
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
         window.deleteLater()
         QApplication.processEvents()
@@ -420,7 +424,7 @@ def _write(path: Path, **parameters: object) -> None:
 
 
 def test_a_newer_config_lets_the_window_open_and_is_never_written(
-    qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
 ) -> None:
     from PySide6.QtWidgets import QApplication
 
@@ -436,9 +440,7 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
 
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
     notices: list[str] = []
-    monkeypatch.setattr(
-        "pixelup.gui.warn_config_newer", lambda _parent, path: notices.append(path)
-    )
+    monkeypatch.setattr("pixelup.gui.warn_config_newer", lambda _parent, path: notices.append(path))
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset", lambda _parent, path: notices.append("reset")
     )
@@ -452,11 +454,14 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
         assert notices == [home / "config.json"]
 
         window.quality.setValue(window.quality.value() - 1)
-        assert window._flush_parameters_save() is False
+        saved = []
+        window._flush_parameters_save(finished=saved.append)
+        process_until(lambda: window._config_save is None, timeout_s=5, what="settings save")
+        assert saved == [False]
         assert window.parameters_result.message == Message("error.configNewer")
         assert (home / "config.json").read_text(encoding="utf-8") == text
     finally:
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
         window.deleteLater()
 
@@ -647,7 +652,7 @@ def test_save_app_config_merged_keeps_a_sibling_windows_untouched_field(
     save_app_config_merged(replace(opened, max_concurrent_jobs=4), AppConfig(), path)  # window A
 
     b_candidate = replace(opened, parameters=JobSettings(quality=42))  # window B
-    merged = save_app_config_merged(b_candidate, opened, path)
+    merged = save_app_config_merged(b_candidate, opened, path).config
 
     assert merged.max_concurrent_jobs == 4
     assert merged.parameters.quality == 42
@@ -662,7 +667,7 @@ def test_save_app_config_merged_is_a_no_op_when_candidate_matches_previous(
     save_app_config_merged(opened, AppConfig(), path)
     written_at = path.stat().st_mtime_ns
 
-    merged = save_app_config_merged(opened, opened, path)
+    merged = save_app_config_merged(opened, opened, path).config
 
     assert merged == opened
     assert path.stat().st_mtime_ns == written_at
@@ -698,13 +703,11 @@ def test_save_app_config_merged_serializes_two_concurrent_savers(tmp_path: Path)
     def save(candidate: AppConfig) -> None:
         try:
             ready.wait(timeout=2)
-            results.append(save_app_config_merged(candidate, opened, path))
+            results.append(save_app_config_merged(candidate, opened, path).config)
         except Exception as exc:  # noqa: BLE001 - surfaced via `errors` for the assertion.
             errors.append(exc)
 
-    thread_a = threading.Thread(
-        target=save, args=(replace(opened, max_concurrent_jobs=5),)
-    )
+    thread_a = threading.Thread(target=save, args=(replace(opened, max_concurrent_jobs=5),))
     thread_b = threading.Thread(
         target=save, args=(replace(opened, parameters=JobSettings(quality=17)),)
     )
@@ -734,7 +737,8 @@ def test_config_log_payload_shape() -> None:
 
 
 def test_partial_parameters_read_as_the_built_in_with_a_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     path = tmp_path / "config.json"
     path.write_text(
@@ -757,5 +761,85 @@ def test_edit_writes_the_untouched_user_set_whole_from_memory(tmp_path: Path) ->
     previous = load_app_config(path)
     save_app_config_merged(replace(previous, language="ja"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1, "parameters": _parameter_map(quality=42), "language": "ja",
+        "format_version": 1,
+        "parameters": _parameter_map(quality=42),
+        "language": "ja",
     }
+
+
+def test_successful_save_reports_recovery_and_preserves_the_saved_edit(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    previous = AppConfig(font_family="Menlo", parameters=JobSettings(quality=55))
+    original = b"{invalid"
+    path.write_bytes(original)
+
+    result = save_app_config_merged(
+        replace(previous, parameters=JobSettings(quality=60)), previous, path
+    )
+
+    assert result.config.parameters.quality == 60
+    assert result.config.font_family == AppConfig().font_family
+    assert result.quarantined_to.read_bytes() == original
+    assert load_app_config(path) == result.config
+
+
+def test_recovery_and_sibling_save_use_one_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pixelup.app_config as app_config
+
+    path = tmp_path / "config.json"
+    original = b"{invalid"
+    path.write_bytes(original)
+    recovering = threading.Event()
+    release = threading.Event()
+    waiting = threading.Event()
+    saved = threading.Event()
+    errors: list[BaseException] = []
+    original_quarantine = app_config.quarantine_corrupt_file
+    original_acquire = FileLock.acquire
+
+    def quarantine(file):
+        recovering.set()
+        assert release.wait(5)
+        return original_quarantine(file)
+
+    def acquire(lock, *args, **kwargs):
+        if threading.current_thread().name == "sibling-save":
+            waiting.set()
+        return original_acquire(lock, *args, **kwargs)
+
+    monkeypatch.setattr(app_config, "quarantine_corrupt_file", quarantine)
+    monkeypatch.setattr(FileLock, "acquire", acquire)
+
+    def load():
+        try:
+            load_app_config_result(path)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def save():
+        try:
+            save_app_config_merged(AppConfig(language="ja"), AppConfig(), path)
+            saved.set()
+        except BaseException as exc:
+            errors.append(exc)
+
+    reader = threading.Thread(target=load)
+    writer = threading.Thread(target=save, name="sibling-save")
+    reader.start()
+    try:
+        assert recovering.wait(5)
+        writer.start()
+        assert waiting.wait(5)
+        assert not saved.is_set()
+    finally:
+        release.set()
+        reader.join(5)
+        if writer.ident is not None:
+            writer.join(5)
+    assert not reader.is_alive() and not writer.is_alive()
+    assert errors == []
+    assert saved.is_set()
+    assert load_app_config(path).language == "ja"
+    assert next(tmp_path.glob("*.invalid")).read_bytes() == original

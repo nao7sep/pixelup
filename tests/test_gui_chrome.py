@@ -42,7 +42,7 @@ def make_window(
     yield _make
 
     for window in created:
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
         window.deleteLater()
     qapp.processEvents()

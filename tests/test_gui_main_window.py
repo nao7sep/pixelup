@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -15,7 +16,13 @@ from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
 from pixelup import gui, theme
-from pixelup.app_config import AppConfig, ConfigLoadResult, config_path, load_app_config
+from pixelup.app_config import (
+    AppConfig,
+    ConfigLoadResult,
+    ConfigSaveResult,
+    config_path,
+    load_app_config,
+)
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
 from pixelup.i18n.localizer import english
@@ -47,6 +54,23 @@ def _png(tmp_path: Path, name: str, size: tuple[int, int] = (8, 6)) -> Path:
     path = tmp_path / name
     Image.new("RGB", size, "white").save(path)
     return path
+
+
+def _settle_config(window: MainWindow) -> None:
+    deadline = time.monotonic() + 5
+    while window._config_save is not None:
+        assert time.monotonic() < deadline, "settings save did not settle"
+        QApplication.instance().processEvents()
+        threading.Event().wait(0.001)
+    QApplication.instance().processEvents()
+
+
+def _flush(window: MainWindow) -> bool:
+    result: list[bool] = []
+    window._flush_parameters_save(finished=result.append)
+    _settle_config(window)
+    assert len(result) == 1
+    return result[0]
 
 
 @pytest.fixture
@@ -84,8 +108,9 @@ def make_window(
     for window in created:
         # Close via the session-shutdown path so closeEvent does not raise the
         # quit-confirmation QMessageBox, whose exec() would block headlessly.
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
+        _settle_config(window)
         window.deleteLater()
     qapp.processEvents()
 
@@ -158,8 +183,9 @@ def test_build_app_wires_application_and_opens_argv_paths(
         assert window.image_table.rowCount() == 1
         assert window._selected_path() == image.resolve()
     finally:
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
+        _settle_config(window)
         window.deleteLater()
         qapp.processEvents()
 
@@ -191,15 +217,14 @@ def test_build_app_assigns_runtime_icon_only_on_windows(
             assert len(assigned_icons) == 1
             assert Path(assigned_icons[0]).name == expected_icon
     finally:
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
+        _settle_config(window)
         window.deleteLater()
         qapp.processEvents()
 
 
-def test_open_paths_adds_unique_rows_and_focuses_existing(
-    make_window, tmp_path: Path
-) -> None:
+def test_open_paths_adds_unique_rows_and_focuses_existing(make_window, tmp_path: Path) -> None:
     window = make_window()
     assert window.image_table.empty_state_visible is True
     assert window.image_table.empty_text == "No images yet. Open images or drop them here."
@@ -333,9 +358,7 @@ def test_open_duplicate_is_information_and_unrelated_success_does_not_clear_it(
     assert window.open_result.isHidden()
 
 
-def test_exact_corrected_open_clears_the_previous_rejection(
-    make_window, tmp_path: Path
-) -> None:
+def test_exact_corrected_open_clears_the_previous_rejection(make_window, tmp_path: Path) -> None:
     window = make_window()
     broken = tmp_path / "repair.png"
     broken.write_text("not an image", encoding="utf-8")
@@ -379,9 +402,9 @@ def test_queue_preconditions_stay_with_the_queue_actions_and_clear_on_correction
 
     assert window.queue_action_result.isVisibleTo(window)
     assert "image" in window.queue_action_result.message_label.text()
-    assert window.queue_action_result.layout().indexOf(
-        window.queue_action_result.dismiss_button
-    ) == 1
+    assert (
+        window.queue_action_result.layout().indexOf(window.queue_action_result.dismiss_button) == 1
+    )
 
     image = _png(tmp_path, "queue.png")
     window.open_paths([image])
@@ -434,9 +457,7 @@ def test_shortcuts_help_chords_open_the_catalogue(
     assert opened == [window, window]
 
 
-def test_window_utilities_sit_below_queue_actions(
-    make_window, qapp: QApplication
-) -> None:
+def test_window_utilities_sit_below_queue_actions(make_window, qapp: QApplication) -> None:
     window = make_window()
     window.show()
     qapp.processEvents()
@@ -458,9 +479,7 @@ def test_open_paths_ignores_non_files(make_window, tmp_path: Path) -> None:
     assert window._selected_path() == real.resolve()
 
 
-def test_queue_selected_image_creates_rows_and_summary(
-    make_window, tmp_path: Path
-) -> None:
+def test_queue_selected_image_creates_rows_and_summary(make_window, tmp_path: Path) -> None:
     window = make_window()
     assert window.queue_table.empty_state_visible is True
     assert window.queue_table.empty_text == "No jobs queued yet."
@@ -478,9 +497,7 @@ def test_queue_selected_image_creates_rows_and_summary(
     assert window.cancel_button.isEnabled() is True
 
 
-def test_job_finished_maps_outcomes_and_updates_summary(
-    make_window, tmp_path: Path
-) -> None:
+def test_job_finished_maps_outcomes_and_updates_summary(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
     window.open_paths([image])
@@ -534,9 +551,7 @@ def test_job_finished_recomputes_only_its_own_images_summary(
     assert _summary(window, image_b) == "1 queued"
 
 
-def test_find_job_uses_the_id_index_and_rejects_an_unknown_id(
-    make_window, tmp_path: Path
-) -> None:
+def test_find_job_uses_the_id_index_and_rejects_an_unknown_id(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
     window.open_paths([image])
@@ -614,9 +629,13 @@ def test_font_metric_refresh_remeasures_tables_and_window_floor(
 
 def test_small_screen_caps_native_floor_without_clipping_content(make_window, monkeypatch) -> None:
     window = make_window()
-    monkeypatch.setattr(MainWindow, "screen", lambda _self: SimpleNamespace(
-        availableGeometry=lambda: QRect(50, 70, 600, 400),
-    ))
+    monkeypatch.setattr(
+        MainWindow,
+        "screen",
+        lambda _self: SimpleNamespace(
+            availableGeometry=lambda: QRect(50, 70, 600, 400),
+        ),
+    )
     window._update_native_minimum()
     assert window.minimumWidth() <= 600
     assert window.minimumHeight() <= 400
@@ -630,12 +649,20 @@ def test_small_screen_caps_native_floor_without_clipping_content(make_window, mo
 
 
 def test_first_normal_target_leaves_room_for_native_frame(make_window, monkeypatch) -> None:
-    monkeypatch.setattr(MainWindow, "screen", lambda _self: SimpleNamespace(
-        availableGeometry=lambda: QRect(50, 70, 600, 400),
-    ))
-    monkeypatch.setattr(MainWindow, "windowHandle", lambda _self: SimpleNamespace(
-        frameMargins=lambda: QMargins(8, 30, 8, 8),
-    ))
+    monkeypatch.setattr(
+        MainWindow,
+        "screen",
+        lambda _self: SimpleNamespace(
+            availableGeometry=lambda: QRect(50, 70, 600, 400),
+        ),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        "windowHandle",
+        lambda _self: SimpleNamespace(
+            frameMargins=lambda: QMargins(8, 30, 8, 8),
+        ),
+    )
     window = make_window()
     assert window.size() == QSize(584, 362)
     assert window.minimumSize() == QSize(584, 362)
@@ -653,7 +680,10 @@ def test_saved_font_change_refreshes_live_layout_metrics(
             self._try_save = try_save
 
         def exec(self):
-            assert self._try_save(candidate) is None
+            saved = []
+            self._try_save(candidate, saved.append, lambda: None)
+            _settle_config(window)
+            assert saved == [None]
             return QDialog.DialogCode.Accepted
 
         def config(self):
@@ -672,9 +702,7 @@ def test_saved_font_change_refreshes_live_layout_metrics(
     assert refreshed == [True]
 
 
-def test_remove_is_blocked_while_jobs_active_then_allowed(
-    make_window, tmp_path: Path
-) -> None:
+def test_remove_is_blocked_while_jobs_active_then_allowed(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
     window.open_paths([image])
@@ -711,9 +739,7 @@ def test_retry_failed_requeues_jobs(make_window, tmp_path: Path) -> None:
     assert _summary(window, image) == "1 queued"
 
 
-def test_cancel_queue_marks_pending_and_signals_running(
-    make_window, tmp_path: Path
-) -> None:
+def test_cancel_queue_marks_pending_and_signals_running(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
     window.open_paths([image])
@@ -761,9 +787,7 @@ def test_settings_only_options_have_no_main_window_control(make_window) -> None:
     assert not hasattr(window, "auto_download")
     assert not hasattr(window, "concurrent")
     assert window.manage_models_button.text() == "Managed models"
-    assert window.manage_models_button.accessibleName() == (
-        "Managed models, all models installed"
-    )
+    assert window.manage_models_button.accessibleName() == ("Managed models, all models installed")
     assert window.manage_models_button.icon().isNull()
 
 
@@ -773,9 +797,7 @@ def test_the_main_action_leads_by_weight_not_by_an_accent_fill(make_window) -> N
     # main window takes the accent fill, which is kept for a dialog's commit.
     window = make_window()
     assert window.queue_selected_button.property("role") == "main"
-    assert all(
-        button.property("role") != "primary" for button in window.findChildren(QPushButton)
-    )
+    assert all(button.property("role") != "primary" for button in window.findChildren(QPushButton))
 
 
 def test_missing_models_show_as_a_warning_line_under_the_button(make_window) -> None:
@@ -816,9 +838,7 @@ def test_coming_to_the_front_finds_a_model_file_placed_by_hand(
 
     path.write_bytes(content)
     QApplication.sendEvent(window, QEvent(QEvent.Type.WindowActivate))
-    process_until(
-        lambda: window.model_status.isHidden(), timeout_s=10, what="The window's rescan"
-    )
+    process_until(lambda: window.model_status.isHidden(), timeout_s=10, what="The window's rescan")
 
     assert window.model_manager.missing(("realesr-general-x4v3",)) == ()
     assert window._selected_path() == image.resolve()
@@ -1021,9 +1041,7 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
 
 def _reset_button(window: MainWindow) -> QPushButton:
     return next(
-        button
-        for button in window.findChildren(QPushButton)
-        if button.text() == "Reset parameters"
+        button for button in window.findChildren(QPushButton) if button.text() == "Reset parameters"
     )
 
 
@@ -1082,7 +1100,7 @@ def test_reset_parameters_button_restores_the_built_in_scale(make_window) -> Non
     # the user actually looks at is what got reset.
     window = make_window()
     window.scale_buttons[2].setChecked(True)
-    window._flush_parameters_save()
+    _flush(window)
     # Persisted first, deliberately: with 2x saved, a reset that reached for the user's
     # config instead of the built-ins would land back on 2x and still look like it had
     # worked. Only a persisted-then-reset run can tell the two apart.
@@ -1090,6 +1108,7 @@ def test_reset_parameters_button_restores_the_built_in_scale(make_window) -> Non
     assert window.current_job_settings().scale == 2
 
     _reset_button(window).click()
+    _settle_config(window)
 
     assert window.current_job_settings().scale == DEFAULT_SCALE
     assert window.scale_buttons[DEFAULT_SCALE].isChecked() is True
@@ -1105,10 +1124,11 @@ def test_reset_parameters_ignores_the_persisted_config(make_window) -> None:
     window = make_window()
     window.quality.setValue(10)
     window.tile.setCurrentIndex(window.tile.findData(1024))
-    window._flush_parameters_save()
+    _flush(window)
     assert window.config.parameters.quality == 10
 
     _reset_button(window).click()
+    _settle_config(window)
 
     assert window.current_job_settings() == JobSettings()
     # And the reset is itself persisted, so it survives the next launch.
@@ -1122,7 +1142,7 @@ def test_parameter_edits_persist_to_config_json(make_window) -> None:
     window = make_window()
 
     _wander_from_defaults(window)
-    window._flush_parameters_save()
+    _flush(window)
 
     persisted = load_app_config(config_path()).parameters
     assert persisted == window.current_job_settings()
@@ -1146,20 +1166,18 @@ def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft
         attempts.append(candidate)
         if len(attempts) == 1:
             raise OSError("disk full")
-        return candidate
+        return ConfigSaveResult(candidate)
 
     monkeypatch.setattr("pixelup.gui.save_app_config_merged", _save)
 
-    assert window._flush_parameters_save() is False
+    assert _flush(window) is False
     assert window.config is original
     assert window.current_job_settings().quality == 10
     assert window.parameters_result.isVisibleTo(window)
     assert "changes are still shown" in window.parameters_result.message_label.text()
-    assert window.parameters_result.layout().indexOf(
-        window.parameters_result.dismiss_button
-    ) == 1
+    assert window.parameters_result.layout().indexOf(window.parameters_result.dismiss_button) == 1
 
-    assert window._flush_parameters_save() is True
+    assert _flush(window) is True
     assert window.config.parameters.quality == 10
     assert len(attempts) == 2
     assert window.parameters_result.isHidden()
@@ -1235,14 +1253,15 @@ def test_a_failed_save_holds_a_user_quit_until_cancel(
 ) -> None:
     window = make_window()
     window.quality.setValue(10)
-    monkeypatch.setattr(gui, "save_app_config_merged", lambda *_: (_ for _ in ()).throw(
-        OSError("read-only")
-    ))
+    monkeypatch.setattr(
+        gui, "save_app_config_merged", lambda *_: (_ for _ in ()).throw(OSError("read-only"))
+    )
     dialog = _ChoicesDialog(["cancel"])
     monkeypatch.setattr(gui, "QuitSaveFailedDialog", dialog)
 
     event = QCloseEvent()
     window.closeEvent(event)
+    _settle_config(window)
 
     assert event.isAccepted() is False
     assert dialog.shown == 1
@@ -1253,9 +1272,7 @@ def test_a_failed_save_holds_a_user_quit_until_cancel(
     assert window.runner._shutting_down is False
 
 
-def test_retry_saves_and_the_quit_goes_on(
-    make_window, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_retry_saves_and_the_quit_goes_on(make_window, monkeypatch: pytest.MonkeyPatch) -> None:
     window = make_window()
     window.quality.setValue(10)
     real_save = gui.save_app_config_merged
@@ -1273,8 +1290,10 @@ def test_retry_saves_and_the_quit_goes_on(
 
     event = QCloseEvent()
     window.closeEvent(event)
+    _settle_config(window)
 
-    assert event.isAccepted() is True
+    assert event.isAccepted() is False
+    assert window._quit_ready is True
     assert len(attempts) == 2
     assert load_app_config(config_path()).parameters.quality == 10
 
@@ -1284,16 +1303,18 @@ def test_quit_anyway_quits_without_the_save_and_logs_what_was_lost(
 ) -> None:
     window = make_window()
     window.quality.setValue(10)
-    monkeypatch.setattr(gui, "save_app_config_merged", lambda *_: (_ for _ in ()).throw(
-        OSError("read-only")
-    ))
+    monkeypatch.setattr(
+        gui, "save_app_config_merged", lambda *_: (_ for _ in ()).throw(OSError("read-only"))
+    )
     dialog = _ChoicesDialog(["retry", "quit_anyway"])
     monkeypatch.setattr(gui, "QuitSaveFailedDialog", dialog)
 
     event = QCloseEvent()
     window.closeEvent(event)
+    _settle_config(window)
 
-    assert event.isAccepted() is True
+    assert event.isAccepted() is False
+    assert window._quit_ready is True
     assert dialog.shown == 2
     assert not config_path().exists()
     [lost] = _fields(caplog, "quit.parameters_unsaved")
@@ -1313,15 +1334,18 @@ def test_a_user_quit_waits_for_running_work_only_until_the_bound(
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
     window.jobs[0].status = "running"
-    monkeypatch.setattr(gui, "QuitConfirmDialog", lambda *_: SimpleNamespace(
-        exec=lambda: QDialog.DialogCode.Accepted
-    ))
+    monkeypatch.setattr(
+        gui,
+        "QuitConfirmDialog",
+        lambda *_: SimpleNamespace(exec=lambda: QDialog.DialogCode.Accepted),
+    )
     monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: False)
     notices: list[object] = []
     monkeypatch.setattr(gui, "warn_jobs_stopping", notices.append)
 
     event = QCloseEvent()
     window.closeEvent(event)
+    _settle_config(window)
 
     # The quit is under way and bounded; the window waits for the worker.
     assert event.isAccepted() is False
@@ -1333,6 +1357,10 @@ def test_a_user_quit_waits_for_running_work_only_until_the_bound(
     quit_bound.expire()
 
     assert quit_bound.exits == 1
+    deadline = time.monotonic() + 5
+    while not _fields(caplog, "quit.forced_exit"):
+        assert time.monotonic() < deadline
+        threading.Event().wait(0.001)
     [forced] = _fields(caplog, "quit.forced_exit")
     assert forced["running_jobs"] == [
         {"job_id": window.jobs[0].id, "output": str(window.jobs[0].output_path)}
@@ -1371,10 +1399,11 @@ def test_an_os_session_end_never_asks_and_logs_the_failed_save(
     monkeypatch.setattr(gui, "save_app_config_merged", failing_save)
     for name in ("QuitConfirmDialog", "QuitSaveFailedDialog", "warn_jobs_stopping"):
         monkeypatch.setattr(gui, name, _never)
-    window._session_shutdown = True
+    window._is_session_shutdown = lambda: True
 
     event = QCloseEvent()
     window.closeEvent(event)
+    _settle_config(window)
 
     assert event.isAccepted() is True
     assert bounded_before_save == [True]
@@ -1390,13 +1419,17 @@ def test_an_os_session_end_with_work_still_running_exits_rather_than_refusing(
     window = make_window()
     monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: False)
     monkeypatch.setattr(gui, "warn_jobs_stopping", _never)
-    window._session_shutdown = True
+    window._is_session_shutdown = lambda: True
 
     event = QCloseEvent()
     window.closeEvent(event)
+    _settle_config(window)
 
+    assert event.isAccepted() is True
+    assert window._os_close_accepted is True
+    assert quit_bound.exits == 0
+    quit_bound.expire()
     assert quit_bound.exits == 1
-    assert _fields(caplog, "quit.forced_exit")
     assert window._quit_when_workers_idle is False
 
 
@@ -1405,6 +1438,7 @@ def test_a_quit_that_settles_in_time_never_forces_the_exit(make_window, quit_bou
 
     event = QCloseEvent()
     window.closeEvent(event)
+    _settle_config(window)
 
     assert event.isAccepted() is True
     assert quit_bound.started == [gui.QUIT_BUDGET_S]
@@ -1422,12 +1456,107 @@ def test_the_forced_exit_happens_even_when_its_log_fails(
     assert quit_bound.exits == 1
 
 
+def test_close_claim_precedes_the_confirmation_and_os_can_take_it_over(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quit_bound
+) -> None:
+    window = make_window()
+    window.open_paths([_png(tmp_path, "a.png")])
+    confirmations: list[bool] = []
+    shutdown = False
+    monkeypatch.setattr(window, "_is_session_shutdown", lambda: shutdown)
+    monkeypatch.setattr(gui, "os_session_ending", lambda: shutdown)
+
+    class Confirmation:
+        def __init__(self, *_args):
+            self.rejected = False
+
+        def reject(self):
+            self.rejected = True
+
+        def exec(self):
+            nonlocal shutdown
+            confirmations.append(window._closing)
+            nested = QCloseEvent()
+            window.closeEvent(nested)
+            assert not nested.isAccepted()
+            assert len(confirmations) == 1
+            shutdown = True
+            window._on_commit_data_request(None)
+            assert self.rejected
+            assert quit_bound.started == [gui.QUIT_BUDGET_S]
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(gui, "QuitConfirmDialog", Confirmation)
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert confirmations == [True]
+    assert window._quit_ready
+    assert window._closing
+    assert quit_bound.started == [gui.QUIT_BUDGET_S]
+
+
+@pytest.mark.parametrize(
+    ("platform", "live_session", "native_session", "expected"),
+    [
+        ("win32", False, True, False),
+        ("win32", True, False, True),
+        ("darwin", True, False, False),
+        ("darwin", False, True, True),
+        ("darwin", True, True, True),
+    ],
+)
+def test_session_shutdown_requires_the_current_platform_session(
+    make_window,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    live_session: bool,
+    native_session: bool,
+    expected: bool,
+) -> None:
+    window = make_window()
+    window._session_shutdown = native_session
+    monkeypatch.setattr(gui.sys, "platform", platform)
+    monkeypatch.setattr(
+        gui,
+        "QGuiApplication",
+        SimpleNamespace(instance=lambda: SimpleNamespace(isSavingSession=lambda: live_session)),
+    )
+    assert window._is_session_shutdown() is expected
+
+
+def test_hard_quit_bounds_a_blocked_logging_tail() -> None:
+    # Use the real os._exit in a disposable process: neither Handler.close nor
+    # the final diagnostic can delay the already committed quit deadline.
+    script = """
+import logging
+import threading
+from types import SimpleNamespace
+from pixelup import gui
+class HeldHandler(logging.Handler):
+    def close(self):
+        print('logging tail entered', flush=True)
+        threading.Event().wait()
+logging.getLogger().addHandler(HeldHandler())
+owner = SimpleNamespace(_log_forced_exit=lambda: threading.Event().wait())
+gui._start_quit_watchdog(0.05, lambda: gui.MainWindow._force_exit(owner))
+logging.shutdown()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0
+    assert "logging tail entered" in result.stdout
+
+
 def test_main_window_restores_geometry_saved_on_normal_close(make_window) -> None:
     first = make_window()
     # The offscreen Qt test screen is only 800 px wide and the content-derived
     # minimum is nearly that wide, so keep the fixture geometry wholly on-screen.
     first.setGeometry(1, 40, first.minimumWidth(), 650)
-    first._session_shutdown = True
+    first._is_session_shutdown = lambda: True
     assert first.close()
 
     second = make_window()
@@ -1438,7 +1567,7 @@ def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
     first = make_window()
     first.setGeometry(1, 40, first.minimumWidth(), 650)
     expected = first.saveGeometry()
-    first._session_shutdown = True
+    first._is_session_shutdown = lambda: True
 
     assert first.close()
 
@@ -1478,14 +1607,12 @@ def test_restored_window_state_is_platform_appropriate(
         Qt.WindowState.WindowFullScreen,
     ],
 )
-def test_main_window_saves_geometry_on_every_accepted_close(
-    make_window, window_state
-) -> None:
+def test_main_window_saves_geometry_on_every_accepted_close(make_window, window_state) -> None:
     window = make_window()
     window.setGeometry(1, 40, window.minimumWidth(), 650)
     window.setWindowState(window_state)
     expected = window.saveGeometry()
-    window._session_shutdown = True
+    window._is_session_shutdown = lambda: True
 
     assert window.close()
 
@@ -1497,14 +1624,12 @@ def test_main_window_saves_geometry_on_every_accepted_close(
     "window_state",
     [Qt.WindowState.WindowMaximized, Qt.WindowState.WindowFullScreen],
 )
-def test_main_window_restores_native_state_according_to_platform(
-    make_window, window_state
-) -> None:
+def test_main_window_restores_native_state_according_to_platform(make_window, window_state) -> None:
     first = make_window()
     first.setGeometry(1, 40, first.minimumWidth(), 650)
     normal_geometry = first.normalGeometry()
     first.setWindowState(window_state)
-    first._session_shutdown = True
+    first._is_session_shutdown = lambda: True
     assert first.close()
 
     second = make_window()
@@ -1568,7 +1693,7 @@ def test_scale_edit_persists_to_config_json(make_window) -> None:
     # the edit on a crash or a force-quit.
     assert window._parameters_save_timer.isActive() is True
 
-    window._flush_parameters_save()
+    _flush(window)
 
     assert load_app_config(config_path()).parameters.scale == 2
 
@@ -1600,8 +1725,9 @@ def test_window_seeds_the_panel_from_the_persisted_parameters(
         assert window.scale_buttons[2].isChecked() is True
         assert window.scale_buttons[4].isChecked() is False
     finally:
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
+        _settle_config(window)
         window.deleteLater()
         qapp.processEvents()
 
@@ -1621,7 +1747,7 @@ def test_queued_jobs_keep_their_snapshot_when_the_panel_changes(
     assert queued.settings.tile == 128
 
     window.tile.setCurrentIndex(window.tile.findData(1024))
-    window._flush_parameters_save()
+    _flush(window)
 
     assert queued.settings.tile == 128
     assert window.config.parameters.tile == 1024
@@ -1648,6 +1774,7 @@ def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_pat
 
     # The panel moves on, and the reset button is the most forceful way it can.
     _reset_button(window).click()
+    _settle_config(window)
 
     assert queued.settings.scale == 2
     assert queued.output_path.name == "a-realesr-general-x4v3-2x.png"
@@ -1673,8 +1800,15 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.json").write_text(
-        json.dumps({"format_version": 1, "max_concurrent_jobs": 1, "auto_download": True,
-                    "font_family": "", "parameters": {"tile": 9999}})
+        json.dumps(
+            {
+                "format_version": 1,
+                "max_concurrent_jobs": 1,
+                "auto_download": True,
+                "font_family": "",
+                "parameters": {"tile": 9999},
+            }
+        )
     )
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
@@ -1696,8 +1830,9 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
         qapp.processEvents()
         assert notices == []
     finally:
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
+        _settle_config(window)
         window.deleteLater()
         qapp.processEvents()
 
@@ -1718,8 +1853,9 @@ def test_the_window_itself_takes_the_configured_font_at_launch(
         assert window.font().family() == "Menlo"
         assert window.settings_button.font().family() == "Menlo"
     finally:
-        window._session_shutdown = True
+        window._is_session_shutdown = lambda: True
         window.close()
+        _settle_config(window)
         window.deleteLater()
         qapp.processEvents()
         qapp.setFont(original)
@@ -1729,17 +1865,18 @@ def test_fresh_launch_and_close_do_not_create_config(make_window) -> None:
     window = make_window()
     assert not config_path().exists()
     assert window.config == AppConfig()
-    window._session_shutdown = True
+    window._is_session_shutdown = lambda: True
     window.close()
     assert not config_path().exists()
 
 
 def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
-    make_window, monkeypatch: pytest.MonkeyPatch,
+    make_window,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     window = make_window()
     window.quality.setValue(10)
-    window._flush_parameters_save()
+    _flush(window)
     original = window.config
     saved = config_path().read_bytes()
     real_save = gui.save_app_config_merged
@@ -1753,10 +1890,104 @@ def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
 
     monkeypatch.setattr(gui, "save_app_config_merged", fail_once)
     _reset_button(window).click()
+    _settle_config(window)
     assert window.config == original
     assert window.current_job_settings() == JobSettings()
     assert config_path().read_bytes() == saved
-    assert window._flush_parameters_save() is True
+    assert _flush(window) is True
     assert attempts == [JobSettings(), JobSettings()]
     assert json.loads(config_path().read_text(encoding="utf-8")) == {"format_version": 1}
     assert window.config.parameters == JobSettings()
+
+
+@pytest.mark.parametrize("continuation", ["quit", "settings"])
+def test_saved_continuation_waits_for_the_newest_visible_panel(
+    make_window,
+    monkeypatch: pytest.MonkeyPatch,
+    process_until,
+    continuation: str,
+) -> None:
+    window = make_window()
+    window.quality.setValue(10)
+    entered = [threading.Event(), threading.Event()]
+    released = [threading.Event(), threading.Event()]
+    attempts = []
+    opened = []
+
+    def save(candidate, previous):
+        index = len(attempts)
+        attempts.append(candidate.parameters.quality)
+        entered[index].set()
+        assert released[index].wait(5)
+        return ConfigSaveResult(candidate)
+
+    monkeypatch.setattr(gui, "save_app_config_merged", save)
+    monkeypatch.setattr(
+        window,
+        "_open_settings_after_save",
+        lambda saved: opened.append(
+            (saved, window.config.parameters.quality, window.current_job_settings().quality)
+        ),
+    )
+    if continuation == "quit":
+        window.closeEvent(QCloseEvent())
+    else:
+        window._settings_dialog()
+    try:
+        process_until(entered[0].is_set, timeout_s=5, what="first panel save")
+        window.quality.setValue(11)
+        released[0].set()
+        process_until(entered[1].is_set, timeout_s=5, what="newest panel save")
+        assert attempts == [10, 11]
+        assert window._quit_ready is False
+        assert window._quit_bounded is False
+        assert opened == []
+        released[1].set()
+        _settle_config(window)
+        assert window.config.parameters.quality == 11
+        if continuation == "quit":
+            assert window._quit_ready is True
+        else:
+            assert opened == [(True, 11, 11)]
+    finally:
+        for release in released:
+            release.set()
+        _settle_config(window)
+
+
+def test_held_config_save_keeps_gui_live_and_retains_newer_panel_edits(
+    make_window, monkeypatch: pytest.MonkeyPatch, process_until
+) -> None:
+    window = make_window()
+    window.quality.setValue(10)
+    started = threading.Event()
+    release = threading.Event()
+    attempts = []
+    saved = []
+
+    def save(candidate, previous):
+        attempts.append((candidate, previous))
+        started.set()
+        assert release.wait(5)
+        return ConfigSaveResult(candidate)
+
+    monkeypatch.setattr(gui, "save_app_config_merged", save)
+    window._flush_parameters_save(finished=saved.append)
+    try:
+        process_until(started.is_set, timeout_s=5, what="held save admission")
+        window.quality.setValue(11)
+        window._flush_parameters_save()
+        window._config_save_timed_out()
+        assert len(attempts) == 1
+        assert window._config_save is not None
+        assert window.config.parameters.quality != 10
+        assert window.current_job_settings().quality == 11
+    finally:
+        release.set()
+        _settle_config(window)
+    assert saved == [True]
+    assert window.config.parameters.quality == 11
+    assert window.current_job_settings().quality == 11
+    assert _flush(window) is True
+    assert window.config.parameters.quality == 11
+    assert len(attempts) == 2

@@ -99,10 +99,13 @@ class SettingsDialog(DialogShell):
         config: AppConfig,
         parent: QWidget | None = None,
         *,
-        try_save: Callable[[AppConfig], Message | None] | None = None,
+        try_save: Callable[[AppConfig, Callable[[Message | None], None], Callable[[], None]], None]
+        | None = None,
         session_shutdown: Callable[[], bool] = lambda: False,
     ) -> None:
         super().__init__("settings.title", parent, width=FORM_WIDTH)
+        self._saving = False
+        self._save_generation = 0
         self._initial = config
         self._try_save = try_save
         self._session_shutdown = session_shutdown
@@ -202,27 +205,58 @@ class SettingsDialog(DialogShell):
 
     def reject(self) -> None:
         """The one close path for Cancel, Escape and the title bar's close button."""
+        if self._saving and not self._session_shutdown():
+            return
         if (
             self.is_dirty()
             and not self._session_shutdown()
             and DiscardChangesDialog(self).exec() != QDialog.DialogCode.Accepted
         ):
             return
+        self._save_generation += 1
         super().reject()
 
     def _update_commit_enabled(self) -> None:
-        self.ok_button.setEnabled(self.is_dirty())
+        self.ok_button.setEnabled(self.is_dirty() and not self._saving)
 
     def _save(self) -> None:
+        if self._saving:
+            return
         candidate = self.config()
         self.error_message.clear()
         self.error_message.hide()
-        failure = None if self._try_save is None else self._try_save(candidate)
+        if self._try_save is None:
+            self.accept()
+            return
+        self._saving = True
+        self._save_generation += 1
+        generation = self._save_generation
+        self._update_commit_enabled()
+        self.cancel_button.setEnabled(False)
+        self.concurrent.setEnabled(False)
+        self.font_family.setEnabled(False)
+        self.language.setEnabled(False)
+        self._try_save(
+            candidate,
+            lambda failure: self._saved(generation, candidate, failure),
+            lambda: self._saved(generation, candidate, Message("notice.configSaving")),
+        )
+
+    def _saved(self, generation: int, candidate: AppConfig, failure: Message | None) -> None:
+        if generation != self._save_generation:
+            return
+        self._saving = False
+        self.cancel_button.setEnabled(True)
+        self.concurrent.setEnabled(True)
+        self.font_family.setEnabled(True)
+        self.language.setEnabled(True)
+        self._update_commit_enabled()
         if failure is not None:
             localize(self.error_message, text=failure, accessible_name=failure)
             self.error_message.show()
-            # The message is body content, so the body just grew; re-measure it
-            # against the same bound rather than letting Qt size past the screen.
             self.fit()
             return
-        self.accept()
+        self.error_message.clear()
+        self.error_message.hide()
+        if candidate == self.config():
+            self.accept()

@@ -55,14 +55,15 @@ def test_save_output_image_temp_file_uses_stem_nanoid_shape_beside_output(
     output_dir = tmp_path / "output-volume"
     output_dir.mkdir()
     output = output_dir / "photo-x4plus-4x.png"
-    original_save = Image.Image.save
+    original_open = os.open
     captured: list[Path] = []
 
-    def capture_and_save(self: Image.Image, fp: object, **kwargs: object) -> None:
-        captured.append(Path(fp))
-        original_save(self, fp, **kwargs)
+    def capture_open(path, flags, *args, **kwargs):
+        if flags & os.O_EXCL:
+            captured.append(Path(path))
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Image.Image, "save", capture_and_save)
+    monkeypatch.setattr(os, "open", capture_open)
     save_output_image(
         Image.new("RGB", (1, 1), "white"),
         output_path=output,
@@ -73,7 +74,7 @@ def test_save_output_image_temp_file_uses_stem_nanoid_shape_beside_output(
         strip_metadata=True,
         target_profile=None,
     )
-    monkeypatch.setattr(Image.Image, "save", original_save)
+    monkeypatch.setattr(os, "open", original_open)
 
     assert len(captured) == 1
     assert re.fullmatch(r"photo-x4plus-4x-[A-Za-z0-9_-]{21}\.tmp", captured[0].name)
@@ -185,7 +186,8 @@ def test_save_output_image_cleans_temp_file_on_save_failure(
     original_save = Image.Image.save
 
     def fail_after_partial_write(self: Image.Image, fp: object, **kwargs: object) -> None:
-        Path(fp).write_bytes(b"partial")
+        fp.write(b"partial")  # type: ignore[attr-defined]
+        fp.flush()  # type: ignore[attr-defined]
         raise ValueError("boom")
 
     monkeypatch.setattr(Image.Image, "save", fail_after_partial_write)
@@ -374,7 +376,7 @@ def test_save_output_image_without_hard_links_removes_a_partly_copied_output(
 
     monkeypatch.setattr("pixelup.imaging.os.link", unsupported_link)
     monkeypatch.setattr("pixelup.output_reservation.os.link", unsupported_link)
-    monkeypatch.setattr("pixelup.imaging.shutil.copyfileobj", disk_full)
+    monkeypatch.setattr("pixelup.imaging._copy_staged", disk_full)
 
     with pytest.raises(PixelupError) as excinfo:
         save_output_image(

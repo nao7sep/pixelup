@@ -54,8 +54,7 @@ def make_directory_alias() -> Callable[[Path, Path], None]:
         )
         if completed.returncode != 0:
             pytest.fail(
-                "could not create Windows directory junction: "
-                f"{completed.stdout}{completed.stderr}"
+                f"could not create Windows directory junction: {completed.stdout}{completed.stderr}"
             )
 
     return create
@@ -89,8 +88,12 @@ def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     to the root it first opened under, so it is closed after every test and the next
     test's first save re-opens it under that test's own root.
     """
+    from pixelup.output_cleanup import output_cleanup
+
+    output_cleanup.reset()
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path))
     yield
+    assert output_cleanup._settled.wait(5), "output cleanup did not settle"
     close_backup_store()
 
 
@@ -123,7 +126,9 @@ def qapp(_session_qapp: QApplication):
     """
     app = _session_qapp
     style_sheet, palette = app.styleSheet(), app.palette()
+    quit_on_last_window = app.quitOnLastWindowClosed()
     yield app
+    app.setQuitOnLastWindowClosed(quit_on_last_window)
     if app.styleSheet() != style_sheet:
         app.setStyleSheet(style_sheet)
     if app.palette() != palette:

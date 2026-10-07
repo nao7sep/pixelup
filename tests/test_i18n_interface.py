@@ -116,9 +116,7 @@ def window(
 ) -> Iterator[MainWindow]:
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
-    monkeypatch.setattr(
-        "pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig())
-    )
+    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
     log_file = configure_session_logging()
     models_dir = tmp_path / "home" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -131,7 +129,7 @@ def window(
     main = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
     _populate(main, tmp_path)
     yield main
-    main._session_shutdown = True
+    main._is_session_shutdown = lambda: True
     main.close()
     main.deleteLater()
 
@@ -166,7 +164,9 @@ def _populate(main: MainWindow, directory: Path) -> None:
 
 def _dialogs(manager: ModelManager) -> list[QDialog]:
     failed = Message("settings.saveFailed")
-    settings = SettingsDialog(AppConfig(), try_save=lambda _candidate: failed)
+    settings = SettingsDialog(
+        AppConfig(), try_save=lambda _candidate, finished, waiting: finished(failed)
+    )
     settings.ok_button.setEnabled(True)
     settings._save()
     about = AboutDialog(opener=lambda _url: (_ for _ in ()).throw(OSError("offline")))
@@ -216,8 +216,7 @@ def _texts(root: QWidget, *, include_cells: bool = True) -> list[str]:
             texts.append(widget.empty_text)
         if isinstance(widget, QTableWidget):
             texts += [
-                widget.horizontalHeaderItem(column).text()
-                for column in range(widget.columnCount())
+                widget.horizontalHeaderItem(column).text() for column in range(widget.columnCount())
             ]
             if include_cells:
                 for row in range(widget.rowCount()):
@@ -251,9 +250,7 @@ def test_no_key_and_no_english_reaches_any_surface(
     window._open_records_window()
     records = window._records_window
     assert records is not None
-    process_until(
-        lambda: records.launch_filter.count() > 1, timeout_s=5, what="the Records window"
-    )
+    process_until(lambda: records.launch_filter.count() > 1, timeout_s=5, what="the Records window")
     with localizer.speaking(tag):
         qapp.processEvents()
         dialogs = _dialogs(manager)
@@ -308,15 +305,17 @@ def test_a_language_change_rewrites_what_is_already_on_screen(
 
 
 def test_saving_a_language_in_settings_applies_it_live(
-    window: MainWindow, qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+    window: MainWindow, qapp: QApplication, monkeypatch: pytest.MonkeyPatch, process_until
 ) -> None:
     def accept_japanese(dialog: SettingsDialog) -> QDialog.DialogCode:
         dialog.language.setCurrentIndex(dialog.language.findData("ja"))
         dialog._save()
+        process_until(lambda: not dialog._saving, timeout_s=5, what="language save")
         return dialog.result()
 
     monkeypatch.setattr(SettingsDialog, "exec", accept_japanese)
     window._settings_dialog()
+    process_until(lambda: window.config.language == "ja", timeout_s=5, what="saved language")
     qapp.processEvents()
     assert window.config.language == "ja"
     assert localizer.preference() == "ja"

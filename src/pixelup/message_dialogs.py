@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialogButtonBox,
     QLabel,
@@ -31,12 +32,14 @@ class MessageDialog(DialogShell):
         super().__init__(title_key, parent, width=NOTICE_WIDTH)
 
         self.message_label = localize(QLabel(), text=message)
+        self.message_label.setTextFormat(Qt.TextFormat.PlainText)
         self.message_label.setWordWrap(True)
         self.body_layout.addWidget(self.message_label)
 
         self.hint_label = QLabel()
         if hint is not None:
             localize(self.hint_label, text=hint)
+        self.hint_label.setTextFormat(Qt.TextFormat.PlainText)
         self.hint_label.setWordWrap(True)
         self.hint_label.setVisible(hint is not None)
         self.body_layout.addWidget(self.hint_label)
@@ -54,6 +57,10 @@ def _show_message(parent: QWidget | None, message: Message) -> None:
 
 def warn_config_reset(parent: QWidget | None, quarantined_to: Path) -> None:
     _show_message(parent, Message.of("notice.configReset", path=str(quarantined_to)))
+
+
+def warn_config_recovered_save(parent: QWidget | None, quarantined_to: Path) -> None:
+    _show_message(parent, Message.of("notice.configRecoveredOnSave", path=str(quarantined_to)))
 
 
 def warn_config_newer(parent: QWidget | None, path: Path) -> None:

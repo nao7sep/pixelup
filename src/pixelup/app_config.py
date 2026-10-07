@@ -103,6 +103,12 @@ class ConfigLoadResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfigSaveResult:
+    config: AppConfig
+    quarantined_to: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _StoredConfig:
     """What ``config.json`` holds, as read: its map, or why it holds nothing usable.
     ``exists`` is whether a file is still there to compare a save against."""
@@ -131,7 +137,9 @@ def load_app_config_result(path: Path | None = None) -> ConfigLoadResult:
     """
     if path is None:
         path = config_path()
-    stored = _read_config_map(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(_config_lock_path(path)), timeout=_CONFIG_LOCK_TIMEOUT_SECONDS):
+        stored = _read_config_map(path)
     return ConfigLoadResult(
         _decode_app_config(stored.data, path), stored.quarantined_to, stored.newer_format
     )
@@ -156,7 +164,7 @@ def save_app_config_merged(
     candidate: AppConfig,
     previous: AppConfig,
     path: Path | None = None,
-) -> AppConfig:
+) -> ConfigSaveResult:
     """Save an edit to ``config.json`` without discarding a sibling window's own edit.
 
     A caller keeps its own full in-memory ``AppConfig`` and edits it by building
@@ -169,7 +177,7 @@ def save_app_config_merged(
     :mod:`pixelup.backup_store` already use for their own shared files — reads the
     file fresh under the lock, applies onto *that* only the fields ``candidate``
     actually changed relative to ``previous``, and writes the file from the result
-    (config-sets-conventions). The returned ``AppConfig`` becomes the caller's new
+    (config-sets-conventions). The returned config becomes the caller's new
     in-memory copy, so it also picks up whatever the other window wrote to fields
     this edit did not touch.
     """
@@ -206,7 +214,7 @@ def save_app_config_merged(
         data = {_FORMAT_VERSION_KEY: CONFIG_FORMAT_VERSION, **sets} if sets or stored.exists else {}
         if data != stored.data:
             write_managed_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
-        return merged
+        return ConfigSaveResult(merged, stored.quarantined_to)
     finally:
         lock.release()
 
@@ -304,11 +312,7 @@ def _int_range(value: Any, name: str, low: int, high: int) -> int:
 
 
 def _float_range(value: Any, name: str, low: float, high: float) -> float:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not low <= value <= high
-    ):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
         raise ValueError(f"{name} is outside its valid numeric range")
     return float(value)
 
