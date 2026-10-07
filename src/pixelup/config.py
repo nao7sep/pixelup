@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import ctypes
-import errno
 import os
 import re
 import stat
@@ -262,7 +260,7 @@ def write_managed_text(path: Path, text: str) -> None:
         with temp_path.open("wb") as file:
             file.write(data)
             if sys.platform == "darwin":
-                _keep_replaced_file_metadata(path, file.fileno(), temp_path)
+                _keep_replaced_file_mode(path, temp_path)
         os.replace(temp_path, path)
     except BaseException:
         temp_path.unlink(missing_ok=True)
@@ -277,28 +275,10 @@ def write_managed_text(path: Path, text: str) -> None:
     record(path, data)
 
 
-# copyfile.h: COPYFILE_STAT and COPYFILE_SECURITY are left out because they copy the
-# modification time, which a replace must take from its new content.
-_COPYFILE_ACL = 1 << 0
-_COPYFILE_XATTR = 1 << 2
-
-
-def _keep_replaced_file_metadata(path: Path, temp_descriptor: int, temp_path: Path) -> None:
-    """Give the temp replacing ``path`` its ACL, extended attributes and mode on macOS.
-
-    Finder tags are extended attributes; the birth time resets with every replace
-    (content-lifecycle-conventions).
-    """
+def _keep_replaced_file_mode(path: Path, temp_path: Path) -> None:
+    """Keep ordinary permission bits on a macOS replacement through the runtime."""
     try:
-        source = os.open(path, os.O_RDONLY)
+        mode = stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:
         return
-    try:
-        fcopyfile = ctypes.CDLL(None, use_errno=True).fcopyfile
-        if fcopyfile(source, temp_descriptor, None, _COPYFILE_ACL | _COPYFILE_XATTR) != 0:
-            code = ctypes.get_errno()
-            if code != errno.ENOTSUP:
-                raise OSError(code, os.strerror(code), str(path))
-        os.chmod(temp_path, stat.S_IMODE(os.fstat(source).st_mode))
-    finally:
-        os.close(source)
+    os.chmod(temp_path, mode)

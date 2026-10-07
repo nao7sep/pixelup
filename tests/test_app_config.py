@@ -1,7 +1,6 @@
 import json
 import os
 import stat
-import subprocess
 import sys
 import threading
 from dataclasses import fields, replace
@@ -114,14 +113,13 @@ def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
     assert load_app_config(path) == candidate
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS file metadata")
-def test_a_changed_save_keeps_the_file_mode_and_xattrs_with_a_fresh_modified_time(
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS replacement modes")
+def test_a_changed_save_keeps_the_file_mode_with_a_fresh_modified_time(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.json"
     save_app_config_merged(AppConfig(parameters=JobSettings(quality=55)), AppConfig(), path)
     os.chmod(path, 0o640)
-    subprocess.run(["xattr", "-w", "com.example.pixelup-test", "kept", str(path)], check=True)
     old = 1_000_000_000
     os.utime(path, (old, old))
 
@@ -130,13 +128,6 @@ def test_a_changed_save_keeps_the_file_mode_and_xattrs_with_a_fresh_modified_tim
 
     assert load_app_config(path).parameters.quality == 60
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
-    kept = subprocess.run(
-        ["xattr", "-p", "com.example.pixelup-test", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert kept.stdout.strip() == "kept"
     assert os.stat(path).st_mtime > old
     assert list(tmp_path.glob("*.tmp")) == []
 
