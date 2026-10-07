@@ -1,18 +1,18 @@
 """Source EXIF and XMP made to describe a derived output (content-lifecycle-conventions).
 
 EXIF is patched rather than re-serialized, so maker notes, whose offsets point into the
-block, and the IFD1 thumbnail survive: a value of the same size is written in place, and an
-IFD that gains or resizes an entry is rewritten at the end of the block. Descriptive tags
-change only where the source has them; the modification dates are always written.
+block, and the IFD1 thumbnail survive. Scalars are written in their entries; changed
+strings and their IFDs are appended at the end of the block. Descriptive tags change only
+where the source has them; the modification dates are always written.
 """
 
 from __future__ import annotations
 
-import re
 import struct
 from dataclasses import dataclass
 from datetime import datetime
-from xml.sax.saxutils import escape
+from xml.dom import Node, minidom
+from xml.parsers.expat import ExpatError
 
 EXIF_PREFIX = b"Exif\x00\x00"
 
@@ -39,7 +39,12 @@ _COLOR_SPACE_SRGB = 1
 _COLOR_SPACE_ADOBE_RGB_NONSTANDARD = 2
 _COLOR_SPACE_UNCALIBRATED = 0xFFFF
 _INTEROP_INDEX = {"srgb": b"R98\x00", "adobergb": b"R03\x00"}
-_XMP_NAMESPACE = b"http://ns.adobe.com/xap/1.0/"
+_RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+_XMP_NAMESPACE = "http://ns.adobe.com/xap/1.0/"
+_TIFF_NAMESPACE = "http://ns.adobe.com/tiff/1.0/"
+_EXIF_NAMESPACE = "http://ns.adobe.com/exif/1.0/"
+_PHOTOSHOP_NAMESPACE = "http://ns.adobe.com/photoshop/1.0/"
+_XMLNS_NAMESPACE = "http://www.w3.org/2000/xmlns/"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,13 +99,18 @@ def exif_for_output(
     subsec = None
     if exif_ifd is not None:
         entries = tiff.entries(exif_ifd)
-        subsec = tiff.ascii(entries.get(_TAG_SUBSEC_TIME))
+        try:
+            subsec = tiff.ascii(entries.get(_TAG_SUBSEC_TIME))
+        except ValueError:
+            # An invalid modification fraction does not invalidate other capture data.
+            subsec = b"000000"
         tiff.set_integer(entries.get(_TAG_PIXEL_X_DIMENSION), width)
         tiff.set_integer(entries.get(_TAG_PIXEL_Y_DIMENSION), height)
         if color is not None:
             tiff.set_integer(
                 entries.get(_TAG_COLOR_SPACE),
                 _COLOR_SPACE_SRGB if color.name == "srgb" else _COLOR_SPACE_UNCALIBRATED,
+                short=True,
             )
             interop_ifd = tiff.sub_ifd(entries, _TAG_INTEROP_IFD)
             if interop_ifd is not None:
@@ -125,64 +135,73 @@ def xmp_for_output(
 
     xmp:ModifyDate and xmp:MetadataDate are written as ``modified`` with its offset.
     """
-    width, height = size
-    values: dict[bytes, str] = {
-        b"tiff:ImageWidth": str(width),
-        b"tiff:ImageLength": str(height),
-        b"exif:PixelXDimension": str(width),
-        b"exif:PixelYDimension": str(height),
-    }
-    if color is not None:
-        values[b"exif:ColorSpace"] = str(
-            _COLOR_SPACE_SRGB if color.name == "srgb" else _COLOR_SPACE_UNCALIBRATED
-        )
-        values[b"photoshop:ICCProfile"] = color.description
-    for name, value in values.items():
-        xmp = _replace_xmp_property(xmp, name, value)
-    stamp = modified.strftime("%Y-%m-%dT%H:%M:%S") + _offset(modified)
-    for name in (b"xmp:ModifyDate", b"xmp:MetadataDate"):
-        xmp = _write_xmp_property(xmp, name, stamp)
-    return xmp
+    try:
+        document = minidom.parseString(xmp)
+    except ExpatError:
+        return xmp
+    try:
+        descriptions = document.getElementsByTagNameNS(_RDF_NAMESPACE, "Description")
+        if not descriptions:
+            return xmp
+        width, height = size
+        values = {
+            (_TIFF_NAMESPACE, "ImageWidth"): str(width),
+            (_TIFF_NAMESPACE, "ImageLength"): str(height),
+            (_EXIF_NAMESPACE, "PixelXDimension"): str(width),
+            (_EXIF_NAMESPACE, "PixelYDimension"): str(height),
+        }
+        if color is not None:
+            values[(_EXIF_NAMESPACE, "ColorSpace")] = str(
+                _COLOR_SPACE_SRGB if color.name == "srgb" else _COLOR_SPACE_UNCALIBRATED
+            )
+            values[(_PHOTOSHOP_NAMESPACE, "ICCProfile")] = color.description
+        stamp = modified.strftime("%Y-%m-%dT%H:%M:%S") + _offset(modified)
+        values[(_XMP_NAMESPACE, "ModifyDate")] = stamp
+        values[(_XMP_NAMESPACE, "MetadataDate")] = stamp
+        for (namespace, name), value in values.items():
+            found = False
+            for description in descriptions:
+                attribute = description.getAttributeNodeNS(namespace, name)
+                if attribute is not None:
+                    attribute.value = value
+                    found = True
+                for element in description.childNodes:
+                    if (
+                        element.nodeType == Node.ELEMENT_NODE
+                        and element.namespaceURI == namespace
+                        and element.localName == name
+                    ):
+                        for child in list(element.childNodes):
+                            element.removeChild(child)
+                        element.appendChild(document.createTextNode(value))
+                        found = True
+            if not found and namespace == _XMP_NAMESPACE:
+                # The declaration is local, so an ancestor's different xmp binding is untouched.
+                description = descriptions[0]
+                bindings: dict[str, str] = {}
+                ancestor = description
+                while ancestor.nodeType == Node.ELEMENT_NODE:
+                    for attribute in ancestor.attributes.values():
+                        if attribute.prefix == "xmlns":
+                            bindings.setdefault(attribute.localName, attribute.value)
+                    ancestor = ancestor.parentNode
+                prefix = "xmp"
+                suffix = 0
+                while prefix in bindings and bindings[prefix] != namespace:
+                    suffix += 1
+                    prefix = f"xmp{suffix}"
+                description.setAttributeNS(_XMLNS_NAMESPACE, f"xmlns:{prefix}", namespace)
+                description.setAttributeNS(namespace, f"{prefix}:{name}", value)
+        return document.toxml(encoding="utf-8")
+
+    finally:
+        document.unlink()
 
 
 def _offset(moment: datetime) -> str:
     if moment.utcoffset() is None:
         raise ValueError("a modification time needs its UTC offset")
     return moment.isoformat()[-6:]
-
-
-def _write_xmp_property(xmp: bytes, name: bytes, value: str) -> bytes:
-    """Replace the property, or add it to the first rdf:Description when it is absent."""
-    replaced = _replace_xmp_property(xmp, name, value)
-    if replaced != xmp or re.search(rb"[\s<]" + re.escape(name) + rb"[\s=>]", xmp):
-        return replaced
-    # A quoted attribute value may hold ">", so the start tag ends only outside quotes.
-    start = re.search(rb"<rdf:Description\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*?(?=/?>)", xmp)
-    if start is None:
-        # Not XMP PixelUp can place a property in; carried as it is.
-        return xmp
-    added = b" " + name + b'="' + _xml_attribute(value) + b'"'
-    if b"xmlns:xmp=" not in start[0]:
-        added = b' xmlns:xmp="' + _XMP_NAMESPACE + b'"' + added
-    return xmp[: start.end()] + added + xmp[start.end() :]
-
-
-def _xml_attribute(value: str) -> bytes:
-    return escape(value, {'"': "&quot;", "'": "&apos;"}).encode("utf-8")
-
-
-def _replace_xmp_property(xmp: bytes, name: bytes, value: str) -> bytes:
-    quoted = re.escape(name)
-    attribute = re.compile(rb"(\s" + quoted + rb"\s*=\s*)([\"'])(.*?)\2", re.DOTALL)
-    element = re.compile(rb"(<" + quoted + rb">)([^<]*)(</" + quoted + rb">)")
-    xmp = attribute.sub(
-        lambda match: match[1] + match[2] + _xml_attribute(value) + match[2],
-        xmp,
-    )
-    return element.sub(
-        lambda match: match[1] + escape(value).encode("utf-8") + match[3],
-        xmp,
-    )
 
 
 _IFD0_POINTER = 4  # Where the TIFF header stores IFD0's offset.
@@ -236,15 +255,15 @@ class _Tiff:
         self._check(offset, count)
         return bytes(self.data[offset : offset + count])
 
-    def set_integer(self, entry: int | None, value: int) -> None:
-        if self.integer(entry) is None:
+    def set_integer(self, entry: int | None, value: int, *, short: bool = False) -> None:
+        if entry is None:
             return
-        assert entry is not None
-        if self._type(entry) == _SHORT and value <= 0xFFFF:
+        if short or (self._type(entry) == _SHORT and value <= 0xFFFF):
+            self.data[entry + 2 : entry + 8] = struct.pack(self._order + "HI", _SHORT, 1)
             self.data[entry + 8 : entry + 12] = struct.pack(self._order + "HH", value, 0)
             return
         # A dimension past the SHORT range still fits the 4-byte value field as a LONG.
-        self.data[entry + 2 : entry + 4] = struct.pack(self._order + "H", _LONG)
+        self.data[entry + 2 : entry + 8] = struct.pack(self._order + "HI", _LONG, 1)
         self.data[entry + 8 : entry + 12] = struct.pack(self._order + "I", value)
 
     def set_interop_index(self, ifd: int, index: bytes | None) -> None:
@@ -279,14 +298,8 @@ class _Tiff:
     def _set_entry(self, pointer: int, tag: int, kind: int, count: int, value: bytes) -> None:
         ifd = self._unpack("I", pointer)
         entries = self.entries(ifd)
-        entry = entries.get(tag)
-        if entry is not None and self._type(entry) == kind and self._count(entry) == count:
-            offset = entry + 8 if len(value) <= 4 else self._unpack("I", entry + 8)
-            self._check(offset, len(value))
-            self.data[offset : offset + len(value)] = value
-            return
-        # The IFD gains or resizes an entry, so it is rewritten at the end of the block and
-        # its pointer moved there; every value it points to stays where it is.
+        # Give the changed value its own payload and IFD; a capture entry may share the
+        # original payload. Existing source values and their offsets stay where they are.
         field = value.ljust(4, b"\x00") if len(value) <= 4 else self._pack_offset(value)
         raw = {existing: bytes(self.data[at : at + 12]) for existing, at in entries.items()}
         raw[tag] = struct.pack(self._order + "HHI", tag, kind, count) + field

@@ -58,8 +58,6 @@ def test_exif_carries_the_output_dimensions_and_keeps_capture_facts() -> None:
     assert exif[0x0110] == "Camera"
     # The modification date is the output's, in local wall-clock time with its offset.
     assert (exif[0x0132], exif_ifd[0x9010]) == ("2026:10:05 21:30:15", "+09:00")
-    # Patched in place: nothing moves, so offsets into the block stay valid.
-    assert len(output) == len(source)
 
 
 def test_exif_without_dates_gains_them_and_keeps_every_other_value() -> None:
@@ -85,9 +83,12 @@ def test_exif_modification_fraction_follows_the_output_and_capture_facts_stay() 
     exif_ifd = (
         struct.pack(">H", 4)
         + struct.pack(">HHII", 0x927C, 7, len(maker_note), 80)
-        + struct.pack(">HHI", 0x9290, 2, 4) + b"123\x00"
-        + struct.pack(">HHI", 0x9291, 2, 4) + b"456\x00"
-        + struct.pack(">HHI", 0x9292, 2, 4) + b"789\x00"
+        + struct.pack(">HHI", 0x9290, 2, 4)
+        + b"123\x00"
+        + struct.pack(">HHI", 0x9291, 2, 4)
+        + b"456\x00"
+        + struct.pack(">HHI", 0x9292, 2, 4)
+        + b"789\x00"
         + bytes(4)
     )
     ifd1 = (
@@ -172,71 +173,186 @@ def test_unreadable_exif_is_rejected() -> None:
         )
 
 
-def test_xmp_carries_the_output_dimensions_in_either_form() -> None:
-    source = (
-        b"<rdf:Description tiff:ImageWidth=\"400\" tiff:ImageLength='300'"
-        b' exif:DateTimeOriginal="2020-01-02T03:04:05" xmp:ModifyDate="2021-01-01T00:00:00Z">'
-        b"<xmp:MetadataDate>2021-01-01T00:00:00Z</xmp:MetadataDate>"
-        b"<exif:PixelXDimension>400</exif:PixelXDimension>"
-        b"<exif:PixelYDimension>300</exif:PixelYDimension>"
-        b"</rdf:Description>"
+RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+TIFF = "http://ns.adobe.com/tiff/1.0/"
+EXIF = "http://ns.adobe.com/exif/1.0/"
+XMP = "http://ns.adobe.com/xap/1.0/"
+PS = "http://ns.adobe.com/photoshop/1.0/"
+
+
+def packet(body: str) -> bytes:
+    return (
+        f'<rdf:RDF xmlns:rdf="{RDF}" xmlns:t="{TIFF}" xmlns:e="{EXIF}" '
+        f'xmlns:m="{XMP}" xmlns:p="{PS}">{body}</rdf:RDF>'
+    ).encode()
+
+
+def test_xmp_namespaces_update_attributes_and_elements_preserving_capture() -> None:
+    source = packet(
+        '<rdf:Description t:ImageWidth="400" t:ImageLength="300" '
+        'e:DateTimeOriginal="2020-01-02T03:04:05" m:ModifyDate="old">'
+        "<e:PixelXDimension>400</e:PixelXDimension>"
+        "<e:PixelYDimension>300</e:PixelYDimension>"
+        "<m:MetadataDate>old</m:MetadataDate></rdf:Description>"
     )
-
-    output = xmp_for_output(source, size=(1600, 1200), color=None, modified=MODIFIED)
-
-    assert output == (
-        b"<rdf:Description tiff:ImageWidth=\"1600\" tiff:ImageLength='1200'"
-        b' exif:DateTimeOriginal="2020-01-02T03:04:05" xmp:ModifyDate="' + STAMP + b'">'
-        b"<xmp:MetadataDate>" + STAMP + b"</xmp:MetadataDate>"
-        b"<exif:PixelXDimension>1600</exif:PixelXDimension>"
-        b"<exif:PixelYDimension>1200</exif:PixelYDimension>"
-        b"</rdf:Description>"
+    root = ElementTree.fromstring(
+        xmp_for_output(source, size=(1600, 1200), color=None, modified=MODIFIED)
     )
+    description = root[0]
+    assert description.get(f"{{{TIFF}}}ImageWidth") == "1600"
+    assert description.get(f"{{{TIFF}}}ImageLength") == "1200"
+    assert description.find(f"{{{EXIF}}}PixelXDimension").text == "1600"
+    assert description.find(f"{{{EXIF}}}PixelYDimension").text == "1200"
+    assert description.get(f"{{{EXIF}}}DateTimeOriginal") == "2020-01-02T03:04:05"
+    assert description.get(f"{{{XMP}}}ModifyDate") == STAMP.decode()
+    assert description.find(f"{{{XMP}}}MetadataDate").text == STAMP.decode()
 
 
-def test_xmp_without_dates_gains_them_on_its_first_description() -> None:
-    source = b'<rdf:RDF><rdf:Description rdf:about=""/><rdf:Description/></rdf:RDF>'
-
-    output = xmp_for_output(source, size=(1, 1), color=None, modified=MODIFIED)
-
-    assert output == (
-        b'<rdf:RDF><rdf:Description rdf:about=""'
-        b' xmlns:xmp="http://ns.adobe.com/xap/1.0/"'
-        b' xmp:ModifyDate="' + STAMP + b'" xmp:MetadataDate="' + STAMP + b'"'
-        b"/><rdf:Description/></rdf:RDF>"
+def test_xmp_prefix_rebinding_is_not_mistaken_for_the_known_namespace() -> None:
+    source = packet(
+        '<rdf:Description xmlns:tiff="urn:other" xmlns:xmp="urn:other" '
+        'tiff:ImageWidth="other" xmp:Value="keep" p:Headline="5 &gt; 3"/>'
     )
-
-
-def test_xmp_dates_are_added_after_a_quoted_attribute_holding_a_greater_than_sign() -> None:
-    source = (
-        b'<x:xmpmeta xmlns:x="adobe:ns:meta/">'
-        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
-        b'<rdf:Description rdf:about=""'
-        b' xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:Headline="5 > 3"/>'
-        b"</rdf:RDF></x:xmpmeta>"
+    root = ElementTree.fromstring(
+        xmp_for_output(source, size=(8, 4), color=None, modified=MODIFIED)
     )
+    description = root[0]
+    assert description.get("{urn:other}ImageWidth") == "other"
+    assert description.get("{urn:other}Value") == "keep"
+    assert description.get(f"{{{PS}}}Headline") == "5 > 3"
+    assert description.get(f"{{{XMP}}}ModifyDate") == STAMP.decode()
+    assert description.get(f"{{{XMP}}}MetadataDate") == STAMP.decode()
 
-    output = xmp_for_output(source, size=(1, 1), color=None, modified=MODIFIED)
 
-    description = ElementTree.fromstring(output)[0][0]
-    assert description.get("{http://ns.adobe.com/photoshop/1.0/}Headline") == "5 > 3"
-    assert description.get("{http://ns.adobe.com/xap/1.0/}ModifyDate") == STAMP.decode()
-    assert description.get("{http://ns.adobe.com/xap/1.0/}MetadataDate") == STAMP.decode()
-
-
-def test_xmp_colour_space_follows_a_conversion() -> None:
-    dates = b' xmp:ModifyDate="' + STAMP + b'" xmp:MetadataDate="' + STAMP + b'"'
-    source = (
-        b'<rdf:Description exif:ColorSpace="65535" photoshop:ICCProfile="Adobe RGB (1998)"'
-        + dates
-        + b"/>"
+def test_xmp_dates_are_added_to_first_description_only() -> None:
+    root = ElementTree.fromstring(
+        xmp_for_output(
+            packet("<rdf:Description/><rdf:Description/>"),
+            size=(1, 1),
+            color=None,
+            modified=MODIFIED,
+        )
     )
+    assert root[0].get(f"{{{XMP}}}ModifyDate") == STAMP.decode()
+    assert root[0].get(f"{{{XMP}}}MetadataDate") == STAMP.decode()
+    assert not root[1].attrib
 
+
+def test_xmp_color_conversion_and_capture_comments_survive() -> None:
+    source = packet(
+        "<!--capture--><?keep fact?><rdf:Description "
+        'e:ColorSpace="65535" p:ICCProfile="Adobe RGB (1998)"/>'
+    )
     output = xmp_for_output(
         source, size=(1, 1), color=OutputColor("srgb", "sRGB & co"), modified=MODIFIED
     )
+    root = ElementTree.fromstring(output)
+    assert root[0].get(f"{{{EXIF}}}ColorSpace") == "1"
+    assert root[0].get(f"{{{PS}}}ICCProfile") == "sRGB & co"
+    assert b"<!--capture-->" in output and b"<?keep fact?>" in output
 
-    assert output == (
-        b'<rdf:Description exif:ColorSpace="1" photoshop:ICCProfile="sRGB &amp; co"' + dates + b"/>"
+
+def test_unreadable_xmp_is_carried_without_prefix_guessing() -> None:
+    source = b'<rdf:Description tiff:ImageWidth="400"/>'
+    assert xmp_for_output(source, size=(8, 4), color=None, modified=MODIFIED) == source
+
+
+def test_exif_shared_date_payload_keeps_capture_date() -> None:
+    # Modification and capture entries deliberately point at the same source payload.
+    header = b"II*\x00" + struct.pack("<I", 8)
+    ifd0 = (
+        struct.pack("<H", 2)
+        + struct.pack("<HHII", 0x0132, 2, 20, 68)
+        + struct.pack("<HHII", EXIF_IFD, 4, 1, 38)
+        + bytes(4)
     )
-    assert xmp_for_output(source, size=(1, 1), color=None, modified=MODIFIED) == source
+    exif_ifd = (
+        struct.pack("<H", 2)
+        + struct.pack("<HHII", 0x9003, 2, 20, 68)
+        + struct.pack("<HHII", 0xA002, 4, 1, 400)
+        + bytes(4)
+    )
+    source = header + ifd0 + exif_ifd + b"2020:01:02 03:04:05\x00"
+    output = read_exif(exif_for_output(source, size=(8, 4), color=None, modified=MODIFIED))
+    assert output[0x0132] == "2026:10:05 21:30:15"
+    assert output.get_ifd(EXIF_IFD)[0x9003] == "2020:01:02 03:04:05"
+    assert output.get_ifd(EXIF_IFD)[0xA002] == 8
+
+
+def test_exif_bad_modification_pointer_does_not_discard_dimensions() -> None:
+    header = b"II*\x00" + struct.pack("<I", 8)
+    ifd0 = (
+        struct.pack("<H", 2)
+        + struct.pack("<HHII", 0x0132, 2, 20, 9999)
+        + struct.pack("<HHII", 0x0100, 4, 1, 400)
+        + bytes(4)
+    )
+    output = read_exif(exif_for_output(header + ifd0, size=(8, 4), color=None, modified=MODIFIED))
+    assert output[0x0100] == 8
+    assert output[0x0132] == "2026:10:05 21:30:15"
+
+
+def test_exif_known_scalars_are_corrected_without_rewriting_unknown_entries() -> None:
+    header = b"II*\x00" + struct.pack("<I", 8)
+    ifd0 = (
+        struct.pack("<H", 2)
+        + struct.pack("<HHII", 0x0100, 2, 2, 0x0039)
+        + struct.pack("<HHII", EXIF_IFD, 4, 1, 38)
+        + bytes(4)
+    )
+    exif_ifd = (
+        struct.pack("<H", 3)
+        + struct.pack("<HHII", 0xA002, 3, 2, 0x00040003)
+        + struct.pack("<HHII", 0xA001, 2, 2, 0x0039)
+        + struct.pack("<HHII", 0xC001, 2, 2, 0x0078)
+        + bytes(4)
+    )
+    output_bytes = exif_for_output(
+        header + ifd0 + exif_ifd,
+        size=(8, 4),
+        color=OutputColor("srgb", "sRGB"),
+        modified=MODIFIED,
+    )
+    output = read_exif(output_bytes)
+    # The emitted ColorSpace field is EXIF's SHORT count=1, not just a readable number.
+    color_entry = 6 + 38 + 2 + 12
+    assert struct.unpack_from("<HI", output_bytes, color_entry + 2) == (3, 1)
+    assert output[0x0100] == 8
+    assert output.get_ifd(EXIF_IFD)[0xA002] == 8
+    assert output.get_ifd(EXIF_IFD)[0xA001] == 1
+    assert output.get_ifd(EXIF_IFD)[0xC001] == "x"
+
+
+@pytest.mark.parametrize("payload_offset", [68, 9999])
+def test_exif_bad_or_shared_output_fraction_keeps_capture_fraction(payload_offset: int) -> None:
+    header = b"II*\x00" + struct.pack("<I", 8)
+    ifd0 = struct.pack("<H", 1) + struct.pack("<HHII", EXIF_IFD, 4, 1, 26) + bytes(4)
+    exif_ifd = (
+        struct.pack("<H", 3)
+        + struct.pack("<HHII", 0x9290, 2, 7, payload_offset)
+        + struct.pack("<HHII", 0x9291, 2, 7, 68)
+        + struct.pack("<HHII", 0xA002, 4, 1, 400)
+        + bytes(4)
+    )
+    output = read_exif(
+        exif_for_output(
+            header + ifd0 + exif_ifd + b"123456\x00",
+            size=(8, 4),
+            color=None,
+            modified=MODIFIED.replace(microsecond=250000),
+        )
+    )
+    assert output.get_ifd(EXIF_IFD)[0x9290] == "250000"
+    assert output.get_ifd(EXIF_IFD)[0x9291] == "123456"
+    assert output.get_ifd(EXIF_IFD)[0xA002] == 8
+
+
+def test_xmp_inherited_rebound_prefix_and_default_rdf_namespace() -> None:
+    source = (
+        f'<RDF xmlns="{RDF}" xmlns:xmp="urn:other"><Description xmp:Value="capture"/></RDF>'
+    ).encode()
+    output = ElementTree.fromstring(
+        xmp_for_output(source, size=(8, 4), color=None, modified=MODIFIED)
+    )
+    assert output[0].get("{urn:other}Value") == "capture"
+    assert output[0].get(f"{{{XMP}}}ModifyDate") == STAMP.decode()

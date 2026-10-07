@@ -1,6 +1,7 @@
 import errno
 import os
 import re
+import xml.etree.ElementTree as ElementTree
 from io import BytesIO
 from itertools import product
 from pathlib import Path
@@ -465,7 +466,11 @@ def _profile_name(image: Image.Image) -> str:
 
 def test_kept_exif_and_xmp_carry_the_output_dimensions(tmp_path: Path) -> None:
     output = tmp_path / "out.jpg"
-    xmp = b'<rdf:Description tiff:ImageWidth="2" tiff:ImageLength="1"/>'
+    xmp = (
+        b'<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"'
+        b' xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:ImageWidth="2"'
+        b' tiff:ImageLength="1"/>'
+    )
 
     save_output_image(
         Image.new("RGB", (8, 4), "white"),
@@ -484,9 +489,9 @@ def test_kept_exif_and_xmp_carry_the_output_dimensions(tmp_path: Path) -> None:
         exif_ifd = saved.getexif().get_ifd(0x8769)
         assert (exif_ifd[0xA002], exif_ifd[0xA003]) == (8, 4)
         assert exif_ifd[0x9003] == "2020:01:02 03:04:05"
-        assert saved.info["xmp"].startswith(
-            b'<rdf:Description tiff:ImageWidth="8" tiff:ImageLength="4"'
-        )
+        description = ElementTree.fromstring(saved.info["xmp"])
+        assert description.get("{http://ns.adobe.com/tiff/1.0/}ImageWidth") == "8"
+        assert description.get("{http://ns.adobe.com/tiff/1.0/}ImageLength") == "4"
 
 
 def test_kept_metadata_dates_are_one_local_moment(
@@ -505,7 +510,11 @@ def test_kept_metadata_dates_are_one_local_moment(
             return _LocalMoment(2026, 10, 5, 21, 30, 15, 250000, timezone(timedelta(hours=9)))
 
     monkeypatch.setattr("pixelup.imaging.datetime", _Clock)
-    xmp = b'<rdf:Description xmp:ModifyDate="2021-01-01T00:00:00Z"/>'
+    xmp = (
+        b'<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"'
+        b' xmlns:xmp="http://ns.adobe.com/xap/1.0/"'
+        b' xmp:ModifyDate="2021-01-01T00:00:00Z"/>'
+    )
 
     saved = _save_png(
         tmp_path,
@@ -517,10 +526,9 @@ def test_kept_metadata_dates_are_one_local_moment(
     assert exif.get_ifd(0x8769)[0x9010] == "+09:00"
     assert exif.get_ifd(0x8769)[0x9003] == "2020:01:02 03:04:05"
     stamp = b"2026-10-05T21:30:15+09:00"
-    assert saved.info["xmp"] == (
-        b'<rdf:Description xmp:ModifyDate="' + stamp + b'"'
-        b' xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:MetadataDate="' + stamp + b'"/>'
-    )
+    description = ElementTree.fromstring(saved.info["xmp"])
+    assert description.get("{http://ns.adobe.com/xap/1.0/}ModifyDate") == stamp.decode()
+    assert description.get("{http://ns.adobe.com/xap/1.0/}MetadataDate") == stamp.decode()
 
 
 def test_untagged_adobe_rgb_source_is_labelled_adobe_rgb(tmp_path: Path) -> None:
@@ -596,8 +604,7 @@ CMYK_PROFILE = _profile_for(
             + b"".join(pack(">i", v) for v in (65536, 0, 0, 0, 65536, 0, 0, 0, 65536))
             + _LUT_TABLE * 4
             + b"".join(
-                bytes((255 - 255 * max(corner), 128, 128))
-                for corner in product((0, 1), repeat=4)
+                bytes((255 - 255 * max(corner), 128, 128)) for corner in product((0, 1), repeat=4)
             )
             + _LUT_TABLE * 3,
         ),
