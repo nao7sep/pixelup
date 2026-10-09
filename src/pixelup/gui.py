@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import sys
@@ -14,6 +15,7 @@ from typing import Literal
 from PySide6.QtCore import (
     QEvent,
     QLocale,
+    QObject,
     QSize,
     Qt,
     QTimer,
@@ -31,6 +33,7 @@ from PySide6.QtGui import (
     QDropEvent,
     QGuiApplication,
     QIcon,
+    QImage,
     QKeySequence,
     QPixmap,
     QResizeEvent,
@@ -311,25 +314,63 @@ def _fit_columns(widget: QWidget, *samples: str) -> int:
     return max(metrics.horizontalAdvance(text) for text in samples) + _CELL_PADDING
 
 
+class _Loaded(QObject):
+    """Carries a result from a background thread to the window thread: a signal
+    emitted on a plain thread is queued to this object's thread, the GUI's."""
+
+    ready = Signal(int, object)
+
+
 class ImagePreview(QLabel):
+    """The selected image, decoded on a background thread.
+
+    Only a change of image starts a decode, so job events that re-select the same
+    image never read the file again; a decode that finishes after another image was
+    selected is dropped.
+    """
+
     def __init__(self) -> None:
         super().__init__()
         localize(self, text="preview.none")
         self._pixmap: QPixmap | None = None
+        self._path: Path | None = None
+        self._request = 0
+        self._loaded = _Loaded(self)
+        self._loaded.ready.connect(self._show_loaded)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # A 320x240 (4:3 QVGA) floor keeps the preview genuinely useful: a
         # scaled-down image is still large enough to judge upscale quality,
         # unlike the previous 160x120 which crushed to a thumbnail.
         self.setMinimumSize(320, 240)
 
+    @property
+    def loading(self) -> bool:
+        return self._request != 0
+
     def set_image(self, path: Path | None) -> None:
+        if path == self._path:
+            return
+        self._path = path
+        self._pixmap = None
         if path is None:
-            self._pixmap = None
+            self._request = 0
             self.clear()
             localize(self, text="preview.none")
             return
-        pixmap = QPixmap(str(path))
-        self._pixmap = pixmap if not pixmap.isNull() else None
+        self._request = next(_preview_requests)
+        request = self._request
+        threading.Thread(
+            target=lambda: self._loaded.ready.emit(request, QImage(str(path))),
+            name="pixelup-preview",
+            daemon=True,
+        ).start()
+
+    @Slot(int, object)
+    def _show_loaded(self, request: int, image: QImage) -> None:
+        if request != self._request:
+            return
+        self._request = 0
+        self._pixmap = None if image.isNull() else QPixmap.fromImage(image)
         if self._pixmap is None:
             self.clear()
             localize(self, text="preview.unavailable")
@@ -378,6 +419,9 @@ class MainWindow(QMainWindow):
         self._config_quarantined_to = load_result.quarantined_to
         self._config_newer_format = load_result.file.newer_format
         self._config_rejected = load_result.rejected
+        self._opens_pending = 0
+        self._open_results = _Loaded(self)
+        self._open_results.ready.connect(self._apply_opened)
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. The blank
         # built-in resolves to the system UI font. setFont propagates app-wide, so
@@ -733,42 +777,50 @@ class MainWindow(QMainWindow):
         )
 
     def open_paths(self, paths: list[Path]) -> None:
+        """Offer ``paths`` as images. The filesystem checks and the header read run on
+        a background thread, so a slow or stalled volume never freezes the window;
+        the results are applied here, in the order the offer listed them."""
         log.info("open.requested", paths=[str(path) for path in paths])
+        if not paths:
+            return
+        request = next(_open_requests)
+        self._opens_pending += 1
+        threading.Thread(
+            target=lambda: self._open_results.ready.emit(request, _probe_open_paths(paths)),
+            name="pixelup-open",
+            daemon=True,
+        ).start()
+
+    @property
+    def opening(self) -> bool:
+        """Whether an offer of images is still being checked."""
+        return self._opens_pending > 0
+
+    @Slot(int, object)
+    def _apply_opened(self, _request: int, probes: list[_OpenProbe]) -> None:
+        self._opens_pending -= 1
+        if self._closing:
+            return
         selected: Path | None = None
         added: list[Path] = []
         duplicates: list[Path] = []
         rejected: list[tuple[Path, Message, bool]] = []
-        for path in paths:
-            try:
-                input_path = absolute_user_path(path)
-                resolved = input_path.resolve()
-                if resolved.is_dir():
-                    log.warning("open.ignored_directory", path=str(path), resolved=str(resolved))
-                    rejected.append((input_path, Message("images.reasonFolder"), False))
-                    continue
-                if not resolved.is_file():
-                    log.warning("open.ignored_non_file", path=str(path), resolved=str(resolved))
-                    rejected.append((input_path, Message("images.reasonUnavailable"), False))
-                    continue
-                image_size = _safe_image_size(resolved)
-                if image_size is None:
-                    log.warning("open.ignored_non_image", path=str(path), resolved=str(resolved))
-                    rejected.append((input_path, Message("images.reasonNotImage"), False))
-                    continue
-                if input_path not in self._images_by_path:
-                    entry = ImageEntry(input_path, image_size)
-                    self._images_by_path[input_path] = entry
-                    self._image_order.append(input_path)
-                    self._add_image_row(entry)
-                    log.info("image.added", input=str(input_path), size=entry.input_size)
-                    added.append(input_path)
-                else:
-                    log.info("image.focused_existing", input=str(input_path))
-                    duplicates.append(input_path)
-                selected = input_path
-            except Exception:  # noqa: BLE001 - one bad offer must not escape the UI event loop.
-                log.exception("open.failed", path=str(path))
-                rejected.append((path, Message("images.reasonUnreadable"), True))
+        for probe in probes:
+            if probe.rejected is not None:
+                rejected.append((probe.input_path, probe.rejected, probe.failed))
+                continue
+            input_path = probe.input_path
+            if input_path not in self._images_by_path:
+                entry = ImageEntry(input_path, probe.size)
+                self._images_by_path[input_path] = entry
+                self._image_order.append(input_path)
+                self._add_image_row(entry)
+                log.info("image.added", input=str(input_path), size=entry.input_size)
+                added.append(input_path)
+            else:
+                log.info("image.focused_existing", input=str(input_path))
+                duplicates.append(input_path)
+            selected = input_path
         if selected is not None:
             self._select_image(selected)
         self._update_action_buttons()
@@ -2062,6 +2114,53 @@ def _form_label(key: str) -> QLabel:
 
 def _already_open(paths: list[Path]) -> Message:
     return Message.of("images.alreadyOpen", names=tuple(path.name for path in paths))
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenProbe:
+    """What the filesystem said about one offered path."""
+
+    input_path: Path
+    size: tuple[int, int] | None = None
+    rejected: Message | None = None
+    failed: bool = False
+
+
+def _probe_open_paths(paths: list[Path]) -> list[_OpenProbe]:
+    """Check each offered path on the calling thread (a background one): folders,
+    missing files and files that are not readable images are rejected with the
+    reason the window shows."""
+    probes: list[_OpenProbe] = []
+    for path in paths:
+        try:
+            input_path = absolute_user_path(path)
+            resolved = input_path.resolve()
+            if resolved.is_dir():
+                log.warning("open.ignored_directory", path=str(path), resolved=str(resolved))
+                probes.append(_OpenProbe(input_path, rejected=Message("images.reasonFolder")))
+                continue
+            if not resolved.is_file():
+                log.warning("open.ignored_non_file", path=str(path), resolved=str(resolved))
+                probes.append(
+                    _OpenProbe(input_path, rejected=Message("images.reasonUnavailable"))
+                )
+                continue
+            image_size = _safe_image_size(resolved)
+            if image_size is None:
+                log.warning("open.ignored_non_image", path=str(path), resolved=str(resolved))
+                probes.append(_OpenProbe(input_path, rejected=Message("images.reasonNotImage")))
+                continue
+            probes.append(_OpenProbe(input_path, size=image_size))
+        except Exception:  # noqa: BLE001 - one bad offer must not escape the probe.
+            log.exception("open.failed", path=str(path))
+            probes.append(
+                _OpenProbe(path, rejected=Message("images.reasonUnreadable"), failed=True)
+            )
+    return probes
+
+
+_open_requests = itertools.count(1)
+_preview_requests = itertools.count(1)
 
 
 def _safe_image_size(path: Path) -> tuple[int, int] | None:

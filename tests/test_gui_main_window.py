@@ -51,6 +51,32 @@ FAILED = Message("jobs.failedFallback")
 DISK_WARNING = Message.of("warning.extensionMismatch", extension="png", format="jpg")
 
 
+
+def _settle_opens(window) -> None:
+    import time as _time
+
+    from PySide6.QtWidgets import QApplication as _QApplication
+
+    deadline = _time.monotonic() + 10
+    while window.opening or window.preview.loading:
+        assert _time.monotonic() < deadline, "opening images did not finish"
+        _QApplication.processEvents()
+        _time.sleep(0.005)
+
+def _open(window, paths) -> None:
+    """Offer ``paths`` and wait until the window has checked and applied them, and
+    any preview they selected has loaded."""
+    import time as _time
+
+    from PySide6.QtWidgets import QApplication as _QApplication
+
+    window.open_paths(paths)
+    deadline = _time.monotonic() + 10
+    while window.opening or window.preview.loading:
+        assert _time.monotonic() < deadline, "opening images did not finish"
+        _QApplication.processEvents()
+        _time.sleep(0.005)
+
 def _png(tmp_path: Path, name: str, size: tuple[int, int] = (8, 6)) -> Path:
     path = tmp_path / name
     Image.new("RGB", size, "white").save(path)
@@ -187,6 +213,7 @@ def test_build_app_wires_application_and_opens_argv_paths(
         assert window.windowTitle() == "PixelUp"
         assert window.runtime_dirs is runtime_dirs
         # The image path on the command line was opened into the window.
+        _settle_opens(window)
         assert window.image_table.rowCount() == 1
         assert window._selected_path() == image.resolve()
     finally:
@@ -241,13 +268,13 @@ def test_open_paths_adds_unique_rows_and_focuses_existing(make_window, tmp_path:
     first = _png(tmp_path, "a.png")
     second = _png(tmp_path, "b.png")
 
-    window.open_paths([first, second])
+    _open(window, [first, second])
     assert window.image_table.rowCount() == 2
     assert window.image_table.empty_state_visible is False
     assert window._selected_path() == second.resolve()
 
     # Re-opening an existing path does not duplicate it; it focuses the row.
-    window.open_paths([first])
+    _open(window, [first])
     assert window.image_table.rowCount() == 2
     assert window._selected_path() == first.resolve()
 
@@ -264,7 +291,7 @@ def test_open_paths_preserves_literal_symlink_for_display_and_default_output(
     chosen = chosen_dir / "dropped-link.png"
     chosen.symlink_to(target)
 
-    window.open_paths([chosen])
+    _open(window, [chosen])
 
     assert window._selected_path() == chosen
     assert window.image_table.item(0, 0).text() == "dropped-link.png"
@@ -322,6 +349,7 @@ def test_external_drop_accepts_local_files_and_rejects_remote_urls(
     assert window.image_table.property("dropActive") is True
     window.image_table.dropEvent(local_drop)  # type: ignore[arg-type]
     assert local_drop.accepted is True
+    _settle_opens(window)
     assert window._selected_path() == local
     assert window.image_table.rowCount() == 1
     assert window.image_table.property("dropActive") is False
@@ -354,14 +382,14 @@ def test_open_duplicate_is_information_and_unrelated_success_does_not_clear_it(
     first = _png(tmp_path, "first.png")
     second = _png(tmp_path, "second.png")
 
-    window.open_paths([first])
+    _open(window, [first])
     assert window.open_result.isHidden()
 
-    window.open_paths([first])
+    _open(window, [first])
     assert window.open_result.message_label.text() == "Already open: first.png."
     assert window.open_result.isVisibleTo(window)
 
-    window.open_paths([second])
+    _open(window, [second])
     assert window.open_result.message_label.text() == "Already open: first.png."
 
     window.open_result.dismiss_button.click()
@@ -373,12 +401,12 @@ def test_exact_corrected_open_clears_the_previous_rejection(make_window, tmp_pat
     broken = tmp_path / "repair.png"
     broken.write_text("not an image", encoding="utf-8")
 
-    window.open_paths([broken])
+    _open(window, [broken])
     assert "not a readable supported image" in window.open_result.message_label.text()
 
     _png(tmp_path, "repair.png")
     another = _png(tmp_path, "another.png")
-    window.open_paths([broken, another])
+    _open(window, [broken, another])
 
     assert window.image_table.rowCount() == 2
     assert window.open_result.isHidden()
@@ -396,7 +424,7 @@ def test_unexpected_open_failure_uses_error_presentation(
         raise OSError(diagnostic_sentinel)
 
     monkeypatch.setattr("pixelup.gui.absolute_user_path", fail_path)
-    window.open_paths([image])
+    _open(window, [image])
 
     assert "could not be read" in window.open_result.message_label.text()
     assert diagnostic_sentinel not in window.open_result.message_label.text()
@@ -417,7 +445,7 @@ def test_queue_preconditions_stay_with_the_queue_actions_and_clear_on_correction
     )
 
     image = _png(tmp_path, "queue.png")
-    window.open_paths([image])
+    _open(window, [image])
     assert window.queue_action_result.isHidden()
 
     window._enqueue_jobs([image], [])
@@ -433,7 +461,7 @@ def test_image_in_use_failure_stays_with_remove_and_clears_when_work_finishes(
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "busy.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
 
@@ -483,7 +511,7 @@ def test_open_paths_ignores_non_files(make_window, tmp_path: Path) -> None:
     window = make_window()
     real = _png(tmp_path, "a.png")
 
-    window.open_paths([tmp_path / "missing.png", real, tmp_path])
+    _open(window, [tmp_path / "missing.png", real, tmp_path])
 
     assert window.image_table.rowCount() == 1
     assert window._selected_path() == real.resolve()
@@ -494,7 +522,7 @@ def test_queue_selected_image_creates_rows_and_summary(make_window, tmp_path: Pa
     assert window.queue_table.empty_state_visible is True
     assert window.queue_table.empty_text == "No jobs queued yet."
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window.model_checks["RealESRGAN_x4plus"].setChecked(True)
 
@@ -510,7 +538,7 @@ def test_queue_selected_image_creates_rows_and_summary(make_window, tmp_path: Pa
 def test_job_finished_maps_outcomes_and_updates_summary(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
     job = window.jobs[0]
@@ -538,7 +566,7 @@ def test_job_finished_recomputes_only_its_own_images_summary(
     window = make_window()
     image_a = _png(tmp_path, "a.png")
     image_b = _png(tmp_path, "b.png")
-    window.open_paths([image_a, image_b])
+    _open(window, [image_a, image_b])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_all_images_selected_models()
     assert len(window.jobs) == 2
@@ -564,7 +592,7 @@ def test_job_finished_recomputes_only_its_own_images_summary(
 def test_find_job_uses_the_id_index_and_rejects_an_unknown_id(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
     job = window.jobs[0]
@@ -581,7 +609,7 @@ def test_failed_jobs_keep_a_queue_local_accessible_summary_until_retry(
     monkeypatch.setattr("pixelup.gui.announce_accessible_alert", announced.append)
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window.model_checks["RealESRGAN_x4plus"].setChecked(True)
     window._queue_selected_image()
@@ -715,7 +743,7 @@ def test_saved_font_change_refreshes_live_layout_metrics(
 def test_remove_is_blocked_while_jobs_active_then_allowed(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
 
@@ -734,7 +762,7 @@ def test_remove_is_blocked_while_jobs_active_then_allowed(make_window, tmp_path:
 def test_retry_failed_requeues_jobs(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
     job = window.jobs[0]
@@ -752,7 +780,7 @@ def test_retry_failed_requeues_jobs(make_window, tmp_path: Path) -> None:
 def test_cancel_queue_marks_pending_and_signals_running(make_window, tmp_path: Path) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window.model_checks["RealESRGAN_x4plus"].setChecked(True)
     window._queue_selected_image()
@@ -773,7 +801,7 @@ def test_action_buttons_reflect_state(make_window, tmp_path: Path) -> None:
     assert window.queue_all_selected_models_button.isEnabled() is False
     assert window.queue_all_all_models_button.isEnabled() is False
 
-    window.open_paths([_png(tmp_path, "a.png")])
+    _open(window, [_png(tmp_path, "a.png")])
     # Image present, no model checked: only the all-models actions are usable.
     assert window.queue_selected_button.isEnabled() is False
     assert window.queue_all_selected_models_button.isEnabled() is False
@@ -838,7 +866,7 @@ def test_coming_to_the_front_finds_a_model_file_placed_by_hand(
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     path = model_file(window.runtime_dirs.models_dir, "realesr-general-x4v3")
     content = path.read_bytes()
@@ -874,7 +902,7 @@ def test_missing_models_cancel_before_queue_materialization(
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     for name in ("realesr-general-x4v3", "realesr-general-wdn-x4v3"):
         model_file(window.runtime_dirs.models_dir, name).unlink()
@@ -901,7 +929,7 @@ def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     required = ("realesr-general-x4v3", "realesr-general-wdn-x4v3")
     for name in required:
@@ -931,7 +959,7 @@ def test_install_and_queue_survives_closing_its_presentation(
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     required = ("realesr-general-x4v3", "realesr-general-wdn-x4v3")
     for name in required:
@@ -979,7 +1007,7 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     required = ("realesr-general-x4v3", "realesr-general-wdn-x4v3")
     for name in required:
@@ -1029,7 +1057,7 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["RealESRGAN_x4plus"].setChecked(True)
     window._queue_selected_image()
     job = window.jobs[0]
@@ -1340,7 +1368,7 @@ def test_a_user_quit_waits_for_running_work_only_until_the_bound(
 ) -> None:
     window = make_window()
     image = _png(tmp_path, "a.png")
-    window.open_paths([image])
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
     window.jobs[0].status = "running"
@@ -1398,7 +1426,7 @@ def test_an_os_session_end_never_asks_and_logs_the_failed_save(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     window = make_window()
-    window.open_paths([_png(tmp_path, "a.png")])
+    _open(window, [_png(tmp_path, "a.png")])
     window.quality.setValue(10)
     bounded_before_save: list[bool] = []
 
@@ -1470,7 +1498,7 @@ def test_close_claim_precedes_the_confirmation_and_os_can_take_it_over(
     make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quit_bound
 ) -> None:
     window = make_window()
-    window.open_paths([_png(tmp_path, "a.png")])
+    _open(window, [_png(tmp_path, "a.png")])
     confirmations: list[bool] = []
     shutdown = False
     monkeypatch.setattr(window, "_is_session_shutdown", lambda: shutdown)
@@ -1749,7 +1777,7 @@ def test_queued_jobs_keep_their_snapshot_when_the_panel_changes(
     # captures the panel at creation and holds that snapshot, so editing the panel
     # afterwards changes the next job, never the queued one.
     window = make_window()
-    window.open_paths([_png(tmp_path, "a.png")])
+    _open(window, [_png(tmp_path, "a.png")])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window.tile.setCurrentIndex(window.tile.findData(128))
     window._queue_selected_image()
@@ -1772,7 +1800,7 @@ def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_pat
     # had when the user pressed Queue, in its settings, its planned output name, and
     # the row the queue table shows.
     window = make_window()
-    window.open_paths([_png(tmp_path, "a.png")])
+    _open(window, [_png(tmp_path, "a.png")])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window.scale_buttons[2].click()
     window._queue_selected_image()
@@ -2013,3 +2041,54 @@ def test_every_stored_settings_set_has_a_name_for_the_rejected_notice() -> None:
     from pixelup import app_config
 
     assert set(gui._SET_LABELS) == set(app_config._SET_DECODERS)
+
+
+def test_opening_images_never_waits_on_the_volume(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    window = make_window()
+    image = _png(tmp_path, "slow.png")
+    entered = threading.Event()
+    release = threading.Event()
+    real_size = gui._safe_image_size
+
+    def stalled_size(path: Path):
+        entered.set()
+        assert release.wait(5)
+        return real_size(path)
+
+    monkeypatch.setattr(gui, "_safe_image_size", stalled_size)
+    started = time.monotonic()
+    window.open_paths([image])
+    assert time.monotonic() - started < 1
+    assert entered.wait(5)
+    assert window.opening is True
+    assert window.image_table.rowCount() == 0
+
+    release.set()
+    _settle_opens(window)
+    assert window.image_table.rowCount() == 1
+    assert window._selected_path() == image.resolve()
+
+
+def test_the_preview_reads_an_image_once_while_it_stays_selected(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    _open(window, [_png(tmp_path, "a.png")])
+    reads: list[str] = []
+    real_image = gui.QImage
+
+    def counted_image(*args):
+        reads.append(str(args[0]) if args else "")
+        return real_image(*args)
+
+    monkeypatch.setattr(gui, "QImage", counted_image)
+    for _ in range(3):
+        window._update_selected_image()
+    _settle_opens(window)
+
+    assert reads == []

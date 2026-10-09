@@ -104,6 +104,21 @@ _LITERAL_WORDS = (
 _ENGLISH_WORD = re.compile(r"[A-Za-z]{3,}")
 
 
+
+def _open(window, paths) -> None:
+    """Offer ``paths`` and wait until the window has checked and applied them, and
+    any preview they selected has loaded."""
+    import time as _time
+
+    from PySide6.QtWidgets import QApplication as _QApplication
+
+    window.open_paths(paths)
+    deadline = _time.monotonic() + 10
+    while window.opening or window.preview.loading:
+        assert _time.monotonic() < deadline, "opening images did not finish"
+        _QApplication.processEvents()
+        _time.sleep(0.005)
+
 def _png(directory: Path, name: str) -> Path:
     path = directory / name
     Image.new("RGB", (8, 6), "white").save(path)
@@ -141,7 +156,7 @@ def _populate(main: MainWindow, directory: Path) -> None:
     images = [_png(directory, name) for name in ("a.png", "b.png")]
     folder = directory / "d"
     folder.mkdir()
-    main.open_paths([*images, folder])
+    _open(main, [*images, folder])
     for model in UPSCALE_MODELS[1:3]:
         main.model_checks[model].setChecked(True)
     main._queue_all_images_selected_models()
