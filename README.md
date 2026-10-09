@@ -9,7 +9,7 @@ Prebuilt builds for **macOS (Apple Silicon)** and **Windows (x64)** are on the [
 - **macOS** — right-click the app and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/PixelUp.app`).
 - **Windows** — on the SmartScreen prompt, click **More info → Run anyway**.
 
-Managed models shows which pinned model files are ready and installs or repairs only what you choose; every download is verified against its pinned SHA-256 before it replaces the cache. A queue action that needs missing files discloses the exact download first and creates no jobs until installation succeeds. Allow roughly 3–67 MB of network and disk use for an upscaler model, with a small additional denoise companion for the general model. You can also place the `.pth` files in the models directory yourself.
+Managed models shows which pinned model files are ready and installs or repairs only what you choose; every download is verified against its pinned SHA-256 before it replaces the cache. A queue action that needs missing files discloses the exact download first and creates no jobs until installation succeeds. You can close the download dialog and queue more images while installation continues; each request keeps the parameters you chose for it. Allow roughly 3–67 MB of network and disk use for an upscaler model, with a small additional denoise companion for the general model. You can also place the `.pth` files in the models directory yourself.
 
 ## Features
 
@@ -19,6 +19,12 @@ Managed models shows which pinned model files are ready and installs or repairs 
 - Per-image job summaries, a selected-image preview, and retry/cancel of jobs
 - Remembers the main window position and size between launches
 - Speaks English, Japanese, Chinese, Korean, Spanish, Portuguese, French, German, Italian, and Russian, following the computer's language unless you choose one in Settings
+
+## Settings and results
+
+Parameter edits save automatically. Settings changes save when you press OK; cancelling asks before discarding edits. If a saved setting cannot be used, PixelUp names it at startup and uses its default while preserving the saved value until you change that setting. Close PixelUp before editing its settings file by hand.
+
+Outputs never replace existing files. Each completed image has a JSON sidecar describing its processing settings. A forced quit can leave a completed image without its sidecar. Use Records to inspect warnings and errors from the session.
 
 ## Requirements
 

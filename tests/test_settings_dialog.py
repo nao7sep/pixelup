@@ -350,7 +350,7 @@ def test_discard_confirmation_focuses_keep_editing_and_puts_discard_last(
         assert keep.isDefault()
         assert confirm.focusWidget() is keep
         assert discard.property("role") == "danger-confirm"
-        assert confirm.windowTitle() == "Unsaved changes"
+        assert confirm.windowTitle() == "Discard changes?"
         QTest.keyClick(confirm, Qt.Key.Key_Escape)
         assert confirm.result() == int(QDialog.DialogCode.Rejected)
     finally:
