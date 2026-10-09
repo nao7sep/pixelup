@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from pixelup.backup_store import STORE_FILE_NAME, close_backup_store, record
+from pixelup.backup_store import STORE_FILE_NAME, close_backup_store, drain_backups, record
 
 # How long a test waits on its own threads before it fails instead of hanging.
 _THREAD_WAIT_S = 10
@@ -39,35 +39,27 @@ class _FailInsertConnection:
         return getattr(self._real, name)
 
 
-class _RecordingConnection:
-    def __init__(self, real: sqlite3.Connection, statements: list[str]) -> None:
-        self._real = real
-        self._statements = statements
-
-    def execute(self, sql: str, *rest: Any) -> Any:
-        self._statements.append(sql.strip())
-        return self._real.execute(sql, *rest)
-
-    def executescript(self, sql: str) -> Any:
-        return self._real.executescript(sql)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._real, name)
-
-
-def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session: str = "session-1") -> Path:
     """Redirect PIXELUP_DATA_DIR to a throwaway root and return the resolved root.
 
-    The autouse conftest fixture closes the store singleton after each test, so it
-    re-opens under this root; belt-and-suspenders, close it here too before the
-    first record so we never inherit a prior test's open handle.
+    The autouse conftest fixture closes the store after each test, so it re-opens
+    under this root; belt-and-suspenders, close it here too before the first record
+    so we never inherit a prior test's open handle. The session is pinned so a test
+    can start a new launch with :func:`_relaunch`.
     """
     root = tmp_path / "home"
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
     close_backup_store()
+    monkeypatch.setattr("pixelup.backup_store.current_session", lambda: session)
     from pixelup.config import resolve_state_dir
 
     return resolve_state_dir()
+
+
+def _relaunch(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
+    """End this launch's recorder and start the next one under ``session``."""
+    close_backup_store()
+    monkeypatch.setattr("pixelup.backup_store.current_session", lambda: session)
 
 
 def _store_path(home: Path) -> Path:
@@ -84,7 +76,7 @@ def _rows(home: Path, path: Path) -> list[tuple]:
     connection = sqlite3.connect(_store_path(home))
     try:
         return connection.execute(
-            "SELECT path, content, content_sha256, byte_size, written_at_utc"
+            "SELECT path, content, content_sha256, byte_size, written_at_utc, session_id"
             " FROM backups WHERE path = ? ORDER BY id",
             (str(path),),
         ).fetchall()
@@ -115,12 +107,11 @@ def test_content_blob_is_byte_identical_including_crlf_and_non_utf8(
 
     rows = _rows(home, target)
     assert len(rows) == 1
-    stored_path, content, digest, byte_size, written_at = rows[0]
+    stored_path, content, digest, byte_size, written_at, session = rows[0]
     assert stored_path == str(target)  # full absolute path, one representation
-    # sqlite returns a BLOB as bytes; it must equal the input byte-for-byte.
     assert bytes(content) == payload
     assert byte_size == len(payload)
-    # sha256 is over the raw bytes, lowercase hex.
+    assert session == "session-1"
     import hashlib
 
     assert digest == hashlib.sha256(payload).hexdigest()
@@ -134,60 +125,102 @@ def test_written_at_utc_is_serialized_iso_ms_not_the_filename_stamp(
 
     record(target, b"{}\n")
 
-    (_, _, _, _, written_at) = _rows(home, target)[0]
-    # Serialized ISO-8601 UTC with milliseconds and a trailing Z, e.g.
-    # 2026-07-06T04:05:12.345Z — the timestamp-conventions' data form.
+    written_at = _rows(home, target)[0][4]
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", written_at)
-    # And explicitly NOT the yyyymmdd-hhmmss-fff-utc filename stamp.
-    assert not re.fullmatch(r"\d{8}-\d{6}-\d{3}-utc", written_at)
     assert "-utc" not in written_at
 
 
-def test_dedup_skips_an_unchanged_re_save(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _home(tmp_path, monkeypatch)
-    target = home / "config.json"
-    payload = b'{"quality": 95}\n'
-
-    record(target, payload)
-    record(target, payload)  # identical bytes -> no new row
-
-    assert len(_rows(home, target)) == 1
-
-
-def test_a_changed_save_inserts_a_new_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_one_session_keeps_one_row_per_file_with_its_last_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
 
     record(target, b'{"quality": 95}\n')
-    record(target, b'{"quality": 80}\n')  # genuinely different -> new row
+    record(target, b'{"quality": 80}\n')
+    record(target, b'{"quality": 70}\n')
 
     rows = _rows(home, target)
-    assert len(rows) == 2
-    assert bytes(rows[0][1]) == b'{"quality": 95}\n'
-    assert bytes(rows[1][1]) == b'{"quality": 80}\n'
+    assert [bytes(row[1]) for row in rows] == [b'{"quality": 70}\n']
 
 
-def test_latest_check_and_insert_are_one_immediate_transaction(
+def test_each_session_keeps_its_own_row_and_never_changes_earlier_ones(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _home(tmp_path, monkeypatch)
-    statements: list[str] = []
-    real_connect = sqlite3.connect
-    monkeypatch.setattr(
-        sqlite3,
-        "connect",
-        lambda *args, **kwargs: _RecordingConnection(real_connect(*args, **kwargs), statements),
-    )
+    target = home / "config.json"
+    record(target, b"first launch\n")
+    _relaunch(monkeypatch, "session-2")
+    record(target, b"second launch\n")
+    record(target, b"second launch, later\n")
 
-    record(home / "config.json", b"{}\n")
-
-    transaction = next(i for i, sql in enumerate(statements) if sql == "BEGIN IMMEDIATE")
-    latest = next(i for i, sql in enumerate(statements) if sql.startswith("SELECT content_sha256"))
-    insert = next(i for i, sql in enumerate(statements) if sql.startswith("INSERT INTO backups"))
-    assert transaction < latest < insert
+    rows = _rows(home, target)
+    assert [(bytes(row[1]), row[5]) for row in rows] == [
+        (b"first launch\n", "session-1"),
+        (b"second launch, later\n", "session-2"),
+    ]
 
 
-def test_concurrent_in_process_records_share_one_connection_safely(
+def test_a_first_save_equal_to_the_latest_earlier_row_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    record(target, b"unchanged\n")
+    _relaunch(monkeypatch, "session-2")
+    record(target, b"unchanged\n")
+
+    assert [row[5] for row in _rows(home, target)] == ["session-1"]
+
+
+def test_the_session_row_follows_a_revert_within_the_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    record(target, b"original\n")
+    _relaunch(monkeypatch, "session-2")
+    record(target, b"edited\n")
+    assert drain_backups(_THREAD_WAIT_S)  # landed before the revert is saved
+    record(target, b"original\n")  # back to the earlier session's content
+
+    rows = _rows(home, target)
+    assert [(bytes(row[1]), row[5]) for row in rows] == [
+        (b"original\n", "session-1"),
+        (b"original\n", "session-2"),
+    ]
+
+
+def test_record_returns_without_waiting_for_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The save never waits on the history: a store stuck in its write leaves
+    # record() free to return, and the write lands once the store moves again.
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    entered = threading.Event()
+    release = threading.Event()
+    real_write = __import__("pixelup.backup_store", fromlist=["_write"])._write
+
+    def blocked_write(*args: Any) -> None:
+        entered.set()
+        assert release.wait(_THREAD_WAIT_S)
+        real_write(*args)
+
+    monkeypatch.setattr("pixelup.backup_store._write", blocked_write)
+    record(target, b"first\n")
+    assert entered.wait(_THREAD_WAIT_S)
+
+    record(target, b"second\n")  # returns although the recorder is stuck
+    record(target, b"third\n")  # replaces the pending "second"
+    assert drain_backups(0.05) is False
+
+    release.set()
+    assert drain_backups(_THREAD_WAIT_S) is True
+    assert [bytes(row[1]) for row in _rows(home, target)] == [b"third\n"]
+
+
+def test_writes_from_many_threads_land_as_one_session_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _home(tmp_path, monkeypatch)
@@ -213,52 +246,71 @@ def test_concurrent_in_process_records_share_one_connection_safely(
     assert len(_rows(home, target)) == 1
 
 
-def test_a_revert_inserts_a_new_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _home(tmp_path, monkeypatch)
-    target = home / "config.json"
-    original = b'{"quality": 95}\n'
-    edited = b'{"quality": 80}\n'
-
-    record(target, original)
-    record(target, edited)
-    record(target, original)  # content returns to an earlier value
-
-    # Dedup compares only against the IMMEDIATELY preceding row, so a revert
-    # differs from `edited` and is recorded as the new version it is: 3 rows.
-    rows = _rows(home, target)
-    assert len(rows) == 3
-    assert [bytes(r[1]) for r in rows] == [original, edited, original]
-
-
-def test_two_paths_dedup_independently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_two_paths_keep_rows_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     home = _home(tmp_path, monkeypatch)
     a = home / "config.json"
     b = home / "other.json"
-    same = b"{}\n"
-
-    record(a, same)
-    record(b, same)  # same bytes, different path -> its own first row
+    record(a, b"{}\n")
+    record(b, b"{}\n")
 
     assert len(_rows(home, a)) == 1
     assert len(_rows(home, b)) == 1
     assert len(_all_rows(home)) == 2
 
 
-def test_record_is_best_effort_no_throw_one_warn_save_unaffected(
+def test_a_format_1_store_keeps_its_rows_as_earlier_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Inject a store failure at the insert: record() must catch it, log exactly one
-    # warn, and return normally — never propagate to the caller (which is a save
-    # that already succeeded on disk before record ran).
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
+    store = _store_path(home)
+    connection = sqlite3.connect(store)
+    connection.executescript(
+        """
+        CREATE TABLE backups (
+          id INTEGER PRIMARY KEY, path TEXT NOT NULL, content BLOB NOT NULL,
+          content_sha256 TEXT NOT NULL, byte_size INTEGER NOT NULL,
+          written_at_utc TEXT NOT NULL
+        );
+        CREATE INDEX idx_backups_path_id ON backups (path, id);
+        """
+    )
+    import hashlib
 
+    for content in (b"old one\n", b"old two\n"):
+        connection.execute(
+            "INSERT INTO backups (path, content, content_sha256, byte_size, written_at_utc)"
+            " VALUES (?, ?, ?, ?, '2026-01-01T00:00:00.000Z')",
+            (str(target), content, hashlib.sha256(content).hexdigest(), len(content)),
+        )
+    connection.execute("PRAGMA user_version = 1")
+    connection.commit()
+    connection.close()
+
+    record(target, b"old two\n")  # equal to the latest earlier row: nothing written
+    record(target, b"new\n")
+
+    rows = _rows(home, target)
+    assert [(bytes(row[1]), row[5]) for row in rows] == [
+        (b"old one\n", None),
+        (b"old two\n", None),
+        (b"new\n", "session-1"),
+    ]
+    assert _user_version(store) == 2
+
+
+def test_record_failure_is_one_warn_and_never_reaches_the_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
     warns: list[tuple[str, dict]] = []
     monkeypatch.setattr(
         "pixelup.backup_store.log.warning",
         lambda message, **fields: warns.append((message, fields)),
     )
-
     real_connect = sqlite3.connect
     monkeypatch.setattr(
         sqlite3,
@@ -266,25 +318,20 @@ def test_record_is_best_effort_no_throw_one_warn_save_unaffected(
         lambda *args, **kwargs: _FailInsertConnection(real_connect(*args, **kwargs)),
     )
 
-    # Must not raise.
-    record(target, b'{"quality": 95}\n')
+    record(target, b'{"quality": 95}\n')  # must not raise
+    record(target, b'{"quality": 80}\n')  # recording is off for the session
+    close_backup_store()
 
-    # Exactly one warn, naming the file and a reason.
-    assert len(warns) == 1
-    message, fields = warns[0]
-    assert message == "backup_store.record_failed"
-    assert fields["file"] == str(target)
-    assert "injected" in fields["reason"]
+    assert [message for message, _fields in warns] == ["backup_store.record_failed"]
+    assert warns[0][1]["file"] == str(target)
+    assert "injected" in warns[0][1]["reason"]
 
 
 def test_open_failure_disables_recording_with_one_warn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # If the store can't even be opened, record() logs ONE warn, disables recording
-    # for the session, and every later record() is a silent no-op (no re-warn).
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
-
     warns: list[str] = []
     monkeypatch.setattr(
         "pixelup.backup_store.log.warning",
@@ -296,8 +343,9 @@ def test_open_failure_disables_recording_with_one_warn(
         lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("no open")),
     )
 
-    record(target, b"{}\n")  # first attempt: open fails, one warn
-    record(target, b"different\n")  # second attempt: already disabled, silent
+    record(target, b"{}\n")
+    record(target, b"different\n")
+    close_backup_store()
 
     assert warns == ["backup_store.open_failed"]
 
@@ -305,16 +353,11 @@ def test_open_failure_disables_recording_with_one_warn(
 def test_store_sidecars_are_the_stores_own_wal_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The store-file filter a test uses when it inspects the throwaway root: the
-    # store is backups.sqlite3 plus its normal WAL sidecars (-wal, -shm). A test
-    # asserting the root's managed-text contents would exclude exactly this set.
     home = _home(tmp_path, monkeypatch)
     record(home / "config.json", b"{}\n")
     close_backup_store()
 
     store_files = {p.name for p in home.glob("backups.sqlite3*")}
-    # backups.sqlite3 always; -wal/-shm may or may not linger after close, but any
-    # backups.sqlite3* file present is a store artifact, never stray debris.
     assert "backups.sqlite3" in store_files
     assert store_files <= {"backups.sqlite3", "backups.sqlite3-wal", "backups.sqlite3-shm"}
 
@@ -333,10 +376,10 @@ def test_a_new_store_records_its_format_version(
     home = _home(tmp_path, monkeypatch)
     record(home / "config.json", b"{}\n")
     close_backup_store()
-    assert _user_version(_store_path(home)) == 1
+    assert _user_version(_store_path(home)) == 2
 
 
-@pytest.mark.parametrize("version", [0, 2])
+@pytest.mark.parametrize("version", [0, 3])
 def test_an_unmarked_or_newer_store_is_left_untouched_with_one_warn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: int
 ) -> None:
@@ -362,27 +405,3 @@ def test_an_unmarked_or_newer_store_is_left_untouched_with_one_warn(
     assert [message for message, _fields in warns] == ["backup_store.open_failed"]
     assert store.read_bytes() == before
     assert not store.with_name(f"{STORE_FILE_NAME}-wal").exists()
-
-
-
-def test_insert_failure_disables_later_attempts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    home = _home(tmp_path, monkeypatch)
-    real_connect = sqlite3.connect
-    attempts: list[str] = []
-
-    class FailingInsert(_FailInsertConnection):
-        def execute(self, sql: str, *rest: Any) -> Any:
-            if sql.lstrip().upper().startswith("INSERT"):
-                attempts.append(sql)
-            return super().execute(sql, *rest)
-
-    monkeypatch.setattr(
-        sqlite3, "connect", lambda *args, **kwargs: FailingInsert(real_connect(*args, **kwargs))
-    )
-    monkeypatch.setattr("pixelup.backup_store.log.warning", lambda *args, **kwargs: None)
-    record(home / "config.json", b"first")
-    record(home / "config.json", b"second")
-
-    assert len(attempts) == 1

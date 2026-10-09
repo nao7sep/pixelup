@@ -4,7 +4,9 @@
 Saved settings (``config.json``) and the records history (``records.sqlite3``) are
 durable: they survive PixelUp updates (developer decision), so a change to either
 format converts existing data with a small targeted conversion rather than
-resetting it. The output sidecar is a published format. ``window.ini`` holds only
+resetting it. The backup history keeps its existing rows across format changes too
+(data-backup-conventions), converted in place by its owner. The output sidecar is a
+published format. ``window.ini`` holds only
 disposable window state and carries no marker.
 """
 
@@ -15,7 +17,7 @@ from pathlib import Path
 
 CONFIG_FORMAT_VERSION = 1  # config.json
 RECORDS_FORMAT_VERSION = 1  # records.sqlite3
-BACKUPS_FORMAT_VERSION = 1  # backups.sqlite3
+BACKUPS_FORMAT_VERSION = 2  # backups.sqlite3 (2: one row per file per session)
 SIDECAR_FORMAT_VERSION = 1  # the .json sidecar written beside an output image
 
 

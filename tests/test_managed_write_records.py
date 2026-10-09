@@ -81,7 +81,8 @@ def test_save_app_config_records_config_json(
         save_app_config(candidate, AppConfig(), load_app_config_result(target).file)
 
     rows = _store_rows(home, target)
-    assert len(rows) == 2  # first save + the changed save; the identical one skipped
+    # One session keeps one row per file, holding its last save.
+    assert len(rows) == 1
 
 
 def test_a_failing_backup_never_breaks_the_save(

@@ -1,26 +1,27 @@
-"""The write-through data-backup store (data-backup-conventions).
+"""The data-backup history (data-backup-conventions).
 
-It owns one add-only SQLite file, ``backups.sqlite3``, directly under PixelUp's
-storage root (``PIXELUP_DATA_DIR`` or ``~/.pixelup``, resolved in one place by
-:func:`resolve_state_dir` — never a hardcoded path). Every managed *text* save
-records the exact bytes it just wrote here, strictly AFTER its atomic rename
-lands, so the history is always as current as the last save. There is no startup
-scan, no periodic pass, no restore path.
+It owns one SQLite file, ``backups.sqlite3``, directly under PixelUp's storage root
+(``PIXELUP_DATA_DIR`` or ``~/.pixelup``, resolved in one place by
+:func:`resolve_state_dir`). It keeps the last version of each protected file saved
+in each session (one process launch). PixelUp protects only ``config.json``, its one
+file the user creates through the app: models are derived and downloaded again,
+upscaled images and their sidecars are output the user owns, ``window.ini`` is
+state, and records are records. There is no startup scan, no capture at exit beyond
+draining pending writes, and no restore path; recovery is manual.
 
-SQLite binding: Python's built-in ``sqlite3`` module — no native rebuild, no
-extra dependency, and synchronous exactly like the record-after-rename hook
-wants. A ``BLOB`` round-trips through ``sqlite3.Binary``/``bytes`` byte-for-byte,
-so CR/LF, a BOM, and non-UTF-8 bytes are stored verbatim.
+SQLite binding: Python's built-in ``sqlite3`` module. A ``BLOB`` round-trips through
+``sqlite3.Binary``/``bytes`` byte-for-byte, so CR/LF, a BOM and non-UTF-8 bytes are
+stored verbatim. ``config.json`` is far below SQLite's value limit, so no
+``backup_parts`` table exists.
 
-Two absolute musts drive every line below (they are not best-effort aspirations):
+Two absolute musts drive every line below:
 
-- It never breaks a save and never crashes the app. The save has already
-  succeeded — the file is on disk before :func:`record` is called — so any
-  failure here (the DB is locked, the disk is full, an insert throws) is caught,
-  logged once at ``warn``, and swallowed. Recording then stays disabled for
-  this session.
-- It logs only failures. A successful record logs NOTHING; a line per save would
-  flood the log.
+- It never delays, breaks or fails a save. :func:`record` only hands the exact bytes
+  just written to one serial recorder thread and returns; the thread applies writes
+  in save order, keeping only the newest pending write per path. Any failure there
+  (the DB is locked, the disk is full, an insert throws) is logged once at ``warn``
+  and recording stays disabled for this session.
+- It logs only failures. A successful record logs nothing.
 """
 
 from __future__ import annotations
@@ -32,16 +33,17 @@ from pathlib import Path
 
 from pixelup.config import resolve_state_dir
 from pixelup.formats import BACKUPS_FORMAT_VERSION, open_sqlite_store
-from pixelup.session_log import log
+from pixelup.session_log import current_session, log
 from pixelup.timestamps import utc_now_iso_ms
 
 STORE_FILE_NAME = "backups.sqlite3"
 
-# The one add-only table. `content` is a BLOB of the exact bytes written — never
-# decoded text, so CR/LF, a BOM, and non-UTF-8 bytes are stored byte-identically.
-# `written_at_utc` is the serialized ISO-8601-ms form (2026-07-06T04:05:12.345Z),
-# a data value — NEVER the yyyymmdd-hhmmss-utc filename stamp. The (path, id)
-# index serves the latest-row-per-path dedup lookup.
+# The one table. `content` is a BLOB of the exact bytes written — never decoded
+# text. `session_id` is the launch's records session; rows recorded before sessions
+# (format 1) keep NULL. `written_at_utc` is the serialized ISO-8601-ms form
+# (2026-07-06T04:05:12.345Z) of the row's latest save, a data value — NEVER the
+# yyyymmdd-hhmmss-utc filename stamp. The unique (path, session_id) key owns the
+# per-session row; the (path, id) index serves the latest-row lookup.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS backups (
   id             INTEGER PRIMARY KEY,
@@ -49,18 +51,19 @@ CREATE TABLE IF NOT EXISTS backups (
   content        BLOB NOT NULL,
   content_sha256 TEXT NOT NULL,
   byte_size      INTEGER NOT NULL,
-  written_at_utc TEXT NOT NULL
+  written_at_utc TEXT NOT NULL,
+  session_id     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_backups_path_id ON backups (path, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_backups_path_session ON backups (path, session_id);
 """
 
-# Module-level singleton, resolved once. A `None` connection means recording is
-# disabled for this session because opening or recording failed — a single warn
-# was already logged; every later `record` becomes a no-op rather than retrying
-# (and re-logging) a broken open on every save.
-_connection: sqlite3.Connection | None = None
-_initialized = False
-_record_gate = threading.Lock()
+# Format 1 had one row per distinct save and no session. Its rows stay as earlier
+# history (session_id NULL); the column and the per-session key are added in place.
+_CONVERT_FROM_1 = """
+ALTER TABLE backups ADD COLUMN session_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_backups_path_session ON backups (path, session_id);
+"""
 
 
 def _store_file() -> Path:
@@ -71,34 +74,22 @@ def _store_file() -> Path:
     return resolve_state_dir() / STORE_FILE_NAME
 
 
-def _ensure_open() -> sqlite3.Connection | None:
-    """Open and initialize the store once (create the table if absent, switch on
-    WAL). Best-effort: on any failure it logs ONE warn, leaves recording disabled
-    for the session, and never raises.
-    """
-    global _connection, _initialized
-    if _initialized:
-        return _connection
-    _initialized = True
-    file = _store_file()
+def _open_store() -> sqlite3.Connection:
+    # not recorded: backups.sqlite3 is the store itself, written by this layer and
+    # not through the managed-text path, so it never records itself.
+    connection = open_sqlite_store(_store_file(), BACKUPS_FORMAT_VERSION, _SCHEMA)
     try:
-        # not recorded: backups.sqlite3 is the store itself — binary, and written
-        # by this backup layer, not through the managed-text atomic-write path — so
-        # it never records itself. No recursion, no special case (data-backup
-        # conventions: "A binary store, excluded from itself").
-        # resolve_state_dir() already created the root; be defensive anyway in case
-        # the store is the first thing written on a fresh root.
-        file.parent.mkdir(parents=True, exist_ok=True)
-        opened = open_sqlite_store(file, BACKUPS_FORMAT_VERSION, _SCHEMA)
-        _connection = opened
-    except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable, never crash.
-        log.warning(
-            "backup_store.open_failed",
-            file=str(file),
-            reason=str(exc),
-        )
-        _connection = None
-    return _connection
+        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+            for statement in _CONVERT_FROM_1.split(";"):
+                if statement.strip():
+                    connection.execute(statement)
+            connection.execute(f"PRAGMA user_version = {int(BACKUPS_FORMAT_VERSION)}")
+        connection.commit()
+    except BaseException:
+        connection.close()
+        raise
+    return connection
 
 
 def _sha256(data: bytes) -> str:
@@ -106,72 +97,171 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def record(absolute_path: Path, data: bytes) -> None:
-    """Record one managed-text write: ``absolute_path`` is the FULL absolute path of
-    the file as written; ``data`` is the exact raw bytes just written (the caller
-    already holds them — never re-read the file).
+def _write(store: sqlite3.Connection, session: str, path: str, data: bytes) -> None:
+    """Keep ``data`` as this session's version of ``path``.
 
-    Dedup by content hash per path: the new content's SHA-256 is compared against
-    the latest row for the same ``path``, and the insert is SKIPPED when they are
-    equal. This collapses consecutive identical saves (an autosave with no real
-    change writes no row) while still recording every genuinely distinct version —
-    including a revert, whose content differs from the immediately preceding row.
-
-    Best-effort and silent on success; any failure is caught, logged once at
-    ``warn`` (file + reason), and swallowed. It never raises, never crashes the
-    app, and never breaks the save.
+    The session's first save of a path inserts its row unless the content equals the
+    latest row of an earlier session; later saves in the session replace the row.
     """
-    global _connection
-    path_text = str(absolute_path)
-    with _record_gate:
-        store = _ensure_open()
-        if store is None:
-            return  # open failed earlier; disabled for the session (already warned once)
-        try:
-            digest = _sha256(data)
-            # The predecessor read and the insert are one transaction, so the
-            # comparison and the row it decides on are atomic.
-            store.execute("BEGIN IMMEDIATE")
-            row = store.execute(
+    digest = _sha256(data)
+    store.execute("BEGIN IMMEDIATE")
+    try:
+        current = store.execute(
+            "SELECT content_sha256 FROM backups WHERE path = ? AND session_id = ?",
+            (path, session),
+        ).fetchone()
+        if current is None:
+            latest = store.execute(
                 "SELECT content_sha256 FROM backups WHERE path = ? ORDER BY id DESC LIMIT 1",
-                (path_text,),
+                (path,),
             ).fetchone()
-            if row is None or row[0] != digest:
+            if latest is None or latest[0] != digest:
                 store.execute(
-                    "INSERT INTO backups (path, content, content_sha256, byte_size, written_at_utc)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (path_text, sqlite3.Binary(data), digest, len(data), utc_now_iso_ms()),
+                    "INSERT INTO backups (session_id, path, content, content_sha256,"
+                    " byte_size, written_at_utc) VALUES (?, ?, ?, ?, ?, ?)",
+                    (session, path, sqlite3.Binary(data), digest, len(data), utc_now_iso_ms()),
                 )
-            store.commit()
-        except Exception as exc:  # noqa: BLE001 - best-effort: log once and swallow, never crash.
-            try:
-                store.rollback()
-            except Exception:  # noqa: BLE001 - rollback is best-effort after a record failure.
-                pass
-            _connection = None
-            try:
-                store.close()
-            except Exception:
-                pass
-            log.warning(
-                "backup_store.record_failed",
-                file=path_text,
-                reason=str(exc),
+        elif current[0] != digest:
+            store.execute(
+                "UPDATE backups SET content = ?, content_sha256 = ?, byte_size = ?,"
+                " written_at_utc = ? WHERE path = ? AND session_id = ?",
+                (sqlite3.Binary(data), digest, len(data), utc_now_iso_ms(), path, session),
             )
+        store.commit()
+    except BaseException:
+        store.rollback()
+        raise
+
+
+class _Recorder:
+    """The one serial owner of backup writes, on its own daemon thread.
+
+    Pending writes wait in save order with only the newest per path, so an earlier
+    save never replaces a later one and the backlog stays bounded by the number of
+    protected paths. The thread is a daemon: an OS exit never waits for it.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._pending: dict[str, bytes] = {}
+        self._writing = False
+        self._thread: threading.Thread | None = None
+        self._connection: sqlite3.Connection | None = None
+        self._session: str | None = None
+        self._disabled = False
+
+    def submit(self, path: str, data: bytes) -> None:
+        with self._condition:
+            if self._disabled:
+                return
+            self._pending.pop(path, None)
+            self._pending[path] = data
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run, name="pixelup-backups", daemon=True
+                )
+                self._thread.start()
+            self._condition.notify_all()
+
+    def drain(self, timeout: float) -> bool:
+        """Wait up to ``timeout`` seconds for pending writes; True when none remain."""
+        with self._condition:
+            return self._condition.wait_for(
+                lambda: not self._pending and not self._writing, timeout
+            )
+
+    def close(self, timeout: float) -> None:
+        """Drain, then close the store and let the thread end (tests and teardown)."""
+        self.drain(timeout)
+        with self._condition:
+            self._disabled = True
+            self._condition.notify_all()
+            thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
+        connection = self._connection
+        self._connection = None
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:  # noqa: BLE001 - a close failure on teardown is harmless.
+                pass
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                self._condition.wait_for(lambda: self._pending or self._disabled)
+                if self._disabled:
+                    self._pending.clear()
+                    self._condition.notify_all()
+                    return
+                path = next(iter(self._pending))
+                data = self._pending.pop(path)
+                self._writing = True
+            try:
+                self._apply(path, data)
+            finally:
+                with self._condition:
+                    self._writing = False
+                    self._condition.notify_all()
+
+    def _apply(self, path: str, data: bytes) -> None:
+        if self._connection is None:
+            try:
+                self._connection = _open_store()
+                self._session = current_session() or utc_now_iso_ms()
+            except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable.
+                log.warning("backup_store.open_failed", file=str(_store_file()), reason=str(exc))
+                self._disable()
+                return
+        try:
+            _write(self._connection, self._session, path, data)
+        except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable.
+            log.warning("backup_store.record_failed", file=path, reason=str(exc))
+            connection, self._connection = self._connection, None
+            try:
+                connection.close()
+            except Exception:  # noqa: BLE001 - closing a failed store is best-effort.
+                pass
+            self._disable()
+
+    def _disable(self) -> None:
+        with self._condition:
+            self._disabled = True
+            self._pending.clear()
+
+
+_recorder = _Recorder()
+_recorder_gate = threading.Lock()
+
+
+def record(absolute_path: Path, data: bytes) -> None:
+    """Hand one managed-text write to the recorder and return at once.
+
+    ``absolute_path`` is the FULL absolute path of the file as written; ``data`` is
+    the exact raw bytes just written (the caller already holds them — never re-read
+    the file). It never raises and never waits on the store.
+    """
+    with _recorder_gate:
+        recorder = _recorder
+    recorder.submit(str(absolute_path), data)
+
+
+def drain_backups(timeout: float) -> bool:
+    """Give pending writes up to ``timeout`` seconds, for an ordinary quit; an OS
+    session end skips this. True when nothing remains pending."""
+    with _recorder_gate:
+        recorder = _recorder
+    return recorder.drain(timeout)
 
 
 def close_backup_store() -> None:
-    """Close the store (best-effort). For tests that need to release the file handle
-    between throwaway roots; the app itself lets the process exit close it. Resets
-    the singleton so the next :func:`record` re-opens against the current
-    ``PIXELUP_DATA_DIR``.
+    """Drain and close the store (best-effort). For tests that need to release the
+    file handle between throwaway roots; the app itself lets the process exit close
+    it. Replaces the recorder so the next :func:`record` re-opens against the current
+    ``PIXELUP_DATA_DIR`` with a fresh session.
     """
-    global _connection, _initialized
-    with _record_gate:
-        try:
-            if _connection is not None:
-                _connection.close()
-        except Exception:  # noqa: BLE001 - best-effort: a close failure on teardown is harmless.
-            pass
-        _connection = None
-        _initialized = False
+    global _recorder
+    with _recorder_gate:
+        recorder, _recorder = _recorder, _Recorder()
+    recorder.close(5)

@@ -70,6 +70,7 @@ from pixelup.app_config import (
     load_app_config_result,
     save_app_config,
 )
+from pixelup.backup_store import drain_backups
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.config_save import ConfigSave, ConfigSaveOutcome
 from pixelup.devices import DEVICE_CHOICES
@@ -165,6 +166,8 @@ _PARAMETERS_SAVE_DELAY_MS = 500
 # How long a quit may take once it is under way, under the five or so seconds an OS
 # gives an app to end at logout or shutdown (unsaved-edits-conventions, Quitting).
 QUIT_BUDGET_S = 4.0
+# How long an ordinary quit waits for pending backup writes, inside the quit budget.
+BACKUP_DRAIN_S = 1.0
 
 
 def _start_quit_watchdog(seconds: float, expire: Callable[[], None]) -> None:
@@ -2207,6 +2210,11 @@ def main() -> int:
     try:
         return app.exec()
     finally:
+        # An ordinary quit gives pending backup writes a short bound; an OS session
+        # end skips them (data-backup-conventions). The quit watchdog still owns the
+        # hard exit.
+        if not getattr(_window, "_os_close_accepted", False):
+            drain_backups(BACKUP_DRAIN_S)
         logging.shutdown()
 
 
