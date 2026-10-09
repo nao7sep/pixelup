@@ -39,7 +39,6 @@ def options(
         strip_metadata=False,
         target_profile=None,
         overwrite=False,
-        lock_timeout=600,
     )
 
 

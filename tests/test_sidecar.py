@@ -2,6 +2,7 @@ import errno
 import json
 import os
 import re
+import threading
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from PIL import Image
 
 from pixelup import sidecar as sidecar_module
 from pixelup.errors import PixelupError
+from pixelup.output_cleanup import output_cleanup
 from pixelup.paths import OutputFormat
 from pixelup.sidecar import write_sidecar
 from pixelup.upscale import UpscaleOptions
@@ -42,7 +44,6 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
             strip_metadata=False,
             target_profile=None,
             overwrite=False,
-            lock_timeout=600,
         ),
         result={
             "input_size": [1, 1],
@@ -169,3 +170,42 @@ def test_sidecar_success_verification_rejects_an_exact_boundary_replacement(
 
     assert excinfo.value.code == "output_exists"
     assert sidecar.read_bytes() == b"external winner"
+
+
+def test_quit_removes_a_sidecar_still_being_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A forced exit must not leave a half-written sidecar: while its bytes are
+    # written it belongs to the quit like a partial image does.
+    entered = threading.Event()
+    release = threading.Event()
+    real_fsync = sidecar_module.os.fsync
+    errors: list[BaseException] = []
+
+    def held_fsync(descriptor: int) -> None:
+        entered.set()
+        assert release.wait(5)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(sidecar_module.os, "fsync", held_fsync)
+
+    def write() -> None:
+        try:
+            _write_sample_sidecar(tmp_path)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=write)
+    worker.start()
+    try:
+        assert entered.wait(5)
+        output_cleanup.begin_shutdown()
+        assert output_cleanup._settled.wait(5)
+        if os.name != "nt":
+            assert list(tmp_path.glob("*.json")) == []
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert list(tmp_path.glob("*.json")) == []
+

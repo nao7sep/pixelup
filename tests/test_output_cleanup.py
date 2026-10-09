@@ -208,3 +208,31 @@ def test_quit_removes_only_active_owned_staging_and_partial_claims(
     assert errors[0].code == ErrorCode.JOB_CANCELLED
     assert not output.exists()
     assert list(tmp_path.glob("out-*.tmp")) == []
+
+
+def test_publication_treats_einval_from_link_as_no_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Windows reports CreateHardLink on exFAT as EINVAL; publication falls back to
+    # an exclusive claim instead of failing every output on such a drive.
+    output = tmp_path / "out.png"
+    monkeypatch.setattr(
+        imaging.os,
+        "link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(errno.EINVAL, "invalid")),
+    )
+
+    size = save_output_image(
+        Image.new("RGB", (2, 2), "white"),
+        output_path=output,
+        output_format=OutputFormat.PNG,
+        quality=95,
+        background="white",
+        source_metadata=SourceMetadata(),
+        strip_metadata=True,
+        target_profile=None,
+    )
+
+    assert size == (2, 2)
+    assert output.is_file()
+    assert list(tmp_path.glob("out-*.tmp")) == []

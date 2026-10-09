@@ -69,7 +69,6 @@ class UpscaleOptions:
     strip_metadata: bool
     target_profile: str | None
     overwrite: bool
-    lock_timeout: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,8 +291,6 @@ def validate_options(options: UpscaleOptions) -> None:
             ErrorCode.INVALID_ARGUMENT,
             Message("error.deviceInvalid"),
         )
-    if options.lock_timeout < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.lockTimeoutInvalid"))
 
 
 def required_model_names(options: UpscaleOptions) -> list[str]:

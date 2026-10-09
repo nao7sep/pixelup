@@ -9,6 +9,7 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.formats import SIDECAR_FORMAT_VERSION
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
+from pixelup.output_cleanup import open_output_handle, output_cleanup
 from pixelup.output_reservation import (
     PublishedFile,
     close_published_file,
@@ -77,9 +78,8 @@ def write_sidecar(
     # bloat the text history with no recovery value.
     try:
         # Exclusive creation is the last no-clobber gate after a potentially long
-        # inference. The output reservation serializes PixelUp peers; O_EXCL also
-        # protects a sidecar an external process placed in the meantime.
-        descriptor = os.open(sidecar_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        # inference: it protects a sidecar anything else placed in the meantime.
+        descriptor = open_output_handle(sidecar_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     except FileExistsError as exc:
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
@@ -95,10 +95,16 @@ def write_sidecar(
         ) from exc
 
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as file:
-            file.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-            file.flush()
-            os.fsync(file.fileno())
+        # Owned by the quit while it is written, so a forced exit removes a partial
+        # sidecar as it does a partial image (output_cleanup).
+        output_cleanup.admit(descriptor, sidecar_path, staging=False)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as file:
+                file.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+                file.flush()
+                os.fsync(file.fileno())
+        finally:
+            output_cleanup.release(descriptor)
     except OSError as exc:
         remove_published_file(close_published_file(sidecar_path, descriptor))
         raise PixelupError(

@@ -89,7 +89,6 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
     assert options.pre_pad == 0
     assert options.background == "white"
     assert options.overwrite is False
-    assert options.lock_timeout == 600
 
 
 def test_bare_job_settings_defaults_to_a_safe_tile() -> None:

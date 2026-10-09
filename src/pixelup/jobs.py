@@ -173,7 +173,6 @@ def options_for_job(job: Job) -> UpscaleOptions:
         strip_metadata=job.settings.strip_metadata,
         target_profile=job.settings.target_profile,
         overwrite=False,
-        lock_timeout=600,
     )
 
 

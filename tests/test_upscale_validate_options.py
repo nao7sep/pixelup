@@ -40,7 +40,6 @@ def make_options(**overrides: object) -> UpscaleOptions:
         strip_metadata=False,
         target_profile=None,
         overwrite=False,
-        lock_timeout=600,
     )
     base.update(overrides)
     return UpscaleOptions(**base)  # type: ignore[arg-type]
@@ -64,7 +63,6 @@ def test_validate_options_accepts_valid_options() -> None:
         ({"quality": -1}, ErrorCode.INVALID_ARGUMENT),
         ({"target_profile": "rec2020"}, ErrorCode.INVALID_ARGUMENT),
         ({"device": "vulkan"}, ErrorCode.INVALID_ARGUMENT),
-        ({"lock_timeout": -1}, ErrorCode.INVALID_ARGUMENT),
     ],
 )
 def test_validate_options_rejects_bad_values(overrides: dict[str, object], code: ErrorCode) -> None:

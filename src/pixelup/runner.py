@@ -11,9 +11,9 @@ from pixelup.i18n.message import Message
 from pixelup.jobs import Job, job_log_payload, options_for_job
 from pixelup.output_reservation import (
     PublishedFile,
+    assert_output_bundle_available,
     assert_output_bundle_claims_current,
     remove_published_file,
-    reserve_output_bundle,
 )
 from pixelup.session_log import log
 from pixelup.sidecar import write_sidecar
@@ -69,60 +69,53 @@ class JobWorker(QObject):
         try:
             options = options_for_job(self.job)
             runtime_dirs = self._runtime_dirs or resolve_runtime_dirs()
-            with reserve_output_bundle(
-                self.job.output_path,
-                runtime_dirs.temp_dir,
-                timeout=options.lock_timeout,
-                should_cancel=self._is_cancelled,
-                on_waiting=lambda: self.signals.progress.emit(
-                    self.job.id, Message("progress.waitingForOutput")
+            # Fail fast, before a long inference, when the bundle is already taken.
+            assert_output_bundle_available(self.job.output_path)
+            result = run_upscale(
+                options,
+                runtime_dirs,
+                on_progress=lambda phase: self.signals.progress.emit(
+                    self.job.id,
+                    _progress_text(phase),
                 ),
-            ):
-                result = run_upscale(
-                    options,
-                    runtime_dirs,
-                    on_progress=lambda phase: self.signals.progress.emit(
-                        self.job.id,
-                        _progress_text(phase),
-                    ),
-                    on_tile=lambda done, total: self.signals.progress.emit(
-                        self.job.id,
-                        _tile_progress_text(done, total),
-                    ),
-                    on_warning=warnings.append,
-                    should_cancel=self._is_cancelled,
-                    on_output_published=capture_published_image,
+                on_tile=lambda done, total: self.signals.progress.emit(
+                    self.job.id,
+                    _tile_progress_text(done, total),
+                ),
+                on_warning=warnings.append,
+                should_cancel=self._is_cancelled,
+                on_output_published=capture_published_image,
+            )
+            try:
+                sidecar_claim = write_sidecar(
+                    input_path=self.job.input_path,
+                    output_path=self.job.output_path,
+                    options=options,
+                    result=result,
+                    warnings=warnings,
                 )
-                try:
-                    sidecar_claim = write_sidecar(
-                        input_path=self.job.input_path,
-                        output_path=self.job.output_path,
-                        options=options,
-                        result=result,
-                        warnings=warnings,
-                    )
-                except Exception:
-                    if published_image is not None:
-                        remove_published_file(published_image)
-                    raise
-                if published_image is None:
-                    remove_published_file(sidecar_claim)
-                    raise PixelupError(
-                        ErrorCode.INTERNAL_ERROR,
-                        "Output image publication did not return an ownership claim.",
-                    )
-                try:
-                    # Image + sidecar together are the commit point. Revalidate both
-                    # physical claims and every normalized shared-stem companion only
-                    # after the sidecar descriptor has flushed and closed.
-                    assert_output_bundle_claims_current(
-                        self.job.output_path,
-                        (published_image, sidecar_claim),
-                    )
-                except Exception:
-                    remove_published_file(sidecar_claim)
+            except Exception:
+                if published_image is not None:
                     remove_published_file(published_image)
-                    raise
+                raise
+            if published_image is None:
+                remove_published_file(sidecar_claim)
+                raise PixelupError(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Output image publication did not return an ownership claim.",
+                )
+            try:
+                # Image + sidecar together are the commit point. Revalidate both
+                # physical claims and every normalized shared-stem companion only
+                # after the sidecar descriptor has flushed and closed.
+                assert_output_bundle_claims_current(
+                    self.job.output_path,
+                    (published_image, sidecar_claim),
+                )
+            except Exception:
+                remove_published_file(sidecar_claim)
+                remove_published_file(published_image)
+                raise
             sidecar = sidecar_claim.path
             result["sidecar"] = str(sidecar)
             log.info(

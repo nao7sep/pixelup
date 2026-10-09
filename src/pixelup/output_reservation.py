@@ -1,24 +1,24 @@
+"""What PixelUp knows about the output bundle a job publishes: an image and its JSON
+sidecar sharing one stem.
+
+Job planning gives every queued job a distinct bundle in memory (``jobs.py``), and
+one PixelUp process is the supported writer, so no cross-process reservation exists.
+Publication itself never replaces an existing entry: each member is claimed
+atomically (hard link or ``O_EXCL``), and the checks here refuse a bundle another
+writer has touched.
+"""
+
 from __future__ import annotations
 
-import hashlib
 import os
-import time
 import unicodedata
-import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-
-from filelock import FileLock, Timeout
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.session_log import log
 
-CancelCheck = Callable[[], bool]
-WaitingCallback = Callable[[], None]
-_POLL_SECONDS = 0.25
 _OUTPUT_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 _BUNDLE_SUFFIXES = frozenset((*_OUTPUT_SUFFIXES, ".json"))
 
@@ -28,61 +28,6 @@ class PublishedFile:
     path: Path
     device: int
     inode: int
-
-
-@contextmanager
-def reserve_output_bundle(
-    output_path: Path,
-    temp_dir: Path,
-    *,
-    timeout: float,
-    should_cancel: CancelCheck | None = None,
-    on_waiting: WaitingCallback | None = None,
-) -> Iterator[None]:
-    """Serialize one output image plus its JSON sidecar across PixelUp processes."""
-    if timeout < 0:
-        raise PixelupError(
-            ErrorCode.INVALID_ARGUMENT, Message("error.outputLockTimeoutNegative")
-        )
-    locks_dir = temp_dir / "output-locks"
-    try:
-        locks_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise PixelupError(
-            ErrorCode.OUTPUT_UNWRITABLE,
-            Message("error.outputLockDirFailed"),
-            details={"path": str(locks_dir), "reason": str(exc)},
-        ) from exc
-
-    lock = FileLock(str(locks_dir / f"{_output_lock_key(output_path)}.lock"))
-    started = time.monotonic()
-    while True:
-        if should_cancel and should_cancel():
-            raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
-        remaining = timeout - (time.monotonic() - started)
-        if timeout > 0 and remaining <= 0:
-            raise PixelupError(
-                ErrorCode.OUTPUT_EXISTS,
-                Message("error.outputReserveTimeout"),
-                details={"output": str(output_path), "timeout": timeout},
-            )
-        try:
-            lock.acquire(timeout=0 if timeout == 0 else min(_POLL_SECONDS, remaining))
-            break
-        except Timeout as exc:
-            if timeout == 0:
-                raise PixelupError(
-                    ErrorCode.OUTPUT_EXISTS,
-                    Message("error.outputReserved"),
-                    details={"output": str(output_path)},
-                ) from exc
-            if on_waiting:
-                on_waiting()
-    try:
-        assert_output_bundle_available(output_path)
-        yield
-    finally:
-        lock.release()
 
 
 def assert_output_bundle_available(output_path: Path) -> None:
@@ -116,87 +61,21 @@ def published_file_is_current(published: PublishedFile) -> bool:
 
 
 def remove_published_file(published: PublishedFile) -> bool:
-    """Remove a file PixelUp published, if the path still names it; False leaves it in place."""
-    removed = _remove_published_file(published)
+    """Remove a file PixelUp published, if the path still names it; False leaves it in place.
+
+    One PixelUp process plans every job a distinct output bundle, so the identity
+    check immediately before the unlink is what proves the entry is still ours; an
+    entry anything else put at the name is left alone.
+    """
+    removed = published_file_is_current(published)
+    if removed:
+        try:
+            os.unlink(published.path)
+        except OSError:
+            removed = False
     if not removed:
         log.warning("output.cleanup_left_file", path=str(published.path))
     return removed
-
-
-def _remove_published_file(published: PublishedFile) -> bool:
-    claim = published.path.with_name(f".{uuid.uuid4().hex}.pixelup-claim")
-    try:
-        # Capture and verify PixelUp's inode without mutating the public path. Besides
-        # proving ownership, this proves that exact-inode restoration is available on
-        # this filesystem before a later rename can displace an external winner.
-        os.link(published.path, claim, follow_symlinks=False)
-    except OSError:
-        return _remove_without_hard_link(published)
-
-    removed = False
-    try:
-        linked = os.lstat(claim)
-        if (linked.st_dev, linked.st_ino) != (published.device, published.inode):
-            return False
-
-        hold = published.path.with_name(f".{uuid.uuid4().hex}.pixelup-hold")
-        try:
-            os.rename(published.path, hold)
-        except OSError:
-            return False
-
-        try:
-            displaced = os.lstat(hold)
-        except OSError:
-            _restore_displaced_file(hold, published.path)
-            return False
-        if (displaced.st_dev, displaced.st_ino) != (published.device, published.inode):
-            _restore_displaced_file(hold, published.path)
-            return False
-
-        try:
-            hold.unlink()
-        except OSError:
-            return False
-        removed = True
-    finally:
-        try:
-            claim.unlink()
-        except OSError:
-            removed = False
-    return removed
-
-
-def _remove_without_hard_link(published: PublishedFile) -> bool:
-    """Cleanup on a volume without hard links, such as exFAT or FAT.
-
-    The caller holds the bundle reservation, so no other PixelUp job writes this bundle;
-    the identity check immediately before the unlink is what proves the entry is ours.
-    """
-    if not published_file_is_current(published):
-        return False
-    try:
-        os.unlink(published.path)
-    except OSError:
-        return False
-    return True
-
-
-def _restore_displaced_file(hold: Path, destination: Path) -> None:
-    """Restore a non-owned entry without replacing a later destination winner.
-
-    The caller proved hard-link support before moving the public entry. Linking is
-    an atomic no-clobber restore of the exact inode; if a later winner already owns
-    the destination, the displaced entry remains preserved at the private hold.
-    """
-    try:
-        os.link(hold, destination, follow_symlinks=False)
-    except OSError:
-        return
-    try:
-        hold.unlink()
-    except OSError:
-        pass
 
 
 def close_published_file(path: Path, descriptor: int) -> PublishedFile:
@@ -243,14 +122,3 @@ def _bundle_exists(output_path: Path, occupied: Path) -> PixelupError:
         hint=Message("error.hintRetryNewName"),
         details={"output": str(output_path), "occupied": str(occupied)},
     )
-
-
-def _output_lock_key(output_path: Path) -> str:
-    # resolve() canonicalizes symlinked parents. Case-folding is deliberately
-    # conservative: PixelUp never assigns two case-only sibling names, even on a
-    # case-sensitive volume, so aliases that would collide on macOS/Windows share one
-    # lock. The sidecar path is the bundle identity: format variants share a stem and
-    # one .json companion, so result.png and result.jpg must serialize too.
-    bundle_path = output_path.with_suffix(".json")
-    canonical = _text_identity(os.path.normcase(str(bundle_path.expanduser().resolve())))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

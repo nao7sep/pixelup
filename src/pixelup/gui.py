@@ -2178,7 +2178,6 @@ def _selftest() -> int:
         "numpy",
         "PIL",
         "pillow_heif",
-        "filelock",
         "pixelup.realesrgan_models",
         "pixelup.realesrgan_runtime",
         "PySide6.QtWidgets",

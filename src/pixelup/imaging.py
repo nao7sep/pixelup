@@ -245,8 +245,11 @@ def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedFi
     except FileExistsError as exc:
         raise _output_exists(output_path) from exc
     except OSError as exc:
+        # EINVAL is what Windows reports for CreateHardLink on exFAT
+        # (ERROR_INVALID_FUNCTION); treating it as fatal would fail every publish there.
         unsupported = {
             errno.EACCES,
+            errno.EINVAL,
             errno.ENOSYS,
             errno.ENOTSUP,
             errno.EOPNOTSUPP,

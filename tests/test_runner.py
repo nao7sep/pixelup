@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import errno
 import os
-from contextlib import contextmanager
 from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
@@ -398,45 +397,6 @@ def test_worker_run_success_emits_done_with_sidecar(
     assert result["ok"] is True
     assert str(result["sidecar"]).endswith(".json")
     assert warnings == [NOTE]
-
-
-def test_worker_holds_output_reservation_through_inference_and_sidecar(
-    qapp: QApplication,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    _session_log: None,
-) -> None:
-    job = _make_job(7, tmp_path)
-    held = False
-
-    @contextmanager
-    def _reserve(*args: object, **kwargs: object):
-        nonlocal held
-        held = True
-        try:
-            yield
-        finally:
-            held = False
-
-    def _upscale(*args: object, **kwargs: object) -> dict[str, object]:
-        assert held is True
-        kwargs["on_output_published"](_publish_fixture(job.output_path, b"image"))  # type: ignore[operator]
-        return {"ok": True}
-
-    def _sidecar(**kwargs: object) -> PublishedFile:
-        assert held is True
-        return _publish_fixture(job.output_path.with_suffix(".json"), b"{}")
-
-    monkeypatch.setattr("pixelup.runner.reserve_output_bundle", _reserve)
-    monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
-    monkeypatch.setattr("pixelup.runner.write_sidecar", _sidecar)
-    worker = JobWorker(job)
-    finished, _progress = _capture_worker(worker)
-
-    worker.run()
-
-    assert held is False
-    assert finished[0][1:3] == (True, "Done")
 
 
 def test_worker_rejects_occupied_output_before_inference(
