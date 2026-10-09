@@ -23,7 +23,13 @@ from pixelup.records import (
     merge_newest_page,
     split_fields,
 )
-from pixelup.session_log import _open_records, configure_session_logging, log, set_stored_listener
+from pixelup.session_log import (
+    _open_records,
+    configure_session_logging,
+    flush_records,
+    log,
+    set_stored_listener,
+)
 
 OLD = "2026-09-30T08:00:00.000Z"
 NEW = "2026-10-01T09:00:00.000Z"
@@ -183,6 +189,7 @@ def test_a_read_never_stores_a_record() -> None:
     # Every stored record tells the Records window to read again, so a read
     # that logged would read forever.
     database = configure_session_logging()
+    assert flush_records(5)
     stored: list[None] = []
     set_stored_listener(lambda: stored.append(None))
     reader = RecordsReader(database)
@@ -193,6 +200,7 @@ def test_a_read_never_stores_a_record() -> None:
     finally:
         reader.close()
 
+    assert flush_records(5)
     assert stored == []
 
 
@@ -288,6 +296,7 @@ def test_the_list_reads_a_bounded_start_of_each_records_fields(
 def test_a_log_line_is_read_back_as_it_was_written() -> None:
     database = configure_session_logging()
     log.info("image.added", input="a.png", job_id=4)
+    assert flush_records(5)
     reader = RecordsReader(database)
     try:
         newest = reader.page(RecordsQuery(), None).records[0]

@@ -312,7 +312,7 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
 
     from pixelup import upscale as upscale_module
     from pixelup.errors import ErrorCode
-    from pixelup.session_log import configure_session_logging
+    from pixelup.session_log import configure_session_logging, flush_records
     from pixelup.upscale import run_upscale
 
     database = configure_session_logging()
@@ -337,6 +337,7 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
             RuntimeDirs(models_dir, temp_dir),
         )
 
+    assert flush_records(5)
     connection = sqlite3.connect(database)
     try:
         (fields,) = connection.execute(

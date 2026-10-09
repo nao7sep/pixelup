@@ -5,7 +5,9 @@ import logging
 import os
 import sqlite3
 import sys
+import threading
 import traceback
+from collections import deque
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -128,9 +130,21 @@ def _open_records(database: Path) -> sqlite3.Connection:
     return open_sqlite_store(database, RECORDS_FORMAT_VERSION, _SCHEMA)
 
 
+# How many lines may wait for the writer. A logging burst beyond this while the store
+# stalls is counted, not queued, so memory stays bounded; the count is written as one
+# `log.dropped` line once the writer catches up.
+_PENDING_LIMIT = 10_000
+
+
 class RecordsHandler(logging.Handler):
     """Writes each log line as one row of this launch's session in the records
-    database (logging-conventions, data-lifecycle-conventions)."""
+    database (logging-conventions, data-lifecycle-conventions).
+
+    The thread that logs only builds the line and queues it; one writer thread owns
+    the database, the fallback file and the stored listener, so a stalled store
+    never holds up the window or a worker (logging-conventions, "Execution and
+    durability"). Lines keep their order.
+    """
 
     def __init__(self, database: Path, *, session: str, fallback: Path) -> None:
         super().__init__()
@@ -138,13 +152,69 @@ class RecordsHandler(logging.Handler):
         self.session = session
         self._fallback = fallback
         self._connection: sqlite3.Connection | None = None
-        # Called after each line the database stored, on the thread that logged
-        # it; a line that went to the fallback file is not in the database, so it
-        # calls nothing. The Records window reads the newest records on it.
+        # Called after each line the database stored, on the writer thread; a line
+        # that went to the fallback file is not in the database, so it calls
+        # nothing. The Records window reads the newest records on it.
         self.stored_listener: Callable[[], None] | None = None
+        self._condition = threading.Condition()
+        self._pending: deque[dict[str, Any]] = deque()
+        self._dropped = 0
+        self._writing = False
+        self._closed = False
+        self._writer = threading.Thread(target=self._run, name="pixelup-records", daemon=True)
+        self._writer.start()
+
+    def handle(self, record: logging.LogRecord) -> bool:
+        # Overridden so the caller never takes the handler lock that would wait on
+        # the writer; building the entry here keeps the caller's exception context.
+        if not self.filter(record):
+            return False
+        # A JSON round trip freezes the caller's field values as they are now, so a
+        # later change to a dict the caller still holds never reaches the record.
+        entry = json.loads(_dumps(_entry(record)))
+        with self._condition:
+            if self._closed:
+                return True
+            if len(self._pending) >= _PENDING_LIMIT:
+                self._dropped += 1
+                return True
+            self._pending.append(entry)
+            self._condition.notify_all()
+        return True
 
     def emit(self, record: logging.LogRecord) -> None:
-        entry = _entry(record)
+        self.handle(record)
+
+    def flush_pending(self, timeout: float) -> bool:
+        """Wait up to ``timeout`` seconds for queued lines; True when none remain."""
+        with self._condition:
+            return self._condition.wait_for(
+                lambda: not self._pending and not self._writing, timeout
+            )
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                self._condition.wait_for(lambda: self._pending or self._closed)
+                if not self._pending:
+                    return
+                entry = self._pending.popleft()
+                # Lines are dropped only while the queue is full, so the count
+                # follows the last line that was queued before them.
+                dropped = 0
+                if not self._pending:
+                    dropped, self._dropped = self._dropped, 0
+                self._writing = True
+            try:
+                self._write(entry)
+                if dropped:
+                    self._write(_dropped_entry(dropped))
+            finally:
+                with self._condition:
+                    self._writing = False
+                    self._condition.notify_all()
+
+    def _write(self, entry: dict[str, Any]) -> None:
         try:
             self._insert(entry)
         except Exception as exc:  # noqa: BLE001 - logging never crashes the app.
@@ -208,13 +278,38 @@ class RecordsHandler(logging.Handler):
             sys.stderr.flush()
 
     def close(self) -> None:
-        with self.lock:
-            if self._connection is not None:
-                try:
-                    self._connection.close()
-                finally:
-                    self._connection = None
+        """Give queued lines a short bound, then stop the writer. A writer still stuck
+        in the store keeps its connection; process exit ends both."""
+        self.flush_pending(_CLOSE_FLUSH_SECONDS)
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+        self._writer.join(_CLOSE_FLUSH_SECONDS)
+        if not self._writer.is_alive() and self._connection is not None:
+            try:
+                self._connection.close()
+            finally:
+                self._connection = None
         super().close()
+
+
+# Shutdown's bounded best-effort flush; the quit watchdog still owns the hard exit.
+_CLOSE_FLUSH_SECONDS = 1.0
+
+
+def _dropped_entry(count: int) -> dict[str, Any]:
+    return {
+        "time": to_utc_iso_ms(datetime.now(UTC)),
+        "level": "warn",
+        "message": "log.dropped",
+        "count": count,
+    }
+
+
+def flush_records(timeout: float) -> bool:
+    """Wait up to ``timeout`` seconds for this launch's queued lines to be written."""
+    handler = _records_handler()
+    return True if handler is None else handler.flush_pending(timeout)
 
 
 class SessionLog:

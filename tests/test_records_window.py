@@ -42,6 +42,7 @@ from pixelup.runner import JobRunner
 from pixelup.session_log import (
     _open_records,
     configure_session_logging,
+    flush_records,
     log,
     set_stored_listener,
 )
@@ -476,6 +477,7 @@ def test_an_open_window_settles_instead_of_reading_its_own_reads_forever(
     process_until,
 ) -> None:
     database = configure_session_logging()
+    assert flush_records(5)
     set_stored_listener(stored_signal().emit)
     reader = ScriptedReader(database)
     reads = RecordsReads(reader)
