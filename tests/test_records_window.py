@@ -18,7 +18,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from pixelup import gui, records_window
-from pixelup.app_config import AppConfig, ConfigLoadResult
+from pixelup.app_config import AppConfig, ConfigLoadResult, SettingsFile, config_path
 from pixelup.gui import MainWindow, is_reopen
 from pixelup.i18n import localizer
 from pixelup.i18n.languages import TAGS
@@ -45,7 +45,7 @@ from pixelup.session_log import (
     log,
     set_stored_listener,
 )
-from pixelup.window_placement import FORMAT_VERSION_KEY, WindowState, window_state
+from pixelup.window_placement import WindowState, window_state
 
 NEW = "2026-10-01T09:00:00.000Z"
 OLD = "2026-09-30T08:00:00.000Z"
@@ -525,7 +525,6 @@ def test_narrowing_the_window_narrows_the_list_and_saves_nothing(
 def test_restores_the_saved_list_width_before_the_first_frame(
     open_records, settings: QSettings
 ) -> None:
-    settings.setValue(FORMAT_VERSION_KEY, 1)
     settings.setValue(LIST_WIDTH_KEY, LIST_WIDTH_MIN + 10)
     settings.sync()
 
@@ -610,7 +609,10 @@ def test_every_label_of_a_record_speaks_the_language(tag: str, qapp: QApplicatio
 def make_main(qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fast: None):
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
-    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
+    monkeypatch.setattr(
+        "pixelup.gui.load_app_config_result",
+        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+    )
     log_file = configure_session_logging()
     created: list[MainWindow] = []
 

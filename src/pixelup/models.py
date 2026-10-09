@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import select
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -12,8 +12,6 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, build_opener
-
-from filelock import FileLock, Timeout
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
@@ -24,11 +22,9 @@ from pixelup.model_registry import (  # noqa: F401 - preserve the existing publi
     ModelInfo,
     known_model,
 )
-from pixelup.nanoid import nanoid
 from pixelup.session_log import log
 
 DownloadCallback = Callable[[str, int, int | None], None]
-WaitingCallback = Callable[[str, float], None]
 CancelCheck = Callable[[], bool]
 
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
@@ -91,9 +87,7 @@ def download_model(
     name: str,
     *,
     download_timeout: float,
-    lock_timeout: int,
     on_download: DownloadCallback | None = None,
-    on_waiting: WaitingCallback | None = None,
     should_cancel: CancelCheck | None = None,
     force: bool = False,
 ) -> dict[str, object]:
@@ -108,9 +102,7 @@ def download_model(
         models_dir,
         info,
         download_timeout=download_timeout,
-        lock_timeout=lock_timeout,
         on_download=on_download,
-        on_waiting=on_waiting,
         should_cancel=should_cancel,
         force=force,
     )
@@ -121,16 +113,19 @@ def download_model_info(
     info: ModelInfo,
     *,
     download_timeout: float,
-    lock_timeout: int,
     on_download: DownloadCallback | None = None,
-    on_waiting: WaitingCallback | None = None,
     should_cancel: CancelCheck | None = None,
     force: bool = False,
 ) -> dict[str, object]:
+    """Download, verify and atomically publish one model file.
+
+    One PixelUp process is the supported writer, and ``ModelManager`` refuses an
+    artifact already running or queued, so no cross-process lock guards the
+    download. A duplicate download from an unsupported second instance wastes
+    bandwidth but still publishes only a verified file atomically.
+    """
     if download_timeout <= 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.downloadTimeoutInvalid"))
-    if lock_timeout < 0:
-        raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.lockTimeoutInvalid"))
     if info.url is None:
         raise PixelupError(
             ErrorCode.MODEL_NOT_FOUND,
@@ -150,92 +145,81 @@ def download_model_info(
     if not force and _model_file_present(target):
         return _download_result(info, target, "present")
 
-    locks_dir = models_dir / ".locks"
+    acquisition_timeout = _acquisition_timeout_seconds(info, download_timeout)
+    deadline = time.monotonic() + acquisition_timeout
+    log.info(
+        "model.download_started",
+        model=info.name,
+        url=info.url,
+        timeout_seconds=acquisition_timeout,
+    )
+    temp_path: Path | None = None
     try:
-        locks_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise PixelupError(
-            ErrorCode.MODEL_DOWNLOAD_FAILED,
-            Message("error.modelLockDirFailed"),
-            details={"locks_dir": str(locks_dir), "reason": str(exc)},
-        ) from exc
-
-    lock = FileLock(str(locks_dir / f"{_lock_name(info.name)}.lock"))
-    _acquire_download_lock(lock, info.name, lock_timeout, on_waiting, should_cancel)
-    try:
-        if not force and _model_file_present(target):
-            return _download_result(info, target, "present")
-        acquisition_timeout = _acquisition_timeout_seconds(info, download_timeout)
-        deadline = time.monotonic() + acquisition_timeout
-        # Stage the download as a per-download-unique file INSIDE models_dir —
-        # deliberately, not under a separate temp/ dir. The convention's intent
-        # (a deletable staging area, unique name, verify there, then atomic
-        # publish) is met: the staged file is removed on every failure path
-        # below, and same-directory staging is precisely what makes os.replace
-        # an atomic same-filesystem rename — a cross-volume temp/ could degrade
-        # that to a copy. (Image-output staging uses temp/ in imaging.py; model
-        # publish needs the same-fs guarantee.)
-        temp_path = models_dir / f"{target.stem}-{nanoid()}.tmp"
-        log.info(
-            "model.download_started",
-            model=info.name,
-            url=info.url,
-            timeout_seconds=acquisition_timeout,
-        )
         try:
-            try:
-                _download_to_temp(
-                    info,
-                    temp_path,
-                    deadline=deadline,
-                    on_download=on_download,
-                    should_cancel=should_cancel,
-                )
-                verify_model_file(
-                    temp_path,
-                    info,
-                    deadline=deadline,
-                    should_cancel=should_cancel,
-                )
-                _sync_staged_file(temp_path, deadline, should_cancel)
-                _check_acquisition(deadline, should_cancel)
-                # not recorded: model weights are large binaries, re-fetchable from
-                # their source and interchangeable with it — not hand-authored text the
-                # app owns as state. Binaries are out of scope for the text backup, and
-                # models/ is a binary-bearing directory excluded wholesale
-                # (data-backup-conventions).
-                os.replace(temp_path, target)
-                _sync_directory_best_effort(models_dir)
-            except PixelupError as exc:
-                # A cancellation is not a download failure; the job-level log records
-                # it. Any other PixelupError here is a real failure (e.g. the
-                # downloaded file failed verification) and gets a terminal event so
-                # every model.download_started has a matching outcome.
-                if exc.code != ErrorCode.JOB_CANCELLED:
-                    log.warning(
-                        "model.download_failed",
-                        model=info.name,
-                        url=info.url,
-                        code=exc.code.value,
-                        reason=str(exc),
-                    )
-                raise
-            except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            # Stage the download as a per-download-unique file INSIDE models_dir —
+            # deliberately, not under a separate temp/ dir. The convention's intent
+            # (a deletable staging area, unique name, verify there, then atomic
+            # publish) is met: the staged file is removed on every failure path
+            # below, and same-directory staging is precisely what makes os.replace
+            # an atomic same-filesystem rename — a cross-volume temp/ could degrade
+            # that to a copy. (Image-output staging uses temp/ in imaging.py; model
+            # publish needs the same-fs guarantee.)
+            descriptor, temp_name = tempfile.mkstemp(
+                dir=models_dir, prefix=f"{target.stem}-", suffix=".tmp"
+            )
+            os.close(descriptor)
+            temp_path = Path(temp_name)
+            _download_to_temp(
+                info,
+                temp_path,
+                deadline=deadline,
+                on_download=on_download,
+                should_cancel=should_cancel,
+            )
+            verify_model_file(
+                temp_path,
+                info,
+                deadline=deadline,
+                should_cancel=should_cancel,
+            )
+            _sync_staged_file(temp_path, deadline, should_cancel)
+            _check_acquisition(deadline, should_cancel)
+            # not recorded: model weights are large binaries, re-fetchable from
+            # their source and interchangeable with it — not hand-authored text the
+            # app owns as state. Binaries are out of scope for the text backup, and
+            # models/ is a binary-bearing directory excluded wholesale
+            # (data-backup-conventions).
+            os.replace(temp_path, target)
+            _sync_directory_best_effort(models_dir)
+        except PixelupError as exc:
+            # A cancellation is not a download failure; the job-level log records
+            # it. Any other PixelupError here is a real failure (e.g. the
+            # downloaded file failed verification) and gets a terminal event so
+            # every model.download_started has a matching outcome.
+            if exc.code != ErrorCode.JOB_CANCELLED:
                 log.warning(
                     "model.download_failed",
                     model=info.name,
                     url=info.url,
+                    code=exc.code.value,
                     reason=str(exc),
                 )
-                raise PixelupError(
-                    ErrorCode.MODEL_DOWNLOAD_FAILED,
-                    Message.of("error.modelDownloadFailed", model=info.name),
-                    details={"model": info.name, "url": info.url, "reason": str(exc)},
-                ) from exc
-        finally:
-            _remove_staged_file(temp_path, info.name)
+            raise
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            log.warning(
+                "model.download_failed",
+                model=info.name,
+                url=info.url,
+                reason=str(exc),
+            )
+            raise PixelupError(
+                ErrorCode.MODEL_DOWNLOAD_FAILED,
+                Message.of("error.modelDownloadFailed", model=info.name),
+                details={"model": info.name, "url": info.url, "reason": str(exc)},
+            ) from exc
     finally:
-        lock.release()
+        if temp_path is not None:
+            _remove_staged_file(temp_path, info.name)
     result = _download_result(info, target, "downloaded")
     log.info("model.download_finished", model=info.name, size_bytes=result["size_bytes"])
     return result
@@ -595,43 +579,6 @@ def _remove_staged_file(path: Path, model: str) -> None:
         log.warning("model.temp_cleanup_failed", model=model, path=str(path), reason=str(exc))
 
 
-def _acquire_download_lock(
-    lock: FileLock,
-    model: str,
-    lock_timeout: int,
-    on_waiting: WaitingCallback | None,
-    should_cancel: CancelCheck | None = None,
-) -> None:
-    start = time.monotonic()
-    if lock_timeout == 0:
-        try:
-            lock.acquire(timeout=0)
-            return
-        except Timeout as exc:
-            raise PixelupError(
-                ErrorCode.MODEL_DOWNLOAD_FAILED,
-                Message.of("error.modelLockTimeout", model=model),
-                details={"model": model, "lock_timeout": lock_timeout},
-            ) from exc
-    while True:
-        if should_cancel and should_cancel():
-            raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
-        elapsed = time.monotonic() - start
-        remaining = lock_timeout - elapsed
-        if remaining <= 0:
-            raise PixelupError(
-                ErrorCode.MODEL_DOWNLOAD_FAILED,
-                Message.of("error.modelLockTimeout", model=model),
-                details={"model": model, "lock_timeout": lock_timeout},
-            )
-        try:
-            lock.acquire(timeout=min(1.0, remaining))
-            return
-        except Timeout:
-            if on_waiting:
-                on_waiting(model, time.monotonic() - start)
-
-
 def _model_file_present(path: Path) -> bool:
     # Presence is trust: a non-empty file at the target path was verified once at
     # download (or placed by the user), so the download is skipped and the file is not
@@ -646,10 +593,6 @@ def _download_result(info: ModelInfo, path: Path, status: str) -> dict[str, obje
         "path": str(path),
         "size_bytes": path.stat().st_size,
     }
-
-
-def _lock_name(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
 
 
 def _response_size(content_length: str | None, expected_size: int | None) -> int | None:

@@ -6,7 +6,6 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 import pytest
-from filelock import FileLock
 
 import pixelup.models as models_module
 from pixelup.errors import PixelupError
@@ -120,7 +119,6 @@ def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -
         models_dir,
         info,
         download_timeout=10,
-        lock_timeout=1,
         on_download=lambda model, done, total: events.append((model, done, total)),
     )
 
@@ -129,9 +127,12 @@ def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -
     assert events[-1] == ("local-model", source.stat().st_size, source.stat().st_size)
 
 
-def test_download_model_info_temp_file_uses_stem_nanoid_shape(tmp_path: Path) -> None:
-    # The staged download's temp name is <stem>-<nanoid>.tmp (target's stem, no
-    # leading dot, no pid segment), same directory as the eventual target.
+def test_download_model_info_temp_file_uses_the_stem_shape_beside_the_target(
+    tmp_path: Path,
+) -> None:
+    # The staged download's temp name is <stem>-<random>.tmp (target's stem, no
+    # leading dot), created exclusively in the same directory as the eventual target,
+    # and nothing else is made beside it.
     content = b"downloaded weights"
     source = tmp_path / "source.pth"
     source.write_bytes(content)
@@ -152,12 +153,12 @@ def test_download_model_info_temp_file_uses_stem_nanoid_shape(tmp_path: Path) ->
         models_dir,
         info,
         download_timeout=10,
-        lock_timeout=1,
         on_download=on_download,
     )
 
     assert captured
-    assert re.fullmatch(r"local-model-[A-Za-z0-9_-]{21}\.tmp", captured[-1])
+    assert re.fullmatch(r"local-model-[a-z0-9_]+\.tmp", captured[-1])
+    assert sorted(path.name for path in models_dir.iterdir()) == ["local-model.pth"]
 
 
 def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path) -> None:
@@ -183,7 +184,6 @@ def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path
         models_dir,
         info,
         download_timeout=10,
-        lock_timeout=1,
     )
 
     assert result["status"] == "present"
@@ -209,7 +209,6 @@ def test_forced_download_replaces_present_file_only_after_verification(tmp_path:
         models_dir,
         info,
         download_timeout=10,
-        lock_timeout=1,
         force=True,
     )
 
@@ -237,42 +236,12 @@ def test_failed_forced_download_preserves_the_present_file(tmp_path: Path) -> No
             models_dir,
             info,
             download_timeout=10,
-            lock_timeout=1,
             force=True,
         )
 
     assert excinfo.value.code == "model_corrupt"
     assert target.read_bytes() == b"old verified model"
     assert not list(models_dir.glob("*.tmp"))
-
-
-def test_download_model_info_does_not_require_lock_directory_for_present_file(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    models_dir = tmp_path / "models"
-    models_dir.mkdir()
-    target = models_dir / "local-model.pth"
-    target.write_bytes(b"already present")
-    info = ModelInfo("local-model", target.name, "https://example.com/model.pth")
-    original_mkdir = Path.mkdir
-
-    def reject_lock_directory(path: Path, *args: object, **kwargs: object) -> None:
-        if path == models_dir / ".locks":
-            raise OSError("read-only models directory")
-        original_mkdir(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "mkdir", reject_lock_directory)
-
-    result = download_model_info(
-        models_dir,
-        info,
-        download_timeout=10,
-        lock_timeout=1,
-    )
-
-    assert result["status"] == "present"
-    assert not (models_dir / ".locks").exists()
 
 
 def test_download_model_info_removes_temp_on_verification_failure(tmp_path: Path) -> None:
@@ -298,7 +267,6 @@ def test_download_model_info_removes_temp_on_verification_failure(tmp_path: Path
             models_dir,
             info,
             download_timeout=10,
-            lock_timeout=1,
         )
 
     assert excinfo.value.code == "model_corrupt"
@@ -331,7 +299,7 @@ def test_download_model_info_refuses_https_redirect_to_http(
     )
 
     with pytest.raises(PixelupError) as excinfo:
-        download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
+        download_model_info(models_dir, info, download_timeout=10)
 
     assert excinfo.value.code == "model_download_failed"
     assert "HTTPS is required" in str(excinfo.value)
@@ -381,7 +349,7 @@ def test_download_model_info_enforces_total_download_deadline(
     )
 
     with pytest.raises(PixelupError) as excinfo:
-        download_model_info(models_dir, info, download_timeout=1, lock_timeout=1)
+        download_model_info(models_dir, info, download_timeout=1)
 
     assert excinfo.value.code == "model_download_failed"
     assert "total timeout" in str(excinfo.value.details["reason"])
@@ -426,7 +394,7 @@ def test_download_model_info_rejects_advertised_size_above_pin(
     )
 
     with pytest.raises(PixelupError) as excinfo:
-        download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
+        download_model_info(models_dir, info, download_timeout=10)
 
     assert excinfo.value.code == "model_download_failed"
     assert excinfo.value.details["advertised_size_bytes"] == 2
@@ -474,7 +442,7 @@ def test_download_model_info_aborts_stream_above_pin_and_cleans_temp(
     )
 
     with pytest.raises(PixelupError) as excinfo:
-        download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
+        download_model_info(models_dir, info, download_timeout=10)
 
     assert excinfo.value.code == "model_download_failed"
     assert excinfo.value.details["received_size_bytes"] == 2
@@ -518,7 +486,6 @@ def test_download_model_info_cancels_during_blocking_connection_setup(
                 models_dir,
                 info,
                 download_timeout=10,
-                lock_timeout=1,
                 should_cancel=started.is_set,
             )
     finally:
@@ -560,7 +527,7 @@ def test_download_model_info_deadline_abandons_blocking_connection_setup(
 
     try:
         with pytest.raises(PixelupError) as excinfo:
-            download_model_info(models_dir, info, download_timeout=0.05, lock_timeout=1)
+            download_model_info(models_dir, info, download_timeout=0.05)
     finally:
         release.set()
 
@@ -723,7 +690,6 @@ def test_download_model_info_checks_cancellation_immediately_before_publish(
             models_dir,
             info,
             download_timeout=10,
-            lock_timeout=1,
             should_cancel=lambda: cancelled,
         )
 
@@ -797,7 +763,7 @@ def test_download_syncs_stage_before_publish_and_directory_after(
     monkeypatch.setattr(models_module.os, "replace", replace)
     monkeypatch.setattr(models_module, "_sync_directory_best_effort", sync_directory)
 
-    download_model_info(models_dir, info, download_timeout=10, lock_timeout=1)
+    download_model_info(models_dir, info, download_timeout=10)
 
     assert order == ["sync-stage", "publish", "sync-directory"]
 
@@ -838,74 +804,8 @@ def test_download_model_info_cleans_temp_after_unexpected_progress_failure(tmp_p
             models_dir,
             info,
             download_timeout=10,
-            lock_timeout=1,
             on_download=fail_progress,
         )
 
     assert not (models_dir / "local-model.pth").exists()
     assert not list(models_dir.glob("*.tmp"))
-
-
-def test_download_model_info_cancels_while_waiting_for_lock(tmp_path: Path) -> None:
-    # When the download lock is held by another process and the caller signals
-    # cancellation, the wait must abort with JOB_CANCELLED instead of blocking
-    # for the full lock_timeout.
-    source = tmp_path / "source.pth"
-    source.write_bytes(b"downloaded weights")
-    models_dir = tmp_path / "models"
-    locks_dir = models_dir / ".locks"
-    locks_dir.mkdir(parents=True)
-    info = ModelInfo(
-        "local-model",
-        "local-model.pth",
-        source.resolve().as_uri(),
-        expected_size=source.stat().st_size,
-    )
-    cancel_after = 2
-    calls = {"count": 0}
-
-    def should_cancel() -> bool:
-        calls["count"] += 1
-        return calls["count"] >= cancel_after
-
-    lock = FileLock(str(locks_dir / "local-model.lock"))
-    with lock.acquire(timeout=1):
-        with pytest.raises(PixelupError) as excinfo:
-            download_model_info(
-                models_dir,
-                info,
-                download_timeout=10,
-                lock_timeout=600,
-                should_cancel=should_cancel,
-            )
-
-    assert excinfo.value.code == "job_cancelled"
-    assert not (models_dir / "local-model.pth").exists()
-
-
-def test_download_model_info_lock_timeout_leaves_existing_state(tmp_path: Path) -> None:
-    source = tmp_path / "source.pth"
-    source.write_bytes(b"downloaded weights")
-    models_dir = tmp_path / "models"
-    locks_dir = models_dir / ".locks"
-    locks_dir.mkdir(parents=True)
-    info = ModelInfo(
-        "local-model",
-        "local-model.pth",
-        source.resolve().as_uri(),
-        expected_size=source.stat().st_size,
-    )
-
-    lock = FileLock(str(locks_dir / "local-model.lock"))
-    with lock.acquire(timeout=1):
-        with pytest.raises(PixelupError) as excinfo:
-            download_model_info(
-                models_dir,
-                info,
-                download_timeout=10,
-                lock_timeout=0,
-            )
-
-    assert excinfo.value.code == "model_download_failed"
-    assert excinfo.value.details == {"model": "local-model", "lock_timeout": 0}
-    assert not (models_dir / "local-model.pth").exists()

@@ -14,11 +14,10 @@ from typing import Any
 from pixelup.config import resolve_state_dir
 from pixelup.formats import (
     RECORDS_FORMAT_VERSION,
-    check_sqlite_format,
     open_sqlite_store,
     rollback_sqlite,
 )
-from pixelup.timestamps import to_utc_iso_ms, utc_stamp_ms
+from pixelup.timestamps import to_utc_iso_ms, utc_stamp
 
 LOGGER_NAME = "pixelup"
 DEBUG_ENV = "PIXELUP_DEBUG"
@@ -168,7 +167,6 @@ class RecordsHandler(logging.Handler):
         fields = {key: value for key, value in entry.items() if key not in _COLUMNS}
         self._connection.execute("BEGIN IMMEDIATE")
         try:
-            check_sqlite_format(self._connection, self._database, RECORDS_FORMAT_VERSION)
             self._connection.execute(
                 "INSERT INTO logs (session, time, level, message, job_id, operation_id, fields)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -315,7 +313,7 @@ def configure_session_logging() -> Path:
         RecordsHandler(
             database,
             session=to_utc_iso_ms(started),
-            fallback=root / "logs" / f"{utc_stamp_ms(started)}.log",
+            fallback=root / "logs" / f"{utc_stamp(started)}.log",
         )
     )
 

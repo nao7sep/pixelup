@@ -181,7 +181,6 @@ class RecordsReader:
         try:
             connection = self._open()
             connection.execute("BEGIN")
-            check_sqlite_format(connection, self._database, RECORDS_FORMAT_VERSION)
             result = read(connection)
         except BaseException as exc:
             if connection is not None:

@@ -4,14 +4,14 @@ import os
 import re
 import stat
 import sys
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
-from pixelup.nanoid import nanoid
-from pixelup.timestamps import utc_now_stamp_ms
+from pixelup.timestamps import utc_now_stamp
 
 APP_NAME = "pixelup"
 HOME_ENV = "PIXELUP_DATA_DIR"
@@ -203,7 +203,7 @@ def _ensure_dir(path: Path, code: ErrorCode, message: Message) -> Path:
 
 
 def quarantine_corrupt_file(path: Path) -> Path:
-    """Move a corrupt managed file aside to ``<stem>-<ms-utc>.invalid`` and return the new path.
+    """Move a corrupt managed file aside to ``<stem>-<utc>.invalid`` and return the new path.
 
     The one place PixelUp quarantines an unreadable managed file. The storage-path
     conventions forbid silently discarding a corrupt managed file: the load path may
@@ -212,22 +212,27 @@ def quarantine_corrupt_file(path: Path) -> Path:
     which then runs on the built-ins in memory and writes no replacement file.
 
     The quarantine name follows the derived-filename grammar
-    ``<stem>-<discriminator>.<role-extension>``: the discriminator is a millisecond
-    UTC stamp (``yyyymmdd-hhmmss-fff-utc``) because the moment of quarantine carries
-    meaning, and the role extension is ``.invalid`` — the file *is* now an invalid
-    cast-off, so its original extension is replaced rather than appended to, keeping
-    the debris out of any ``*.json`` scan. On the rare same-millisecond collision the
-    stem gains a nanoid so a second quarantine never clobbers the first. The move is
-    an atomic same-directory rename, so no interruption can leave a half-copied
-    ``.invalid`` file next to a still-corrupt original.
+    ``<stem>-<discriminator>.<role-extension>``: the discriminator is a second UTC
+    stamp because the moment of quarantine carries meaning, and the role extension
+    is ``.invalid`` — the file *is* now an invalid cast-off, so its original
+    extension is replaced rather than appended to, keeping the debris out of any
+    ``*.json`` scan. The name is claimed with exclusive creation before the move, so
+    an earlier quarantine is never replaced: a clash (two launches in one second,
+    the unsupported second-instance case) fails like any other read failure and
+    leaves the original in place. The move is an atomic same-directory rename onto
+    that claimed name, so no interruption can leave a half-copied ``.invalid`` file
+    next to a still-corrupt original.
     """
-    target = path.with_name(f"{path.stem}-{utc_now_stamp_ms()}.invalid")
-    if target.exists():
-        target = path.with_name(f"{path.stem}-{utc_now_stamp_ms()}-{nanoid()}.invalid")
+    target = path.with_name(f"{path.stem}-{utc_now_stamp()}.invalid")
+    os.close(os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
     # not recorded: this is a move-aside of an already-unreadable managed file, not a
     # managed-text write — no new content is produced here, and the corrupt bytes are
     # not a version to preserve in the history (data-backup-conventions).
-    os.replace(path, target)
+    try:
+        os.replace(path, target)
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
     return target
 
 
@@ -238,29 +243,29 @@ def write_managed_text(path: Path, text: str) -> None:
     through here. A managed-text write that bypasses this helper is a silent backup
     gap; there is deliberately no second atomic-write path for managed text in the app.
 
-    Writes ``text`` (UTF-8) to a same-directory temp named ``<stem>-<nanoid>.tmp``
-    (the storage-path conventions' derived-filename grammar — the nanoid guarantees
-    two concurrent writers never share a temp), then atomically renames it over
-    ``path``, so a crash mid-write cannot corrupt the target. Raises on failure; the
-    caller logs it through the session log.
+    Writes ``text`` (UTF-8) to a temp file the standard library creates exclusively
+    beside ``path`` (``<stem>-<random>.tmp``, the storage-path conventions'
+    derived-filename grammar), then atomically renames it over ``path``, so a crash
+    mid-write cannot corrupt the target. Raises on failure; the caller logs it
+    through the session log.
 
     **The data-backup record fires strictly AFTER the rename lands
     (data-backup-conventions).** Recording before the rename would risk a "backup of
     a save that never happened": if the rename then failed, the history would hold a
     version that never reached disk. So: rename lands, *then* record the exact bytes
     just written — the same ``data`` buffer already in hand, never a re-read of the
-    file (which would risk capturing a concurrent writer's content, not what this
-    call wrote). The record is best-effort and silent; it never raises back into this
+    file. The record is best-effort and silent; it never raises back into this
     write and never affects the save's success (see :mod:`pixelup.backup_store`).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     data = text.encode("utf-8")
-    temp_path = path.with_name(f"{path.stem}-{nanoid()}.tmp")
+    descriptor, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.stem}-", suffix=".tmp")
+    temp_path = Path(temp_name)
     try:
-        with temp_path.open("wb") as file:
+        with os.fdopen(descriptor, "wb") as file:
             file.write(data)
-            if sys.platform == "darwin":
-                _keep_replaced_file_mode(path, temp_path)
+        if sys.platform == "darwin":
+            _keep_replaced_file_mode(path, temp_path)
         os.replace(temp_path, path)
     except BaseException:
         temp_path.unlink(missing_ok=True)

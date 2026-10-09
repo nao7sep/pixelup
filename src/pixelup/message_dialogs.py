@@ -59,8 +59,8 @@ def warn_config_reset(parent: QWidget | None, quarantined_to: Path) -> None:
     _show_message(parent, Message.of("notice.configReset", path=str(quarantined_to)))
 
 
-def warn_config_recovered_save(parent: QWidget | None, quarantined_to: Path) -> None:
-    _show_message(parent, Message.of("notice.configRecoveredOnSave", path=str(quarantined_to)))
+def warn_config_rejected(parent: QWidget | None, settings: tuple[Message, ...], path: Path) -> None:
+    _show_message(parent, Message.of("notice.configRejected", settings=settings, path=str(path)))
 
 
 def warn_config_newer(parent: QWidget | None, path: Path) -> None:

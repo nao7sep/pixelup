@@ -31,7 +31,7 @@ import threading
 from pathlib import Path
 
 from pixelup.config import resolve_state_dir
-from pixelup.formats import BACKUPS_FORMAT_VERSION, check_sqlite_format, open_sqlite_store
+from pixelup.formats import BACKUPS_FORMAT_VERSION, open_sqlite_store
 from pixelup.session_log import log
 from pixelup.timestamps import utc_now_iso_ms
 
@@ -40,7 +40,7 @@ STORE_FILE_NAME = "backups.sqlite3"
 # The one add-only table. `content` is a BLOB of the exact bytes written — never
 # decoded text, so CR/LF, a BOM, and non-UTF-8 bytes are stored byte-identically.
 # `written_at_utc` is the serialized ISO-8601-ms form (2026-07-06T04:05:12.345Z),
-# a data value — NEVER the yyyymmdd-hhmmss-fff-utc filename stamp. The (path, id)
+# a data value — NEVER the yyyymmdd-hhmmss-utc filename stamp. The (path, id)
 # index serves the latest-row-per-path dedup lookup.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS backups (
@@ -74,9 +74,7 @@ def _store_file() -> Path:
 def _ensure_open() -> sqlite3.Connection | None:
     """Open and initialize the store once (create the table if absent, switch on
     WAL). Best-effort: on any failure it logs ONE warn, leaves recording disabled
-    for the session, and never raises. WAL is what lets the tolerated two-instance
-    case (two PixelUp windows writing at once) serialize safely without a
-    cross-process lock.
+    for the session, and never raises.
     """
     global _connection, _initialized
     if _initialized:
@@ -131,11 +129,9 @@ def record(absolute_path: Path, data: bytes) -> None:
             return  # open failed earlier; disabled for the session (already warned once)
         try:
             digest = _sha256(data)
-            # Acquire SQLite's cross-process writer lock before reading the predecessor.
-            # Without one transaction around SELECT + INSERT, two instances can both
-            # observe the same latest hash and append the same successor.
+            # The predecessor read and the insert are one transaction, so the
+            # comparison and the row it decides on are atomic.
             store.execute("BEGIN IMMEDIATE")
-            check_sqlite_format(store, _store_file(), BACKUPS_FORMAT_VERSION)
             row = store.execute(
                 "SELECT content_sha256 FROM backups WHERE path = ? ORDER BY id DESC LIMIT 1",
                 (path_text,),

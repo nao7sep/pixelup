@@ -9,7 +9,6 @@ off-screen back onto one.
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
@@ -17,46 +16,24 @@ from PySide6.QtCore import QByteArray, QSettings, Qt
 from PySide6.QtWidgets import QWidget
 
 from pixelup.config import window_settings_path
-from pixelup.formats import WINDOW_STATE_FORMAT_VERSION, format_version
 from pixelup.session_log import log
-
-FORMAT_VERSION_KEY = "formatVersion"
 
 
 class WindowState:
-    """window.ini: the disposable window state, placement and pane widths, under
-    one format version (store-recovery-conventions).
+    """window.ini: the disposable window state, placement and pane widths.
 
-    A file a newer PixelUp wrote is left exactly as it is: nothing is read from it
-    or written to it, so the windows open at their designed sizes. A missing marker,
-    or one that is not a version, makes the file's contents unusable, and it is
-    reset.
+    It carries no format marker (store-recovery-conventions): every value is
+    checked where it is used — Qt validates its own geometry blob and each pane
+    width is bounded — and anything unusable, whatever wrote it, leaves the designed
+    size in place. A failed read or save costs only a diagnostic.
     """
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self._settings = QSettings(str(path), QSettings.Format.IniFormat)
-        self._newer = False
-        self._usable = True
-        if not path.exists():
-            return
-        stored = self._settings.value(FORMAT_VERSION_KEY)
-        if self._settings.status() != QSettings.Status.NoError:
-            return
-        try:
-            version = format_version(_ini_integer(stored))
-        except ValueError:
-            log.warning("window.state_reset", path=str(path), reason="no usable formatVersion")
-            self._usable = False
-            return
-        if version > WINDOW_STATE_FORMAT_VERSION:
-            self._newer = True
-            log.warning("window.state_newer_format", path=str(path), format_version=version)
 
     def value(self, key: str) -> object | None:
         """The saved value, or ``None`` when there is none this build may use."""
-        if self._newer or not self._usable:
-            return None
         value = self._settings.value(key)
         if self._settings.status() != QSettings.Status.NoError:
             log.warning("window.state_load_failed", key=key)
@@ -64,45 +41,10 @@ class WindowState:
         return value
 
     def save(self, key: str, value: object) -> None:
-        if self._newer:
-            return
-        settings = QSettings(str(self.path), QSettings.Format.IniFormat)
-        settings.sync()
-        if settings.status() != QSettings.Status.NoError:
+        self._settings.setValue(key, value)
+        self._settings.sync()
+        if self._settings.status() != QSettings.Status.NoError:
             log.warning("window.state_save_failed", key=key)
-            return
-        reset = False
-        if self.path.exists():
-            try:
-                version = format_version(_ini_integer(settings.value(FORMAT_VERSION_KEY)))
-            except ValueError:
-                reset = True
-            else:
-                if version > WINDOW_STATE_FORMAT_VERSION:
-                    self._newer = True
-                    log.warning(
-                        "window.state_newer_format", path=str(self.path), format_version=version
-                    )
-                    return
-        if reset:
-            settings.clear()
-        settings.setValue(FORMAT_VERSION_KEY, WINDOW_STATE_FORMAT_VERSION)
-        settings.setValue(key, value)
-        settings.sync()
-        if settings.status() != QSettings.Status.NoError:
-            log.warning("window.state_save_failed", key=key)
-        else:
-            self._settings = settings
-            self._usable = True
-
-
-def _ini_integer(value: object) -> object:
-    # An INI file holds every value as text.
-    if isinstance(value, str):
-        if not re.fullmatch(r"[0-9]+", value):
-            raise ValueError("the format version is not an integer")
-        return int(value)
-    return value
 
 
 def window_state() -> WindowState:

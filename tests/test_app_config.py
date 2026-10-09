@@ -2,24 +2,28 @@ import json
 import os
 import stat
 import sys
-import threading
 from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
-from filelock import FileLock
 
 from pixelup.app_config import (
     AppConfig,
+    ConfigSaveResult,
     config_log_payload,
     load_app_config,
     load_app_config_result,
-    save_app_config_merged,
+    save_app_config,
 )
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.jobs import JobSettings, job_settings_log_payload
 from pixelup.paths import OutputFormat
+
+
+def _save(candidate: AppConfig, previous: AppConfig, path: Path) -> ConfigSaveResult:
+    """One save as a launch makes it: from the file state read at load."""
+    return save_app_config(candidate, previous, load_app_config_result(path).file)
 
 
 def test_app_config_round_trips_json(tmp_path: Path) -> None:
@@ -28,7 +32,7 @@ def test_app_config_round_trips_json(tmp_path: Path) -> None:
         max_concurrent_jobs=3,
     )
 
-    save_app_config_merged(config, AppConfig(), path)
+    _save(config, AppConfig(), path)
 
     assert load_app_config(path) == config
 
@@ -52,7 +56,7 @@ def test_app_config_round_trips_the_parameters_panel(tmp_path: Path) -> None:
     )
     config = AppConfig(parameters=parameters)
 
-    save_app_config_merged(config, AppConfig(), path)
+    _save(config, AppConfig(), path)
     loaded = load_app_config(path)
 
     assert loaded.parameters == parameters
@@ -68,7 +72,7 @@ def test_app_config_round_trips_a_deliberate_zero_tile(tmp_path: Path) -> None:
     # so it is exactly the value a truthiness bug in the loader would quietly replace
     # with 256. It must survive the round trip.
     path = tmp_path / "config.json"
-    save_app_config_merged(AppConfig(parameters=JobSettings(tile=0)), AppConfig(), path)
+    _save(AppConfig(parameters=JobSettings(tile=0)), AppConfig(), path)
 
     assert load_app_config(path).parameters.tile == 0
 
@@ -98,14 +102,14 @@ def test_obsolete_auto_download_key_is_ignored(tmp_path: Path) -> None:
 
 def test_unchanged_defaults_write_no_file(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    assert save_app_config_merged(AppConfig(), AppConfig(), path).config == AppConfig()
+    assert _save(AppConfig(), AppConfig(), path).config == AppConfig()
     assert not path.exists()
 
 
 def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     candidate = AppConfig(parameters=JobSettings(quality=55))
-    save_app_config_merged(candidate, AppConfig(), path)
+    _save(candidate, AppConfig(), path)
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert set(stored) == {"format_version", "parameters"}
     assert stored["format_version"] == 1
@@ -118,13 +122,13 @@ def test_a_changed_save_keeps_the_file_mode_with_a_fresh_modified_time(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.json"
-    save_app_config_merged(AppConfig(parameters=JobSettings(quality=55)), AppConfig(), path)
+    _save(AppConfig(parameters=JobSettings(quality=55)), AppConfig(), path)
     os.chmod(path, 0o640)
     old = 1_000_000_000
     os.utime(path, (old, old))
 
     previous = load_app_config(path)
-    save_app_config_merged(replace(previous, parameters=JobSettings(quality=60)), previous, path)
+    _save(replace(previous, parameters=JobSettings(quality=60)), previous, path)
 
     assert load_app_config(path).parameters.quality == 60
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
@@ -138,15 +142,20 @@ def test_one_stored_set_uses_built_ins_for_every_other_set(tmp_path: Path) -> No
     assert load_app_config(path) == AppConfig(font_family="Menlo")
 
 
-def test_next_edit_drops_unknown_keys_and_writes_the_format_version(tmp_path: Path) -> None:
+def test_next_edit_keeps_unknown_keys_and_writes_the_format_version(tmp_path: Path) -> None:
+    # A key this build does not know (an older one, or one a newer PixelUp added) is
+    # not disposable: an unrelated save writes it back unchanged (developer decision).
     path = tmp_path / "config.json"
     path.write_text(
-        '{"format_version": 1, "version": 99, "future": true, "language": "ja"}', encoding="utf-8"
+        '{"format_version": 1, "version": 99, "future": {"a": [1, 2]}, "language": "ja"}',
+        encoding="utf-8",
     )
     previous = load_app_config(path)
-    save_app_config_merged(replace(previous, max_concurrent_jobs=3), previous, path)
+    _save(replace(previous, max_concurrent_jobs=3), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
+        "version": 99,
+        "future": {"a": [1, 2]},
         "language": "ja",
         "max_concurrent_jobs": 3,
     }
@@ -155,8 +164,8 @@ def test_next_edit_drops_unknown_keys_and_writes_the_format_version(tmp_path: Pa
 def test_saving_a_set_equal_to_its_built_in_deletes_only_that_set(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     previous = AppConfig(language="ja", parameters=JobSettings(quality=55))
-    save_app_config_merged(previous, AppConfig(), path)
-    reset = save_app_config_merged(
+    _save(previous, AppConfig(), path)
+    reset = _save(
         replace(previous, parameters=JobSettings()), previous, path
     ).config
     assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
@@ -166,8 +175,8 @@ def test_saving_a_set_equal_to_its_built_in_deletes_only_that_set(tmp_path: Path
 def test_the_last_set_back_at_its_built_in_leaves_an_empty_map(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     previous = AppConfig(parameters=JobSettings(quality=55))
-    save_app_config_merged(previous, AppConfig(), path)
-    save_app_config_merged(AppConfig(), previous, path)
+    _save(previous, AppConfig(), path)
+    _save(AppConfig(), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1}
 
 
@@ -177,29 +186,103 @@ def test_any_save_drops_a_stored_copy_equal_to_its_built_in(tmp_path: Path) -> N
         json.dumps({"format_version": 1, "parameters": _parameter_map()}), encoding="utf-8"
     )
     previous = load_app_config(path)
-    save_app_config_merged(replace(previous, language="ja"), previous, path)
+    _save(replace(previous, language="ja"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
 
 
-def test_any_save_drops_a_set_that_failed_its_check(tmp_path: Path) -> None:
+def test_an_unrelated_save_keeps_a_set_that_failed_its_check(tmp_path: Path) -> None:
+    # The rejected set runs on its built-in, but its stored value is the user's and
+    # stays in the file, unchanged, until the user saves that same set (developer
+    # decision).
     path = tmp_path / "config.json"
+    rejected = _parameter_map(quality=250, scale=4)
     path.write_text(
-        '{"format_version": 1, "max_concurrent_jobs": 99, "language": "ja"}', encoding="utf-8"
+        json.dumps({"format_version": 1, "parameters": rejected, "future": "kept"}),
+        encoding="utf-8",
     )
-    previous = load_app_config(path)
-    save_app_config_merged(replace(previous, font_family="Menlo"), previous, path)
+    loaded = load_app_config_result(path)
+    assert loaded.rejected == ("parameters",)
+    assert loaded.config.parameters == JobSettings()
+
+    first = save_app_config(replace(loaded.config, language="ja"), loaded.config, loaded.file)
+    second = save_app_config(
+        replace(first.config, font_family="Menlo"), first.config, first.file
+    )
+
+    assert second.config.parameters == JobSettings()
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
-        "font_family": "Menlo",
+        "parameters": rejected,
+        "future": "kept",
         "language": "ja",
+        "font_family": "Menlo",
     }
+
+
+def test_saving_a_set_that_failed_its_check_replaces_it(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"format_version": 1, "parameters": _parameter_map(quality=250)}),
+        encoding="utf-8",
+    )
+    loaded = load_app_config_result(path)
+    edited = replace(loaded.config, parameters=JobSettings(quality=60))
+
+    result = save_app_config(edited, loaded.config, loaded.file)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "parameters": _parameter_map(quality=60),
+    }
+    assert result.file.unapplied == frozenset()
+    # The next unrelated save no longer has anything to carry for that set.
+    later = save_app_config(replace(edited, language="ja"), edited, result.file)
+    assert json.loads(path.read_text(encoding="utf-8"))["parameters"] == _parameter_map(
+        quality=60
+    )
+    assert later.file.unapplied == frozenset()
+
+
+def test_a_set_that_failed_its_check_is_kept_byte_for_byte_across_a_save(tmp_path: Path) -> None:
+    # Written back exactly as stored: float spelling, key order inside the set and
+    # unknown members all survive, so nothing about the user's copy is reinterpreted.
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"format_version": 1, "parameters": {"quality": 250, "scale": 4.0, "z": null}}',
+        encoding="utf-8",
+    )
+    loaded = load_app_config_result(path)
+
+    save_app_config(replace(loaded.config, language="ja"), loaded.config, loaded.file)
+
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert json.dumps(stored["parameters"]) == '{"quality": 250, "scale": 4.0, "z": null}'
+
+
+def test_a_save_replaces_hand_edits_made_after_load(tmp_path: Path) -> None:
+    # PixelUp owns config.json while it runs (developer decision): its save writes
+    # from the state read at launch, so an edit made to the file meanwhile, even one
+    # that broke it, is replaced by the user's current settings.
+    path = tmp_path / "config.json"
+    path.write_text('{"format_version": 1, "language": "ja"}', encoding="utf-8")
+    loaded = load_app_config_result(path)
+    path.write_text("{ broken by hand", encoding="utf-8")
+
+    save_app_config(replace(loaded.config, max_concurrent_jobs=3), loaded.config, loaded.file)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "language": "ja",
+        "max_concurrent_jobs": 3,
+    }
+    assert list(tmp_path.glob("*.invalid")) == []
 
 
 def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     config = AppConfig(font_family="Courier New, monospace")
 
-    save_app_config_merged(config, AppConfig(), path)
+    _save(config, AppConfig(), path)
 
     assert load_app_config(path).font_family == "Courier New, monospace"
 
@@ -327,10 +410,10 @@ def test_a_newer_config_is_left_in_place_and_reads_as_built_ins(tmp_path: Path) 
     result = load_app_config_result(path)
 
     assert result.config == AppConfig()
-    assert result.newer_format == 2
+    assert result.file.newer_format == 2
     assert result.quarantined_to is None
     assert path.read_text(encoding="utf-8") == text
-    assert {item.name for item in tmp_path.iterdir()} == {"config.json", "config.json.lock"}
+    assert {item.name for item in tmp_path.iterdir()} == {"config.json"}
 
 
 def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path) -> None:
@@ -340,7 +423,7 @@ def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path
     previous = load_app_config(path)
 
     with pytest.raises(PixelupError) as raised:
-        save_app_config_merged(replace(previous, language="ja"), previous, path)
+        _save(replace(previous, language="ja"), previous, path)
 
     assert raised.value.code == ErrorCode.STORE_NEWER_FORMAT
     assert raised.value.message.key == "error.configNewer"
@@ -538,6 +621,7 @@ def test_present_malformed_set_falls_back_without_costing_other_sets(
     result = load_app_config_result(path)
     assert result.config == AppConfig(font_family="Menlo")
     assert result.quarantined_to is None
+    assert result.rejected == (next(iter(data)),)
     assert path.read_bytes() == original
     warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
     assert len(warnings) == 1
@@ -639,87 +723,16 @@ def test_old_flat_keys_are_inert(tmp_path: Path) -> None:
     assert config.parameters == JobSettings()
 
 
-def test_save_app_config_merged_keeps_a_sibling_windows_untouched_field(
-    tmp_path: Path,
-) -> None:
-    # Two windows open on the same config.json (PU-3). Window A saves a settings
-    # change; window B, still holding its older snapshot, then saves an unrelated
-    # Parameters-panel edit. B's save must not carry A's field back to its stale value.
-    path = tmp_path / "config.json"
-    opened = AppConfig()
-    save_app_config_merged(opened, AppConfig(), path)
-
-    save_app_config_merged(replace(opened, max_concurrent_jobs=4), AppConfig(), path)  # window A
-
-    b_candidate = replace(opened, parameters=JobSettings(quality=42))  # window B
-    merged = save_app_config_merged(b_candidate, opened, path).config
-
-    assert merged.max_concurrent_jobs == 4
-    assert merged.parameters.quality == 42
-    assert load_app_config(path) == merged
-
-
-def test_save_app_config_merged_is_a_no_op_when_candidate_matches_previous(
-    tmp_path: Path,
-) -> None:
+def test_a_save_that_changes_nothing_writes_nothing(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     opened = AppConfig(max_concurrent_jobs=3)
-    save_app_config_merged(opened, AppConfig(), path)
+    first = _save(opened, AppConfig(), path)
     written_at = path.stat().st_mtime_ns
 
-    merged = save_app_config_merged(opened, opened, path).config
+    saved = save_app_config(opened, opened, first.file).config
 
-    assert merged == opened
+    assert saved == opened
     assert path.stat().st_mtime_ns == written_at
-
-
-def test_save_app_config_merged_times_out_behind_another_holder(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    save_app_config_merged(AppConfig(), AppConfig(), path)
-    lock = FileLock(str(path.with_name(f"{path.name}.lock")))
-    lock.acquire()
-    try:
-        with pytest.raises(PixelupError) as excinfo:
-            save_app_config_merged(
-                AppConfig(max_concurrent_jobs=2),
-                AppConfig(),
-                path,
-            )
-        assert excinfo.value.code == "internal_error"
-    finally:
-        lock.release()
-
-
-def test_save_app_config_merged_serializes_two_concurrent_savers(tmp_path: Path) -> None:
-    # Not a race in the fix itself: both callers' edits land, applied one after the
-    # other rather than one silently overwriting the other's.
-    path = tmp_path / "config.json"
-    opened = AppConfig()
-    save_app_config_merged(opened, AppConfig(), path)
-    ready = threading.Barrier(2)
-    results: list[AppConfig] = []
-    errors: list[Exception] = []
-
-    def save(candidate: AppConfig) -> None:
-        try:
-            ready.wait(timeout=2)
-            results.append(save_app_config_merged(candidate, opened, path).config)
-        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` for the assertion.
-            errors.append(exc)
-
-    thread_a = threading.Thread(target=save, args=(replace(opened, max_concurrent_jobs=5),))
-    thread_b = threading.Thread(
-        target=save, args=(replace(opened, parameters=JobSettings(quality=17)),)
-    )
-    thread_a.start()
-    thread_b.start()
-    thread_a.join(timeout=5)
-    thread_b.join(timeout=5)
-
-    assert not errors
-    final = load_app_config(path)
-    assert final.max_concurrent_jobs == 5
-    assert final.parameters.quality == 17
 
 
 def test_config_log_payload_shape() -> None:
@@ -747,6 +760,7 @@ def test_partial_parameters_read_as_the_built_in_with_a_warning(
     result = load_app_config_result(path)
     assert result.config == AppConfig(language="ja")
     assert result.quarantined_to is None
+    assert result.rejected == ("parameters",)
     warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
     assert len(warnings) == 1
     assert warnings[0].fields["key"] == "parameters"
@@ -759,87 +773,9 @@ def test_edit_writes_the_untouched_user_set_whole_from_memory(tmp_path: Path) ->
         json.dumps({"format_version": 1, "parameters": stored_parameters}), encoding="utf-8"
     )
     previous = load_app_config(path)
-    save_app_config_merged(replace(previous, language="ja"), previous, path)
+    _save(replace(previous, language="ja"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
         "parameters": _parameter_map(quality=42),
         "language": "ja",
     }
-
-
-def test_successful_save_reports_recovery_and_preserves_the_saved_edit(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    previous = AppConfig(font_family="Menlo", parameters=JobSettings(quality=55))
-    original = b"{invalid"
-    path.write_bytes(original)
-
-    result = save_app_config_merged(
-        replace(previous, parameters=JobSettings(quality=60)), previous, path
-    )
-
-    assert result.config.parameters.quality == 60
-    assert result.config.font_family == AppConfig().font_family
-    assert result.quarantined_to.read_bytes() == original
-    assert load_app_config(path) == result.config
-
-
-def test_recovery_and_sibling_save_use_one_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import pixelup.app_config as app_config
-
-    path = tmp_path / "config.json"
-    original = b"{invalid"
-    path.write_bytes(original)
-    recovering = threading.Event()
-    release = threading.Event()
-    waiting = threading.Event()
-    saved = threading.Event()
-    errors: list[BaseException] = []
-    original_quarantine = app_config.quarantine_corrupt_file
-    original_acquire = FileLock.acquire
-
-    def quarantine(file):
-        recovering.set()
-        assert release.wait(5)
-        return original_quarantine(file)
-
-    def acquire(lock, *args, **kwargs):
-        if threading.current_thread().name == "sibling-save":
-            waiting.set()
-        return original_acquire(lock, *args, **kwargs)
-
-    monkeypatch.setattr(app_config, "quarantine_corrupt_file", quarantine)
-    monkeypatch.setattr(FileLock, "acquire", acquire)
-
-    def load():
-        try:
-            load_app_config_result(path)
-        except BaseException as exc:
-            errors.append(exc)
-
-    def save():
-        try:
-            save_app_config_merged(AppConfig(language="ja"), AppConfig(), path)
-            saved.set()
-        except BaseException as exc:
-            errors.append(exc)
-
-    reader = threading.Thread(target=load)
-    writer = threading.Thread(target=save, name="sibling-save")
-    reader.start()
-    try:
-        assert recovering.wait(5)
-        writer.start()
-        assert waiting.wait(5)
-        assert not saved.is_set()
-    finally:
-        release.set()
-        reader.join(5)
-        if writer.ident is not None:
-            writer.join(5)
-    assert not reader.is_alive() and not writer.is_alive()
-    assert errors == []
-    assert saved.is_set()
-    assert load_app_config(path).language == "ja"
-    assert next(tmp_path.glob("*.invalid")).read_bytes() == original

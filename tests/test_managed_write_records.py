@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pixelup.app_config import AppConfig, save_app_config_merged
+from pixelup.app_config import AppConfig, load_app_config_result, save_app_config
 from pixelup.backup_store import STORE_FILE_NAME, close_backup_store
 from pixelup.config import write_managed_text
 from pixelup.jobs import JobSettings
@@ -76,9 +76,9 @@ def test_save_app_config_records_config_json(
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
 
-    save_app_config_merged(AppConfig(parameters=JobSettings(quality=94)), AppConfig(), target)
-    save_app_config_merged(AppConfig(parameters=JobSettings(quality=94)), AppConfig(), target)
-    save_app_config_merged(AppConfig(parameters=JobSettings(quality=80)), AppConfig(), target)
+    for quality in (94, 94, 80):
+        candidate = AppConfig(parameters=JobSettings(quality=quality))
+        save_app_config(candidate, AppConfig(), load_app_config_result(target).file)
 
     rows = _store_rows(home, target)
     assert len(rows) == 2  # first save + the changed save; the identical one skipped
@@ -129,3 +129,21 @@ def test_a_failing_backup_never_breaks_the_save(
     write_managed_text(target, "durable\n")
 
     assert target.read_text(encoding="utf-8") == "durable\n"
+
+
+def test_a_failed_write_leaves_the_original_and_no_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    write_managed_text(target, "original\n")
+
+    def fail_replace(_source: object, _target: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("pixelup.config.os.replace", fail_replace)
+    with pytest.raises(OSError, match="disk full"):
+        write_managed_text(target, "replacement\n")
+
+    assert target.read_text(encoding="utf-8") == "original\n"
+    assert list(home.glob("*.tmp")) == []

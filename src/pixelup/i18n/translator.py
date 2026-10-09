@@ -90,5 +90,7 @@ class Translator:
             return self.locale.toString(value, "f", 1)
         if isinstance(value, tuple | list):
             # Lists of names use the locale's own list formatting, never ", ".
-            return self.locale.createSeparatedList([str(item) for item in value])
+            return self.locale.createSeparatedList(
+                [self.of(item) if isinstance(item, Message) else str(item) for item in value]
+            )
         return str(value)

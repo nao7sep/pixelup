@@ -20,6 +20,7 @@ from pixelup.app_config import (
     AppConfig,
     ConfigLoadResult,
     ConfigSaveResult,
+    SettingsFile,
     config_path,
     load_app_config,
 )
@@ -85,7 +86,10 @@ def make_window(
     # resolves config.json through the storage root and must not land in the real one.
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
-    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
+    monkeypatch.setattr(
+        "pixelup.gui.load_app_config_result",
+        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+    )
     log_file = configure_session_logging()
 
     created: list[MainWindow] = []
@@ -169,7 +173,10 @@ def test_build_app_wires_application_and_opens_argv_paths(
     # is the whole point of extracting it (main() is then a 3-line untestable shell). runtime_dirs
     # is injected at a temp location so nothing touches the real ~/.pixelup.
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
+    monkeypatch.setattr(
+        "pixelup.gui.load_app_config_result",
+        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+    )
     image = _png(tmp_path, "a.png")
     runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models", temp_dir=tmp_path / "temp")
 
@@ -202,7 +209,10 @@ def test_build_app_assigns_runtime_icon_only_on_windows(
     expected_icon: str | None,
 ) -> None:
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr("pixelup.gui.load_app_config_result", lambda: ConfigLoadResult(AppConfig()))
+    monkeypatch.setattr(
+        "pixelup.gui.load_app_config_result",
+        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+    )
     monkeypatch.setattr(gui.sys, "platform", platform)
     assigned_icons: list[str] = []
     monkeypatch.setattr(gui, "QIcon", lambda path: path)
@@ -1162,13 +1172,13 @@ def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft
     window.quality.setValue(10)
     attempts: list[AppConfig] = []
 
-    def _save(candidate: AppConfig, _previous: AppConfig) -> AppConfig:
+    def _save(candidate: AppConfig, _previous: AppConfig, file) -> ConfigSaveResult:
         attempts.append(candidate)
         if len(attempts) == 1:
             raise OSError("disk full")
-        return ConfigSaveResult(candidate)
+        return ConfigSaveResult(candidate, file)
 
-    monkeypatch.setattr("pixelup.gui.save_app_config_merged", _save)
+    monkeypatch.setattr("pixelup.gui.save_app_config", _save)
 
     assert _flush(window) is False
     assert window.config is original
@@ -1254,7 +1264,7 @@ def test_a_failed_save_holds_a_user_quit_until_cancel(
     window = make_window()
     window.quality.setValue(10)
     monkeypatch.setattr(
-        gui, "save_app_config_merged", lambda *_: (_ for _ in ()).throw(OSError("read-only"))
+        gui, "save_app_config", lambda *_: (_ for _ in ()).throw(OSError("read-only"))
     )
     dialog = _ChoicesDialog(["cancel"])
     monkeypatch.setattr(gui, "QuitSaveFailedDialog", dialog)
@@ -1275,16 +1285,16 @@ def test_a_failed_save_holds_a_user_quit_until_cancel(
 def test_retry_saves_and_the_quit_goes_on(make_window, monkeypatch: pytest.MonkeyPatch) -> None:
     window = make_window()
     window.quality.setValue(10)
-    real_save = gui.save_app_config_merged
+    real_save = gui.save_app_config
     attempts: list[int] = []
 
-    def fail_once(candidate, previous):
+    def fail_once(candidate, previous, file):
         attempts.append(1)
         if len(attempts) == 1:
             raise OSError("read-only")
-        return real_save(candidate, previous)
+        return real_save(candidate, previous, file)
 
-    monkeypatch.setattr(gui, "save_app_config_merged", fail_once)
+    monkeypatch.setattr(gui, "save_app_config", fail_once)
     dialog = _ChoicesDialog(["retry"])
     monkeypatch.setattr(gui, "QuitSaveFailedDialog", dialog)
 
@@ -1304,7 +1314,7 @@ def test_quit_anyway_quits_without_the_save_and_logs_what_was_lost(
     window = make_window()
     window.quality.setValue(10)
     monkeypatch.setattr(
-        gui, "save_app_config_merged", lambda *_: (_ for _ in ()).throw(OSError("read-only"))
+        gui, "save_app_config", lambda *_: (_ for _ in ()).throw(OSError("read-only"))
     )
     dialog = _ChoicesDialog(["retry", "quit_anyway"])
     monkeypatch.setattr(gui, "QuitSaveFailedDialog", dialog)
@@ -1396,7 +1406,7 @@ def test_an_os_session_end_never_asks_and_logs_the_failed_save(
         bounded_before_save.append(quit_bound.started == [gui.QUIT_BUDGET_S])
         raise OSError("read-only")
 
-    monkeypatch.setattr(gui, "save_app_config_merged", failing_save)
+    monkeypatch.setattr(gui, "save_app_config", failing_save)
     for name in ("QuitConfirmDialog", "QuitSaveFailedDialog", "warn_jobs_stopping"):
         monkeypatch.setattr(gui, name, _never)
     window._is_session_shutdown = lambda: True
@@ -1710,7 +1720,7 @@ def test_window_seeds_the_panel_from_the_persisted_parameters(
     )
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
-        lambda: ConfigLoadResult(AppConfig(parameters=parameters)),
+        lambda: ConfigLoadResult(AppConfig(parameters=parameters), SettingsFile(config_path())),
     )
     log_file = configure_session_logging()
 
@@ -1812,10 +1822,14 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
     )
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
-    notices: list[str] = []
+    notices: list[object] = []
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset",
-        lambda _parent, _path: notices.append("shown"),
+        lambda _parent, _path: notices.append("reset"),
+    )
+    monkeypatch.setattr(
+        "pixelup.gui.warn_config_rejected",
+        lambda _parent, settings, path: notices.append((settings, path)),
     )
     log_file = configure_session_logging()
 
@@ -1828,7 +1842,9 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
         # And the value the panel would hand a job is a real one, not None.
         assert window.current_job_settings().tile in TILE_VALUES
         qapp.processEvents()
-        assert notices == []
+        # The user is told which settings run on their built-ins, and where the
+        # file keeping their stored values is; nothing was reset.
+        assert notices == [((Message("parameters.title"),), home / "config.json")]
     finally:
         window._is_session_shutdown = lambda: True
         window.close()
@@ -1879,16 +1895,16 @@ def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
     _flush(window)
     original = window.config
     saved = config_path().read_bytes()
-    real_save = gui.save_app_config_merged
+    real_save = gui.save_app_config
     attempts: list[JobSettings] = []
 
-    def fail_once(candidate, previous):
+    def fail_once(candidate, previous, file):
         attempts.append(candidate.parameters)
         if len(attempts) == 1:
             raise OSError("disk full")
-        return real_save(candidate, previous)
+        return real_save(candidate, previous, file)
 
-    monkeypatch.setattr(gui, "save_app_config_merged", fail_once)
+    monkeypatch.setattr(gui, "save_app_config", fail_once)
     _reset_button(window).click()
     _settle_config(window)
     assert window.config == original
@@ -1914,14 +1930,14 @@ def test_saved_continuation_waits_for_the_newest_visible_panel(
     attempts = []
     opened = []
 
-    def save(candidate, previous):
+    def save(candidate, previous, file):
         index = len(attempts)
         attempts.append(candidate.parameters.quality)
         entered[index].set()
         assert released[index].wait(5)
-        return ConfigSaveResult(candidate)
+        return ConfigSaveResult(candidate, file)
 
-    monkeypatch.setattr(gui, "save_app_config_merged", save)
+    monkeypatch.setattr(gui, "save_app_config", save)
     monkeypatch.setattr(
         window,
         "_open_settings_after_save",
@@ -1965,13 +1981,13 @@ def test_held_config_save_keeps_gui_live_and_retains_newer_panel_edits(
     attempts = []
     saved = []
 
-    def save(candidate, previous):
+    def save(candidate, previous, file):
         attempts.append((candidate, previous))
         started.set()
         assert release.wait(5)
-        return ConfigSaveResult(candidate)
+        return ConfigSaveResult(candidate, file)
 
-    monkeypatch.setattr(gui, "save_app_config_merged", save)
+    monkeypatch.setattr(gui, "save_app_config", save)
     window._flush_parameters_save(finished=saved.append)
     try:
         process_until(started.is_set, timeout_s=5, what="held save admission")
@@ -1991,3 +2007,9 @@ def test_held_config_save_keeps_gui_live_and_retains_newer_panel_edits(
     assert _flush(window) is True
     assert window.config.parameters.quality == 11
     assert len(attempts) == 2
+
+
+def test_every_stored_settings_set_has_a_name_for_the_rejected_notice() -> None:
+    from pixelup import app_config
+
+    assert set(gui._SET_LABELS) == set(app_config._SET_DECODERS)

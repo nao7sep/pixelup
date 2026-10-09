@@ -102,7 +102,7 @@ def test_recovery_path_is_always_plain_text(qapp: QApplication) -> None:
     from pixelup.i18n.message import Message
 
     path = "<b>settings & capture</b>.invalid"
-    dialog = MessageDialog("app.name", Message.of("notice.configRecoveredOnSave", path=path))
+    dialog = MessageDialog("app.name", Message.of("notice.configReset", path=path))
     try:
         assert dialog.message_label.textFormat() == Qt.TextFormat.PlainText
         assert path in dialog.message_label.text()

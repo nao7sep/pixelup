@@ -16,7 +16,6 @@ from pixelup.models import download_model, model_is_ready
 from pixelup.session_log import log
 
 _DOWNLOAD_TIMEOUT_SECONDS = 600
-_LOCK_TIMEOUT_SECONDS = 600
 
 INSTALL_FAILED = Message("modelInstall.failedFallback")
 
@@ -43,7 +42,6 @@ class ModelOperation:
 
 class ModelInstallWorker(QObject):
     progress = Signal(int, str, int, int)
-    waiting = Signal(int, str)
     finished = Signal(int, bool, bool, object)
 
     def __init__(
@@ -95,11 +93,7 @@ class ModelInstallWorker(QObject):
                     self._models_dir,
                     name,
                     download_timeout=_DOWNLOAD_TIMEOUT_SECONDS,
-                    lock_timeout=_LOCK_TIMEOUT_SECONDS,
                     on_download=report_progress,
-                    on_waiting=lambda model, _elapsed: self.waiting.emit(
-                        self._operation_id, model
-                    ),
                     should_cancel=self._is_cancelled,
                     force=self._force,
                 )
@@ -344,7 +338,6 @@ class ModelManager(QObject):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._show_progress)
-        worker.waiting.connect(self._show_waiting)
         worker.finished.connect(self._worker_finished)
         thread.setProperty("operation_id", operation_id)
         thread.finished.connect(worker.deleteLater)
@@ -420,14 +413,6 @@ class ModelManager(QObject):
             completed_bytes=done,
             total_bytes=total,
         )
-        self.changed.emit()
-
-    @Slot(int, str)
-    def _show_waiting(self, operation_id: int, name: str) -> None:
-        operation = self._operations.get(operation_id)
-        if operation is None or operation.kind != "running":
-            return
-        self._operations[operation_id] = replace(operation, current_artifact=name)
         self.changed.emit()
 
     @Slot(int, bool, bool, object)

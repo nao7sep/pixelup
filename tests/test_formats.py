@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -11,8 +10,10 @@ from pixelup.formats import NewerFormatError, check_sqlite_format, open_sqlite_s
 SCHEMA = "CREATE TABLE facts (value TEXT); CREATE INDEX facts_value ON facts(value);"
 
 
-@pytest.mark.parametrize("version", [0, -1, 2])
-def test_existing_empty_schema_is_not_fresh_provenance(tmp_path: Path, version: int) -> None:
+@pytest.mark.parametrize("version", [-1, 2])
+def test_an_existing_store_without_a_usable_marker_is_left_untouched(
+    tmp_path: Path, version: int
+) -> None:
     path = tmp_path / "facts.sqlite3"
     with sqlite3.connect(path) as connection:
         connection.execute(f"PRAGMA user_version = {version}")
@@ -24,22 +25,39 @@ def test_existing_empty_schema_is_not_fresh_provenance(tmp_path: Path, version: 
     assert path.read_bytes() == before
 
 
-def test_concurrent_first_open_initializes_one_complete_format(tmp_path: Path) -> None:
+def test_an_unmarked_store_with_a_schema_is_refused_untouched(tmp_path: Path) -> None:
     path = tmp_path / "facts.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE other (value TEXT)")
+    before = path.read_bytes()
 
-    def opened() -> tuple[int, int]:
-        connection = open_sqlite_store(path, 1, SCHEMA)
-        try:
-            return (
-                connection.execute("PRAGMA user_version").fetchone()[0],
-                connection.execute("SELECT count(*) FROM facts").fetchone()[0],
-            )
-        finally:
-            connection.close()
+    with pytest.raises(ValueError):
+        open_sqlite_store(path, 1, SCHEMA)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda _: opened(), range(2)))
-    assert results == [(1, 0), (1, 0)]
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("existing", [None, b""])
+def test_a_new_or_empty_file_gets_its_schema_and_marker(
+    tmp_path: Path, existing: bytes | None
+) -> None:
+    # An empty file is what an interrupted creation leaves; it holds nothing, so it
+    # is created like a missing one.
+    path = tmp_path / "facts.sqlite3"
+    if existing is not None:
+        path.write_bytes(existing)
+
+    connection = open_sqlite_store(path, 1, SCHEMA)
+    try:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert connection.execute("SELECT count(*) FROM facts").fetchone()[0] == 0
+    finally:
+        connection.close()
+
+    reopened = open_sqlite_store(path, 1, SCHEMA)
+    reopened.close()
+    assert sorted(item.name for item in tmp_path.iterdir() if "lock" in item.name) == []
 
 
 def test_failed_schema_never_publishes_a_supported_marker(tmp_path: Path) -> None:

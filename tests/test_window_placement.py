@@ -1,28 +1,22 @@
-"""window.ini's format version: written with every save, a newer file left
-exactly as it is, and a missing or unusable marker reset."""
+"""window.ini: disposable window state with no format marker, where an unusable
+value leaves the designed size in place."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from PySide6.QtCore import QByteArray
 
-from pixelup.window_placement import FORMAT_VERSION_KEY, WindowState
+from pixelup.window_placement import WindowState
 
 
-def _ini(path: Path, text: str) -> bytes:
-    path.write_text(text, encoding="utf-8")
-    return path.read_bytes()
-
-
-def test_a_save_writes_the_format_version_beside_the_value(tmp_path: Path) -> None:
+def test_a_save_round_trips_the_value(tmp_path: Path) -> None:
     path = tmp_path / "window.ini"
     WindowState(path).save("recordsWindow/listWidth", 300)
 
     text = path.read_text(encoding="utf-8")
-    assert f"[General]\n{FORMAT_VERSION_KEY}=1\n" in text
     assert "listWidth=300" in text
+    assert "formatVersion" not in text
     assert int(WindowState(path).value("recordsWindow/listWidth")) == 300
 
 
@@ -32,65 +26,31 @@ def test_no_file_reads_as_nothing_saved(tmp_path: Path) -> None:
     assert not path.exists()
 
 
-def test_a_newer_file_is_neither_read_nor_written(tmp_path: Path) -> None:
+def test_a_file_with_an_old_marker_is_still_read_and_saved(tmp_path: Path) -> None:
+    # Files written while window.ini carried a marker keep working; the inert key
+    # is left alone rather than cleaned up.
     path = tmp_path / "window.ini"
-    before = _ini(path, "[General]\nformatVersion=2\n\n[recordsWindow]\nlistWidth=320\n")
+    path.write_text("[General]\nformatVersion=1\n\n[recordsWindow]\nlistWidth=320\n")
 
     state = WindowState(path)
-    state.save("recordsWindow/listWidth", 400)
+    assert int(state.value("recordsWindow/listWidth")) == 320
     state.save("mainWindow/geometry", QByteArray(b"geometry"))
 
-    assert state.value("recordsWindow/listWidth") is None
-    assert path.read_bytes() == before
-    assert [item.name for item in tmp_path.iterdir()] == ["window.ini"]
+    assert WindowState(path).value("mainWindow/geometry") == QByteArray(b"geometry")
+    assert int(WindowState(path).value("recordsWindow/listWidth")) == 320
 
 
-@pytest.mark.parametrize(
-    "general",
-    [
-        "",
-        "[General]\nformatVersion=one\n",
-        "[General]\nformatVersion=0\n",
-        "[General]\nformatVersion=-1\n",
-        "[General]\nformatVersion=1.5\n",
-    ],
-)
-def test_a_missing_or_unusable_format_version_resets_the_state(
-    tmp_path: Path, general: str
-) -> None:
+def test_two_states_on_one_file_keep_each_others_keys(tmp_path: Path) -> None:
+    # The main window and the Records window each hold a WindowState on the same
+    # file; a save through one never drops what the other saved.
     path = tmp_path / "window.ini"
-    _ini(path, f"{general}\n[recordsWindow]\nlistWidth=320\n")
+    main = WindowState(path)
+    records = WindowState(path)
 
-    state = WindowState(path)
-    assert state.value("recordsWindow/listWidth") is None
+    main.save("mainWindow/geometry", QByteArray(b"main"))
+    records.save("recordsWindow/listWidth", 280)
+    main.save("mainWindow/geometry", QByteArray(b"main-2"))
 
-    state.save("recordsWindow/listWidth", 400)
-    text = path.read_text(encoding="utf-8")
-    assert f"{FORMAT_VERSION_KEY}=1\n" in text
-    assert "listWidth=400" in text
-    assert "listWidth=320" not in text
-
-
-@pytest.mark.parametrize("initial", ["[General]\nformatVersion=1\n", "[state]\nold=1\n"])
-def test_save_rechecks_a_newer_file_after_construction(tmp_path: Path, initial: str) -> None:
-    path = tmp_path / "window.ini"
-    _ini(path, initial)
-    state = WindowState(path)
-    before = _ini(path, "[General]\nformatVersion=2\n\n[state]\nnew=kept\n")
-
-    state.save("state/old", "replacement")
-    del state
-
-    assert path.read_bytes() == before
-
-
-def test_loading_invalid_state_never_defers_a_destructive_flush(tmp_path: Path) -> None:
-    path = tmp_path / "window.ini"
-    _ini(path, "[state]\nold=1\n")
-    state = WindowState(path)
-    assert state.value("state/old") is None
-    before = _ini(path, "[General]\nformatVersion=2\n\n[state]\nnew=kept\n")
-
-    del state
-
-    assert path.read_bytes() == before
+    reread = WindowState(path)
+    assert reread.value("mainWindow/geometry") == QByteArray(b"main-2")
+    assert int(reread.value("recordsWindow/listWidth")) == 280

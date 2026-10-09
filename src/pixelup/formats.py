@@ -1,20 +1,19 @@
-"""The format version of every store PixelUp writes, one integer per format
+"""The format version of every store PixelUp versions, one integer per format
 (store-recovery-conventions).
 
-Every format is at 1 and no durable-data constant exists: PixelUp's data is not
-durable yet, so a format change edits its format in place.
+Saved settings (``config.json``) and the records history (``records.sqlite3``) are
+durable: they survive PixelUp updates (developer decision), so a change to either
+format converts existing data with a small targeted conversion rather than
+resetting it. The output sidecar is a published format. ``window.ini`` holds only
+disposable window state and carries no marker.
 """
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 
-from filelock import FileLock
-
 CONFIG_FORMAT_VERSION = 1  # config.json
-WINDOW_STATE_FORMAT_VERSION = 1  # window.ini
 RECORDS_FORMAT_VERSION = 1  # records.sqlite3
 BACKUPS_FORMAT_VERSION = 1  # backups.sqlite3
 SIDECAR_FORMAT_VERSION = 1  # the .json sidecar written beside an output image
@@ -52,46 +51,45 @@ def check_sqlite_format(connection: sqlite3.Connection, path: Path, supported: i
 
 
 def open_sqlite_store(path: Path, supported: int, schema: str) -> sqlite3.Connection:
-    """Create schema and marker together, using exclusive creation as fresh provenance.
+    """Open a store, creating its schema and marker together when it is new.
 
-    The initialization lock precedes SQLite's writer lock. Ordinary operations take only
-    the SQLite transaction; none acquires the initialization lock while holding one.
+    The format is checked once here, at the boundary that owns the store: no
+    supported scenario changes it while a connection is open, so later operations
+    do not check it again (store-recovery-conventions). A database with no marker
+    and no schema objects is new, whether SQLite just created the file or an
+    interrupted creation left it empty; anything else is admitted by its marker, so
+    a store without one takes its unreadable branch.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(path.with_name(f"{path.stem}-initialize.lock")), timeout=5):
-        try:
-            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            fresh = False
+    connection = sqlite3.connect(path, timeout=5, isolation_level=None, check_same_thread=False)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        stored = connection.execute("PRAGMA user_version").fetchone()[0]
+        created = (
+            stored == 0
+            and connection.execute("SELECT COUNT(*) FROM sqlite_schema").fetchone()[0] == 0
+        )
+        if created:
+            for statement in schema.split(";"):
+                if statement.strip():
+                    connection.execute(statement)
+            connection.execute(f"PRAGMA user_version = {int(supported)}")
         else:
-            os.close(descriptor)
-            fresh = True
-        connection = sqlite3.connect(path, timeout=5, isolation_level=None, check_same_thread=False)
+            check_sqlite_format(connection, path, supported)
+        connection.commit()
+        if created:
+            # Set once, outside the transaction; an existing store keeps its own mode
+            # and is never changed before its marker admits it.
+            connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = NORMAL")
+        return connection
+    except BaseException as exc:
+        rollback_sqlite(connection, exc)
         try:
-            if fresh:
-                connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("BEGIN IMMEDIATE")
-            if fresh:
-                stored = connection.execute("PRAGMA user_version").fetchone()[0]
-                if stored != 0:
-                    check_sqlite_format(connection, path, supported)
-                else:
-                    for statement in schema.split(";"):
-                        if statement.strip():
-                            connection.execute(statement)
-                    connection.execute(f"PRAGMA user_version = {int(supported)}")
-            else:
-                check_sqlite_format(connection, path, supported)
-            connection.commit()
-            connection.execute("PRAGMA synchronous = NORMAL")
-            return connection
-        except BaseException as exc:
-            rollback_sqlite(connection, exc)
-            try:
-                connection.close()
-            except Exception as cleanup:
-                exc.add_note(f"SQLite close failed: {cleanup!r}")
-            raise
+            connection.close()
+        except Exception as cleanup:
+            exc.add_note(f"SQLite close failed: {cleanup!r}")
+        raise
 
 
 def rollback_sqlite(connection: sqlite3.Connection, primary: BaseException) -> None:

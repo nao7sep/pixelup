@@ -8,7 +8,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QWidget
 
-from pixelup.app_config import MAX_CONCURRENT_JOBS, AppConfig, save_app_config_merged
+from pixelup.app_config import (
+    MAX_CONCURRENT_JOBS,
+    AppConfig,
+    load_app_config_result,
+    save_app_config,
+)
 from pixelup.fonts import system_ui_font_family
 from pixelup.i18n.message import Message
 from pixelup.jobs import JobSettings
@@ -233,7 +238,7 @@ def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: P
     initial = AppConfig()
 
     def save(candidate: AppConfig, finished, waiting) -> None:
-        save_app_config_merged(candidate, initial, path)
+        save_app_config(candidate, initial, load_app_config_result(path).file)
         finished(None)
 
     dialog = SettingsDialog(initial, try_save=save)

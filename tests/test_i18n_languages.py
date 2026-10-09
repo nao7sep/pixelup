@@ -11,7 +11,12 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QLibraryInfo, QLocale
 
-from pixelup.app_config import AppConfig, load_app_config, save_app_config_merged
+from pixelup.app_config import (
+    AppConfig,
+    load_app_config,
+    load_app_config_result,
+    save_app_config,
+)
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n import bootstrap, languages, localizer, plural
 from pixelup.i18n.bootstrap import read_computer_languages as _real_read_computer_languages
@@ -115,6 +120,11 @@ def test_the_translator_fills_plurals_numbers_lists_and_nested_messages() -> Non
     assert english.t("images.added", count=1234) == "Added 1,234 images."
     assert english.of(Message.of("images.alreadyOpen", names=("a.png", "b.png", "c.png"))) == (
         "Already open: a.png, b.png, and c.png."
+    )
+    # A list of messages renders each in the same language before it is joined.
+    names = (Message("settings.uiFont"), Message("parameters.title"))
+    assert english.of(Message.of("images.alreadyOpen", names=names)) == (
+        "Already open: UI font and Parameters."
     )
     summary = join(
         "images.jobsJoin",
@@ -243,7 +253,7 @@ def test_the_language_setting_round_trips_and_an_unknown_value_means_system(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.json"
-    save_app_config_merged(AppConfig(language="zh-Hans"), AppConfig(), path)
+    save_app_config(AppConfig(language="zh-Hans"), AppConfig(), load_app_config_result(path).file)
     assert json.loads(path.read_text(encoding="utf-8"))["language"] == "zh-Hans"
     assert load_app_config(path).language == "zh-Hans"
     # Unknown to this build is not corruption: the rest of the settings survive.

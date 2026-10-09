@@ -68,7 +68,7 @@ from pixelup.app_config import (
     config_log_payload,
     config_path,
     load_app_config_result,
-    save_app_config_merged,
+    save_app_config,
 )
 from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.config_save import ConfigSave, ConfigSaveOutcome
@@ -95,7 +95,7 @@ from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.message_dialogs import (
     show_startup_failure,
     warn_config_newer,
-    warn_config_recovered_save,
+    warn_config_rejected,
     warn_config_reset,
     warn_jobs_stopping,
 )
@@ -357,13 +357,15 @@ class MainWindow(QMainWindow):
 
     def __init__(self, *, log_file: Path, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
-        # A corrupt config.json is quarantined, and a newer PixelUp's is left alone;
-        # either way the app runs on the built-ins rather than failing startup
-        # (store-recovery-conventions), and the notice below tells the user. It is
-        # surfaced only after the window is built, so the message box has a real
-        # parent.
+        # A corrupt config.json is quarantined, a newer PixelUp's is left alone, and
+        # a set that fails validation keeps its stored value while it runs on its
+        # built-in; either way the app starts rather than failing (store-recovery-
+        # conventions), and the notices below tell the user. They are surfaced only
+        # after the window is built, so the message box has a real parent.
         load_result = load_app_config_result()
         self.config = load_result.config
+        # What config.json holds; every save writes from it and replaces it.
+        self._settings_file = load_result.file
         self._config_save: ConfigSave | None = None
         self._config_save_callback: Callable[[Message | None], None] | None = None
         self._config_save_failure: Message | None = None
@@ -371,7 +373,8 @@ class MainWindow(QMainWindow):
         self._parameter_edit_generation = 0
         self._saving_parameter_generation = 0
         self._config_quarantined_to = load_result.quarantined_to
-        self._config_newer_format = load_result.newer_format
+        self._config_newer_format = load_result.file.newer_format
+        self._config_rejected = load_result.rejected
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. The blank
         # built-in resolves to the system UI font. setFont propagates app-wide, so
@@ -487,6 +490,8 @@ class MainWindow(QMainWindow):
                 format_version=self._config_newer_format,
             )
             QTimer.singleShot(0, self._notify_config_newer)
+        if self._config_rejected:
+            QTimer.singleShot(0, self._notify_config_rejected)
 
     def _retranslate(self) -> None:
         """Rewrite, after a language change, what the widget bindings do not reach."""
@@ -517,6 +522,11 @@ class MainWindow(QMainWindow):
     def _notify_config_newer(self) -> None:
         if self._config_newer_format is not None:
             warn_config_newer(self, config_path())
+
+    def _notify_config_rejected(self) -> None:
+        warn_config_rejected(
+            self, tuple(_SET_LABELS[key] for key in self._config_rejected), config_path()
+        )
 
     def _on_commit_data_request(self, _manager: object) -> None:
         # Asked again for every quit on macOS, the user's own included, so each
@@ -1633,7 +1643,12 @@ class MainWindow(QMainWindow):
         if self._config_save is not None:
             finished(Message("notice.configSaving"))
             return
-        operation = ConfigSave(candidate, self.config, save_app_config_merged)
+        file = self._settings_file
+        operation = ConfigSave(
+            candidate,
+            self.config,
+            lambda candidate, previous: save_app_config(candidate, previous, file),
+        )
         self._config_save = operation
         self._config_save_callback = finished
         self._config_save_pending = waiting
@@ -1669,11 +1684,11 @@ class MainWindow(QMainWindow):
                 if isinstance(exc, PixelupError)
                 else failed
             )
-        elif self.config == operation.previous:
-            self.config = outcome.result.config
-            if outcome.result.quarantined_to is not None and not self._quit_bounded:
-                recovered_path = outcome.result.quarantined_to
-                QTimer.singleShot(0, lambda: warn_config_recovered_save(self, recovered_path))
+        else:
+            # The file now holds what this save wrote, whichever config is current.
+            self._settings_file = outcome.result.file
+            if self.config == operation.previous:
+                self.config = outcome.result.config
         if self._parameter_edit_generation != self._saving_parameter_generation:
             self._parameters_save_timer.start()
         elif callback is None and failure is None:
@@ -2005,6 +2020,14 @@ _STATUS_KEYS = {
     "failed": "queue.statusFailed",
     "cancelling": "queue.statusCancelling",
     "cancelled": "queue.statusCancelled",
+}
+# Each stored settings set by the name the interface gives it, for the notice that
+# names the sets PixelUp could not use.
+_SET_LABELS = {
+    "font_family": Message("settings.uiFont"),
+    "language": Message("settings.language"),
+    "max_concurrent_jobs": Message("settings.concurrentJobs"),
+    "parameters": Message("parameters.title"),
 }
 _IMAGE_COLUMNS = ("images.columnImage", "images.columnSize", "images.columnJobs")
 _QUEUE_COLUMNS = (

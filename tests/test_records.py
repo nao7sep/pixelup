@@ -330,19 +330,6 @@ def test_records_without_their_format_version_are_unreadable(database: Path) -> 
         reader.close()
 
 
-@pytest.mark.parametrize("version", [0, -1, 2])
-def test_cached_reader_rechecks_marker_before_later_page(database: Path, version: int) -> None:
-    _seed(database, [{"time": OLD}])
-    reader = RecordsReader(database)
-    try:
-        assert reader.page(RecordsQuery(), None).records
-        with sqlite3.connect(database) as sibling:
-            sibling.execute(f"PRAGMA user_version = {version}")
-        with pytest.raises(NewerFormatError if version == 2 else ValueError):
-            reader.page(RecordsQuery(), None)
-    finally:
-        reader.close()
-
 
 def test_reader_primary_survives_failed_rollback_and_deadline_always_clears(
     database: Path, monkeypatch: pytest.MonkeyPatch
