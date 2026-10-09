@@ -444,7 +444,7 @@ class MainWindow(QMainWindow):
         self._queue_failure_count = 0
         self.model_manager = ModelManager(self.runtime_dirs.models_dir, self)
         self._active_models_dialog: ManagedModelsDialog | None = None
-        self._pending_model_work: PendingModelWork | None = None
+        self._pending_model_work: list[PendingModelWork] = []
         self.jobs: list[Job] = []
         # Jobs are only ever appended, never removed, so these two indexes only need
         # updating where jobs are created (_materialize_jobs); every other job-state
@@ -1358,11 +1358,17 @@ class MainWindow(QMainWindow):
 
     def _managed_models_dialog(self) -> None:
         self.model_manager.refresh_readiness()
-        pending = self._pending_model_work
-        self._open_models_dialog(
-            required_artifacts=pending.required_artifacts if pending is not None else (),
-            pending_job_count=pending.job_count if pending is not None else 0,
-        )
+        self._open_pending_models_dialog()
+
+    def _pending_model_summary(self) -> tuple[tuple[str, ...], int]:
+        required = tuple(dict.fromkeys(
+            name for pending in self._pending_model_work for name in pending.required_artifacts
+        ))
+        return required, sum(pending.job_count for pending in self._pending_model_work)
+
+    def _open_pending_models_dialog(self) -> None:
+        required, count = self._pending_model_summary()
+        self._open_models_dialog(required_artifacts=required, pending_job_count=count)
 
     def _open_models_dialog(
         self,
@@ -1371,6 +1377,7 @@ class MainWindow(QMainWindow):
         pending_job_count: int = 0,
     ) -> None:
         if self._active_models_dialog is not None:
+            self._active_models_dialog.set_pending_work(required_artifacts, pending_job_count)
             self._active_models_dialog.raise_()
             self._active_models_dialog.activateWindow()
             return
@@ -1391,50 +1398,62 @@ class MainWindow(QMainWindow):
     def _models_dialog_finished(self, dialog: ManagedModelsDialog) -> None:
         if self._active_models_dialog is dialog:
             self._active_models_dialog = None
-        if self._pending_model_work is not None and not self.model_manager.in_progress_for(
-            self._pending_model_work.required_artifacts
-        ):
+        retained = [
+            pending for pending in self._pending_model_work
+            if self.model_manager.in_progress_for(pending.required_artifacts)
+        ]
+        if len(retained) != len(self._pending_model_work):
             log.info("models.pending_work_abandoned")
-            self._pending_model_work = None
+        self._pending_model_work = retained
         self._refresh_model_rollup()
         log.info("models.dialog_closed")
         dialog.deleteLater()
 
     def _model_manager_changed(self) -> None:
         self._refresh_model_rollup()
-        pending = self._pending_model_work
-        if pending is None:
+        ready = [
+            pending for pending in self._pending_model_work
+            if not self.model_manager.in_progress_for(pending.required_artifacts)
+            and not self.model_manager.missing(pending.required_artifacts)
+        ]
+        if not ready:
             return
-        if self.model_manager.in_progress_for(
-            pending.required_artifacts
-        ) or self.model_manager.missing(pending.required_artifacts):
-            return
+        # Retire the snapshots before any job or dialog callback can re-enter.
+        self._pending_model_work = [
+            pending for pending in self._pending_model_work if pending not in ready
+        ]
+        self._refresh_pending_models_dialog(accepted=True)
+        for pending in ready:
+            if isinstance(pending, PendingEnqueue):
+                input_paths = [path for path in pending.input_paths if path in self._images_by_path]
+                if input_paths:
+                    self._materialize_jobs(input_paths, list(pending.models), pending.settings)
+            else:
+                self._retry_failed_snapshot(pending.job_ids)
 
-        self._pending_model_work = None
+    def _refresh_pending_models_dialog(self, *, accepted: bool) -> None:
         dialog = self._active_models_dialog
-        if dialog is not None:
+        if dialog is None:
+            return
+        if self._pending_model_work:
+            dialog.set_pending_work(*self._pending_model_summary())
+        elif accepted:
             dialog.accept()
-        if isinstance(pending, PendingEnqueue):
-            # Images removed while their models downloaded are no longer offered.
-            input_paths = [path for path in pending.input_paths if path in self._images_by_path]
-            if not input_paths:
-                log.info("models.pending_work_abandoned", reason="images_removed")
-                return
-            self._materialize_jobs(input_paths, list(pending.models), pending.settings)
         else:
-            self._retry_failed_snapshot(pending.job_ids)
+            dialog.reject()
 
     @Slot(object)
     def _model_install_cancelled(self, artifact_names: object) -> None:
-        pending = self._pending_model_work
-        if not isinstance(artifact_names, tuple) or pending is None:
+        if not isinstance(artifact_names, tuple):
             return
-        if not set(pending.required_artifacts).intersection(artifact_names):
+        retained = [
+            pending for pending in self._pending_model_work
+            if not set(pending.required_artifacts).intersection(artifact_names)
+        ]
+        if len(retained) == len(self._pending_model_work):
             return
-        self._pending_model_work = None
-        dialog = self._active_models_dialog
-        if dialog is not None:
-            dialog.reject()
+        self._pending_model_work = retained
+        self._refresh_pending_models_dialog(accepted=False)
         log.info("models.pending_work_cancelled")
 
     def _refresh_model_rollup(self) -> None:
@@ -1574,6 +1593,20 @@ class MainWindow(QMainWindow):
         row = self._image_rows.pop(path)
         self.image_table.removeRow(row)
         self._images_by_path.pop(path, None)
+        # Removal ends captured intent even if the same file is reopened later.
+        retained: list[PendingModelWork] = []
+        for pending in self._pending_model_work:
+            if isinstance(pending, PendingEnqueue):
+                pending = replace(
+                    pending, input_paths=tuple(item for item in pending.input_paths if item != path)
+                )
+                if not pending.input_paths:
+                    continue
+            retained.append(pending)
+        had_pending = bool(self._pending_model_work)
+        self._pending_model_work = retained
+        if had_pending:
+            self._refresh_pending_models_dialog(accepted=False)
         self._image_order = [item for item in self._image_order if item != path]
         self._rebuild_image_rows()
         log.info("image.removed", input=str(path))
@@ -1827,11 +1860,8 @@ class MainWindow(QMainWindow):
                 settings=settings,
                 required_artifacts=required,
             )
-            self._pending_model_work = pending
-            self._open_models_dialog(
-                required_artifacts=pending.required_artifacts,
-                pending_job_count=pending.job_count,
-            )
+            self._pending_model_work.append(pending)
+            self._open_pending_models_dialog()
             return
         self._materialize_jobs(input_paths, models, settings)
 
@@ -1929,11 +1959,8 @@ class MainWindow(QMainWindow):
                 job_ids=failed_job_ids,
                 required_artifacts=required,
             )
-            self._pending_model_work = pending
-            self._open_models_dialog(
-                required_artifacts=pending.required_artifacts,
-                pending_job_count=pending.job_count,
-            )
+            self._pending_model_work.append(pending)
+            self._open_pending_models_dialog()
             return
         self._retry_failed_snapshot(failed_job_ids)
 

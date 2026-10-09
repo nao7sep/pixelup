@@ -16,8 +16,6 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.imaging import register_image_plugins, rgb_pixels
 from pixelup.models import model_file
-from pixelup.realesrgan_models import RRDBNet, SRVGGNetCompact
-from pixelup.realesrgan_runtime import RealESRGANer
 
 ProgressCallback = Callable[[str], None]
 TileCallback = Callable[[int, int], None]
@@ -163,6 +161,9 @@ def _create_upsampler(
     on_tile: TileCallback | None = None,
     should_cancel: CancelCheck | None = None,
 ) -> Any:
+    # Native inference libraries belong to the job worker, not window startup.
+    from pixelup.realesrgan_runtime import RealESRGANer
+
     model_paths: str | list[str] = str(model_file(config.models_dir, config.model))
     dni_weight = None
     if config.model == "realesr-general-x4v3" and config.denoise_strength != 1.0:
@@ -265,6 +266,8 @@ def _tile_reporting_upsampler_class(base: type) -> type:
 
 
 def _build_network(spec: ModelArchitectureSpec) -> Any:
+    from pixelup.realesrgan_models import RRDBNet, SRVGGNetCompact
+
     if spec.kind == "rrdb":
         return RRDBNet(**spec.params)
     if spec.kind == "srvgg":

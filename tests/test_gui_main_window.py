@@ -917,7 +917,7 @@ def test_missing_models_cancel_before_queue_materialization(
     dialog.reject()
     qapp.processEvents()
 
-    assert window._pending_model_work is None
+    assert not window._pending_model_work
     assert window.jobs == []
     assert window.queue_table.rowCount() == 0
 
@@ -936,7 +936,7 @@ def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
         model_file(window.runtime_dirs.models_dir, name).unlink()
 
     window._queue_selected_image()
-    assert window._pending_model_work is not None
+    assert window._pending_model_work
     assert window.jobs == []
     for name in required:
         target = model_file(window.runtime_dirs.models_dir, name)
@@ -945,7 +945,7 @@ def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
     window.model_manager.refresh_readiness()
     qapp.processEvents()
 
-    assert window._pending_model_work is None
+    assert not window._pending_model_work
     assert len(window.jobs) == 1
     assert window.queue_table.rowCount() == 1
     assert window.manage_models_button.text() == "Managed models"
@@ -984,7 +984,7 @@ def test_install_and_queue_survives_closing_its_presentation(
     dialog.reject()
     qapp.processEvents()
     assert window._active_models_dialog is None
-    assert window._pending_model_work is not None
+    assert window._pending_model_work
     assert window.jobs == []
 
     release.set()
@@ -995,7 +995,7 @@ def test_install_and_queue_survives_closing_its_presentation(
     qapp.processEvents()
 
     assert window.model_manager.cleanup_for_quit()
-    assert window._pending_model_work is None
+    assert not window._pending_model_work
     assert len(window.jobs) == 1
 
 
@@ -1045,7 +1045,7 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
     qapp.processEvents()
 
     assert window.model_manager.cleanup_for_quit()
-    assert window._pending_model_work is None
+    assert not window._pending_model_work
     assert window._active_models_dialog is None
     assert window.jobs == []
 
@@ -1072,7 +1072,7 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
     dialog.reject()
     qapp.processEvents()
 
-    assert window._pending_model_work is None
+    assert not window._pending_model_work
     assert job.status == "failed"
     assert job.message == Message("error.modelFileMissing")
 
@@ -2142,9 +2142,11 @@ def test_install_and_queue_skips_an_image_removed_while_models_downloaded(
         model_file(window.runtime_dirs.models_dir, name).unlink()
 
     window._queue_selected_image()
-    assert window._pending_model_work is not None
+    assert window._pending_model_work
     window._remove_selected_image()
     assert window.image_table.rowCount() == 0
+    assert not window._pending_model_work
+    _open(window, [image])
     for name in required:
         target = model_file(window.runtime_dirs.models_dir, name)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -2152,5 +2154,129 @@ def test_install_and_queue_skips_an_image_removed_while_models_downloaded(
     window.model_manager.refresh_readiness()
     qapp.processEvents()
 
-    assert window._pending_model_work is None
+    assert not window._pending_model_work
     assert window.jobs == []
+
+
+def test_pending_requests_preserve_each_settings_snapshot(make_window, tmp_path, monkeypatch):
+    window = make_window()
+    first, second = _png(tmp_path, "first.png"), _png(tmp_path, "second.png")
+    _open(window, [first, second])
+    model = "RealESRGAN_x4plus"
+    model_file(window.runtime_dirs.models_dir, model).unlink()
+    settings = JobSettings(scale=2)
+    monkeypatch.setattr(window, "current_job_settings", lambda: settings)
+    window._enqueue_jobs([first], [model])
+    dialog = window._active_models_dialog
+    settings = JobSettings(scale=3)
+    window._enqueue_jobs([second], [model])
+    settings = JobSettings(scale=4)
+    assert window._active_models_dialog is dialog
+    assert dialog._pending_job_count == 2
+    assert len(window._pending_model_work) == 2
+
+    model_file(window.runtime_dirs.models_dir, model).write_bytes(b"ready")
+    window.model_manager.refresh_readiness()
+    window._model_manager_changed()
+    assert [(job.input_path, job.settings.scale) for job in window.jobs] == [
+        (first, 2), (second, 3),
+    ]
+    assert not window._pending_model_work
+    assert window._active_models_dialog is None
+
+
+def test_ready_request_does_not_abandon_unrelated_pending_retry(make_window, tmp_path):
+    window = make_window()
+    image = _png(tmp_path, "image.png")
+    _open(window, [image])
+    first, second = "RealESRGAN_x4plus", "RealESRGAN_x4plus_anime_6B"
+    window._enqueue_jobs([image], [second])
+    retry = window.jobs[0]
+    retry.status = "failed"
+    for model in (first, second):
+        model_file(window.runtime_dirs.models_dir, model).unlink()
+    window._enqueue_jobs([image], [first])
+    window._retry_failed()
+    dialog = window._active_models_dialog
+    assert dialog._pending_job_count == 2
+    assert set(dialog._required_artifacts) == {first, second}
+
+    model_file(window.runtime_dirs.models_dir, first).write_bytes(b"ready")
+    window.model_manager.refresh_readiness()
+    assert len(window.jobs) == 2
+    assert retry.status == "failed"
+    assert len(window._pending_model_work) == 1
+    assert window._active_models_dialog is dialog
+    assert dialog._pending_job_count == 1
+    assert dialog._required_artifacts == (second,)
+
+    model_file(window.runtime_dirs.models_dir, second).write_bytes(b"ready")
+    window.model_manager.refresh_readiness()
+    assert retry.status == "pending"
+    assert len(window.jobs) == 2
+    assert not window._pending_model_work
+
+
+def test_cancelled_model_preserves_requests_for_other_models(make_window, tmp_path):
+    window = make_window()
+    image = _png(tmp_path, "image.png")
+    _open(window, [image])
+    first, second = "RealESRGAN_x4plus", "RealESRGAN_x4plus_anime_6B"
+    for model in (first, second):
+        model_file(window.runtime_dirs.models_dir, model).unlink()
+    for model in (first, first, second):
+        window._enqueue_jobs([image], [model])
+    dialog = window._active_models_dialog
+    window._model_install_cancelled((first,))
+    assert len(window._pending_model_work) == 1
+    assert window._active_models_dialog is dialog
+    assert dialog._required_artifacts == (second,)
+    assert dialog._pending_job_count == 1
+    model_file(window.runtime_dirs.models_dir, second).write_bytes(b"ready")
+    window.model_manager.refresh_readiness()
+    assert [job.model for job in window.jobs] == [second]
+
+
+def test_dismissal_keeps_only_requests_with_active_downloads(make_window, tmp_path, monkeypatch):
+    window = make_window()
+    image = _png(tmp_path, "image.png")
+    _open(window, [image])
+    first, second = "RealESRGAN_x4plus", "RealESRGAN_x4plus_anime_6B"
+    for model in (first, second):
+        model_file(window.runtime_dirs.models_dir, model).unlink()
+        window._enqueue_jobs([image], [model])
+    monkeypatch.setattr(
+        window.model_manager, "in_progress_for", lambda names: (object(),) if first in names else ()
+    )
+    window._active_models_dialog.reject()
+    assert len(window._pending_model_work) == 1
+    assert window._pending_model_work[0].required_artifacts == (first,)
+
+
+def test_hard_quit_bounds_a_native_qthread_wait() -> None:
+    # A disposable process exercises the real PySide6 wait and production timer.
+    script = """
+import threading
+from types import SimpleNamespace
+from PySide6.QtCore import QThread
+from pixelup import gui
+assert 'torch' not in __import__('sys').modules
+class HeldThread(QThread):
+    def run(self):
+        threading.Event().wait()
+worker = HeldThread()
+worker.start()
+owner = SimpleNamespace(_log_forced_exit=lambda: None)
+def expire():
+    print('watchdog expired', flush=True)
+    gui.MainWindow._force_exit(owner)
+gui._start_quit_watchdog(0.05, expire)
+print('native wait entered', flush=True)
+worker.wait()
+raise RuntimeError('wait unexpectedly returned')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["native wait entered", "watchdog expired"]

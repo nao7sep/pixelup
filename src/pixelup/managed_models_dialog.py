@@ -134,6 +134,12 @@ class ManagedModelsDialog(DialogShell):
         self._render()
         self.set_initial_focus(self.primary_button)
 
+    def set_pending_work(self, required_artifacts: tuple[str, ...], job_count: int) -> None:
+        """Reflect outstanding queue requests without owning their lifetime."""
+        self._required_artifacts = required_artifacts
+        self._pending_job_count = job_count
+        self._render()
+
     def event(self, event: QEvent) -> bool:
         if event.type() == QEvent.Type.WindowActivate:
             # The folder may have gained files placed there by hand while the
