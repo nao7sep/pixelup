@@ -9,7 +9,7 @@ from pixelup.devices import DEFAULT_DEVICE
 from pixelup.i18n.message import Message, join
 from pixelup.model_management import effective_denoise_strength
 from pixelup.parameters import DEFAULT_SCALE, DEFAULT_TILE
-from pixelup.paths import OutputFormat, default_output_path
+from pixelup.paths import NamePlanCache, OutputFormat, default_output_path
 from pixelup.upscale import UpscaleOptions
 
 
@@ -88,6 +88,7 @@ def create_jobs(
     # inputs whose stems differ only in case (Photo.png vs photo.png) disambiguate
     # against each other and not just against pre-existing files.
     reserved: set[Path] = set()
+    cache = NamePlanCache()
     for job in existing_jobs:
         _reserve_output_bundle(reserved, job.output_path)
 
@@ -101,6 +102,7 @@ def create_jobs(
                 scale=model_settings.scale,
                 output_format=model_settings.output_format,
                 reserved=reserved,
+                cache=cache,
             )
             _reserve_output_bundle(reserved, output_path)
             jobs.append(
@@ -123,6 +125,7 @@ def retry_failed_jobs(
     # One reservation set for the whole batch (see create_jobs): case-only
     # sibling inputs must disambiguate against each other, not just live files.
     reserved: set[Path] = set()
+    cache = NamePlanCache()
     for job in jobs:
         if job.status != "failed" or (only_job_ids is not None and job.id not in only_job_ids):
             _reserve_output_bundle(reserved, job.output_path)
@@ -137,6 +140,7 @@ def retry_failed_jobs(
             scale=job.settings.scale,
             output_format=job.settings.output_format,
             reserved=reserved,
+            cache=cache,
         )
         _reserve_output_bundle(reserved, job.output_path)
         job.status = "pending"

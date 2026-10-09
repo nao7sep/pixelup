@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -75,6 +75,35 @@ def infer_output_format(output_arg: str, forced: OutputFormat | None) -> OutputF
         ) from exc
 
 
+@dataclass(slots=True)
+class NamePlanCache:
+    """What one planning pass has read: each output folder's entry names and each
+    reserved path's collision key. A batch of jobs scans a folder once instead of
+    once per candidate name; publication still claims every name no-clobber."""
+
+    names: dict[Path, frozenset[str]] = field(default_factory=dict)
+    keys: dict[Path, str] = field(default_factory=dict)
+
+    def key(self, path: Path) -> str:
+        found = self.keys.get(path)
+        if found is None:
+            found = self.keys[path] = _collision_key(path)
+        return found
+
+    def exists_case_insensitively(self, path: Path) -> bool:
+        # The directory listing catches a case-only sibling on a case-sensitive
+        # volume and a broken symlink, which exists() would miss.
+        parent = path.parent
+        names = self.names.get(parent)
+        if names is None:
+            try:
+                names = frozenset(entry.name.casefold() for entry in parent.iterdir())
+            except (FileNotFoundError, NotADirectoryError):
+                names = frozenset()
+            self.names[parent] = names
+        return path.name.casefold() in names
+
+
 def default_output_path(
     input_path: Path,
     *,
@@ -83,6 +112,7 @@ def default_output_path(
     output_format: OutputFormat,
     output_dir: Path | None = None,
     reserved: set[Path] | None = None,
+    cache: NamePlanCache | None = None,
 ) -> Path:
     directory = absolute_user_path(output_dir or input_path.parent)
     stem = f"{input_path.stem}-{model_filename_token(model)}-{scale}x"
@@ -91,6 +121,7 @@ def default_output_path(
         directory / f"{stem}{suffix}",
         reserved=reserved,
         companion_suffixes=(".json",),
+        cache=cache,
     )
 
 
@@ -99,16 +130,18 @@ def collision_safe_path(
     *,
     reserved: set[Path] | None = None,
     companion_suffixes: tuple[str, ...] = (),
+    cache: NamePlanCache | None = None,
 ) -> Path:
     # Keys are casefolded so a candidate collides with any file or reservation
     # that differs only in case — on macOS/Windows the two would be one file.
-    used = {_collision_key(item) for item in (reserved or set())}
+    cache = cache if cache is not None else NamePlanCache()
+    used = {cache.key(item) for item in (reserved or set())}
     candidate = absolute_user_path(path)
-    if _bundle_is_free(candidate, companion_suffixes, used):
+    if _bundle_is_free(candidate, companion_suffixes, used, cache):
         return candidate
     for index in range(2, 10000):
         numbered = candidate.with_name(f"{candidate.stem}-{index}{candidate.suffix}")
-        if _bundle_is_free(numbered, companion_suffixes, used):
+        if _bundle_is_free(numbered, companion_suffixes, used, cache):
             return numbered
     raise PixelupError(
         ErrorCode.OUTPUT_EXISTS,
@@ -121,26 +154,15 @@ def _collision_key(path: Path) -> str:
     return str(path.expanduser().resolve()).casefold()
 
 
-def _exists_case_insensitively(path: Path) -> bool:
-    # os-level exists() already answers this on case-insensitive filesystems;
-    # the directory scan is what catches a case-only sibling on Linux.
-    if path.exists():
-        return True
-    parent = path.parent
-    if not parent.is_dir():
-        return False
-    target = path.name.casefold()
-    return any(entry.name.casefold() == target for entry in parent.iterdir())
-
-
 def _bundle_is_free(
     candidate: Path,
     companion_suffixes: tuple[str, ...],
     used: set[str],
+    cache: NamePlanCache,
 ) -> bool:
     paths = [candidate, *(candidate.with_suffix(suffix) for suffix in companion_suffixes)]
     return all(
-        not _exists_case_insensitively(path) and _collision_key(path) not in used
+        not cache.exists_case_insensitively(path) and _collision_key(path) not in used
         for path in paths
     )
 

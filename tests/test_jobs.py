@@ -235,6 +235,38 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
     }
 
 
+def test_a_batch_reads_each_output_folder_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Planning runs on the window thread: a batch reads its output folder once,
+    # not once per candidate name, so a large or slow folder costs one listing.
+    inputs = []
+    for name in ("a", "b", "c"):
+        path = tmp_path / f"{name}.png"
+        path.write_bytes(b"")
+        inputs.append(path)
+    (tmp_path / "a-realesr-general-x4v3-4x.png").write_bytes(b"taken")
+    listed: list[Path] = []
+    real_iterdir = Path.iterdir
+
+    def counted_iterdir(self: Path):
+        listed.append(self)
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", counted_iterdir)
+    jobs = create_jobs(
+        input_paths=inputs,
+        models=["realesr-general-x4v3", "RealESRGAN_x4plus"],
+        settings=JobSettings(output_format=OutputFormat.PNG),
+        existing_jobs=[],
+        job_ids=count(1),
+    )
+
+    assert len(jobs) == 6
+    assert jobs[0].output_path.name == "a-realesr-general-x4v3-4x-2.png"
+    assert listed == [tmp_path.resolve()] or listed == [tmp_path]
+
+
 def test_create_jobs_takes_scale_from_the_settings_snapshot(tmp_path: Path) -> None:
     # Scale arrives inside the settings snapshot, not beside it: the job freezes it,
     # the output name is planned from it, and options_for_job hands that same value to
