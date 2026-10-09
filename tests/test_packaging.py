@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_RUNTIME_PINS = {
     "PySide6": "6.11.2",
     "Pillow": "12.3.0",
-    "pillow-heif": "1.5.0",
-    "numpy": "2.5.2",
+    "pillow-heif": "1.8.0",
+    "numpy": "2.5.3",
     "torch": "2.13.0",
     "opencv-python": "5.0.0.93",
 }

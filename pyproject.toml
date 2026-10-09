@@ -15,8 +15,8 @@ authors = [
 dependencies = [
   "PySide6==6.11.2",
   "Pillow==12.3.0",
-  "pillow-heif==1.5.0",
-  "numpy==2.5.2",
+  "pillow-heif==1.8.0",
+  "numpy==2.5.3",
   "torch==2.13.0",
   "opencv-python==5.0.0.93",
 ]
@@ -25,13 +25,13 @@ dependencies = [
 dev = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "ruff==0.16.4",
+  "ruff==0.16.10",
 ]
 # Packaging-only: the freezer that builds the double-click .app/.exe. Kept out of the
 # runtime deps (test_packaging.py pins those) and out of dev so a normal test/dev sync
 # stays lean — `uv sync --extra build` is only needed by scripts/package.* and CI.
 build = [
-  "pyinstaller==6.22.2",
+  "pyinstaller==6.22.3",
 ]
 
 [project.gui-scripts]
