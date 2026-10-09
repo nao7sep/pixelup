@@ -289,7 +289,7 @@
   "records.job": "Задание",
   "records.launch": "Запуск",
   "records.level": "Уровень",
-  "records.levelAttention": "Требует внимания",
+  "records.levelAttention": "Предупреждения и ошибки",
   "records.levelDebug": "Отладка",
   "records.levelError": "Ошибка",
   "records.levelInfo": "Информация",

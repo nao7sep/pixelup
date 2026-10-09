@@ -253,7 +253,7 @@
   "records.job": "작업",
   "records.launch": "실행",
   "records.level": "수준",
-  "records.levelAttention": "확인 필요",
+  "records.levelAttention": "경고 및 오류",
   "records.levelDebug": "디버그",
   "records.levelError": "오류",
   "records.levelInfo": "정보",

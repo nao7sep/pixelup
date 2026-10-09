@@ -265,7 +265,7 @@
   "records.job": "Auftrag",
   "records.launch": "Start",
   "records.level": "Stufe",
-  "records.levelAttention": "Benötigt Aufmerksamkeit",
+  "records.levelAttention": "Warnungen und Fehler",
   "records.levelDebug": "Debug",
   "records.levelError": "Fehler",
   "records.levelInfo": "Info",

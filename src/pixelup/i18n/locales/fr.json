@@ -277,7 +277,7 @@
   "records.job": "Tâche",
   "records.launch": "Lancement",
   "records.level": "Niveau",
-  "records.levelAttention": "Attention requise",
+  "records.levelAttention": "Avertissements et erreurs",
   "records.levelDebug": "Débogage",
   "records.levelError": "Erreur",
   "records.levelInfo": "Infos",

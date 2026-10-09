@@ -240,7 +240,7 @@ def test_offers_needs_attention_first_among_the_levels_with_every_filter_off(
     _until(process_until, lambda: window.launch_filter.count() == 3, "the launches")
 
     levels = [window.level_filter.itemText(i) for i in range(window.level_filter.count())]
-    assert levels == ["All levels", "Needs attention", "Error", "Warning", "Info", "Debug"]
+    assert levels == ["All levels", "Warnings and errors", "Error", "Warning", "Info", "Debug"]
     assert window.level_filter.currentIndex() == 0
     assert window.launch_filter.currentText() == "All launches"
     assert window.search.text() == ""
@@ -509,6 +509,52 @@ def test_saves_the_list_width_once_when_a_drag_ends(
     QTest.mouseRelease(window.splitter.handle(1), Qt.MouseButton.LeftButton)
 
     assert int(settings.value(LIST_WIDTH_KEY)) == window.list_pane.width() == LIST_WIDTH_MIN + 20
+
+
+def test_the_keyboard_moves_the_list_edge_and_saves_once_on_release(
+    open_records, settings: QSettings, qapp: QApplication
+) -> None:
+    window = open_records()
+    window.resize(LIST_WIDTH_MAX + records_window.DETAIL_MIN_WIDTH + 200, window.height())
+    qapp.processEvents()
+    handle = window.splitter.handle(1)
+    assert handle.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    start = window.list_pane.width()
+
+    QTest.keyPress(handle, Qt.Key.Key_Right)
+    QTest.keyPress(handle, Qt.Key.Key_Right)
+    qapp.processEvents()
+    assert window.list_pane.width() == start + 2 * records_window.KEY_RESIZE_STEP
+    assert not settings.contains(LIST_WIDTH_KEY)
+
+    QTest.keyRelease(handle, Qt.Key.Key_Right)
+    assert int(settings.value(LIST_WIDTH_KEY)) == start + 2 * records_window.KEY_RESIZE_STEP
+
+    QTest.keyPress(handle, Qt.Key.Key_End)
+    qapp.processEvents()
+    assert window.list_pane.width() == LIST_WIDTH_MAX
+    QTest.keyPress(handle, Qt.Key.Key_Home)
+    qapp.processEvents()
+    assert window.list_pane.width() == LIST_WIDTH_MIN
+    QTest.keyPress(handle, Qt.Key.Key_Left)
+    qapp.processEvents()
+    assert window.list_pane.width() == LIST_WIDTH_MIN  # held at the bound
+
+
+def test_a_keyed_move_is_saved_when_the_handle_loses_focus(
+    open_records, settings: QSettings, qapp: QApplication
+) -> None:
+    window = open_records()
+    handle = window.splitter.handle(1)
+    handle.setFocus()
+    QTest.keyPress(handle, Qt.Key.Key_Home)
+    qapp.processEvents()
+    assert not settings.contains(LIST_WIDTH_KEY)
+
+    window.search.setFocus()
+    qapp.processEvents()
+
+    assert int(settings.value(LIST_WIDTH_KEY)) == LIST_WIDTH_MIN
 
 
 def test_narrowing_the_window_narrows_the_list_and_saves_nothing(

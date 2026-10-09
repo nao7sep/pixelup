@@ -97,6 +97,8 @@ LIST_WIDTH_KEY = "recordsWindow/listWidth"
 LIST_WIDTH_MIN = 320
 LIST_WIDTH_DEFAULT = 380
 LIST_WIDTH_MAX = 640
+# One arrow press moves the list pane's edge this far, as in BigMouth.
+KEY_RESIZE_STEP = 16
 DETAIL_MIN_WIDTH = 420
 INITIAL_SIZE = QSize(1240, 820)
 SEARCH_DELAY_MS = 300
@@ -504,20 +506,85 @@ class _RecordList(QListView):
 
 
 class _SplitterHandle(QSplitterHandle):
+    """The list pane's divider: dragged with the mouse, or focused and moved with
+    the keyboard — arrows by ``KEY_RESIZE_STEP``, Home and End to the bounds. A drag
+    or a run of keys ends in one ``resize_finished``: on mouse release, or on key
+    release or focus loss after a keyed move."""
+
+    def __init__(self, orientation: Qt.Orientation, parent: QSplitter) -> None:
+        super().__init__(orientation, parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._keyed = False
+
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
         super().mouseReleaseEvent(event)
         splitter = self.splitter()
         if event.button() == Qt.MouseButton.LeftButton and isinstance(splitter, _ListSplitter):
-            splitter.drag_finished.emit()
+            splitter.resize_finished.emit()
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
+        splitter = self.splitter()
+        if not isinstance(splitter, _ListSplitter):
+            super().keyPressEvent(event)
+            return
+        width = splitter.sizes()[0]
+        key = event.key()
+        if key == Qt.Key.Key_Left:
+            target = width - KEY_RESIZE_STEP
+        elif key == Qt.Key.Key_Right:
+            target = width + KEY_RESIZE_STEP
+        elif key == Qt.Key.Key_Home:
+            target = LIST_WIDTH_MIN
+        elif key == Qt.Key.Key_End:
+            target = LIST_WIDTH_MAX
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
+        splitter.set_list_width(target)
+        self._keyed = True
+
+    def keyReleaseEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
+        super().keyReleaseEvent(event)
+        if not event.isAutoRepeat():
+            self._commit_keyed()
+
+    def focusInEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
+        super().focusOutEvent(event)
+        self._commit_keyed()
+        self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
+        super().paintEvent(event)
+        if self.hasFocus():
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), self.palette().color(QPalette.ColorRole.Highlight))
+            painter.end()
+
+    def _commit_keyed(self) -> None:
+        splitter = self.splitter()
+        if self._keyed and isinstance(splitter, _ListSplitter):
+            self._keyed = False
+            splitter.resize_finished.emit()
 
 
 class _ListSplitter(QSplitter):
-    """A splitter that says when a drag of its handle ends."""
+    """A splitter that says when a resize of its list pane ends, by drag or keys."""
 
-    drag_finished = Signal()
+    resize_finished = Signal()
 
     def createHandle(self) -> QSplitterHandle:  # noqa: N802 - Qt override name
         return _SplitterHandle(self.orientation(), self)
+
+    def set_list_width(self, width: int) -> None:
+        """Give the list pane ``width``, within its bounds and the detail pane's minimum."""
+        usable = sum(self.sizes())
+        width = max(LIST_WIDTH_MIN, min(width, LIST_WIDTH_MAX, usable - DETAIL_MIN_WIDTH))
+        self.setSizes([width, max(DETAIL_MIN_WIDTH, usable - width)])
 
 
 type _Answer = Callable[[object], None]
@@ -588,7 +655,7 @@ class RecordsWindow(QWidget):
         use_regular_spacing(layout)
         self.splitter = _ListSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.drag_finished.connect(self._save_list_width)
+        self.splitter.resize_finished.connect(self._save_list_width)
 
         self.list_pane = QWidget()
         self.list_pane.setMinimumWidth(LIST_WIDTH_MIN)
@@ -683,7 +750,8 @@ class RecordsWindow(QWidget):
 
     @Slot()
     def _save_list_width(self) -> None:
-        # Drag intent: window-conventions. Only a drag saves, never a resize.
+        # Drag or key intent: window-conventions. Only the user's move saves, never a
+        # window resize.
         width = clamp_list_width(self.list_pane.width())
         self._state.save(LIST_WIDTH_KEY, width)
 
