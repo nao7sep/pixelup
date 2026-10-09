@@ -1316,7 +1316,6 @@ class MainWindow(QMainWindow):
         if not saved or self._quit_bounded:
             return
         log.info("settings.dialog_opened")
-        previous_config = self.config
         dialog = SettingsDialog(
             self.config,
             self,
@@ -1325,25 +1324,37 @@ class MainWindow(QMainWindow):
             ),
             session_shutdown=self._is_session_shutdown,
         )
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        # A saved change takes effect when its save lands (_apply_saved_settings),
+        # even one that lands after the dialog was cancelled while it was slow.
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            log.info("settings.dialog_cancelled")
+
+    def _apply_saved_settings(self, previous: AppConfig, current: AppConfig) -> None:
+        """Make the settings a landed save changed take effect, whoever submitted it."""
+        if (
+            previous.font_family,
+            previous.language,
+            previous.max_concurrent_jobs,
+        ) == (current.font_family, current.language, current.max_concurrent_jobs):
+            return
+        if previous.font_family != current.font_family:
             # Re-apply the UI font so a changed family takes effect immediately,
             # no restart needed.
             app = QApplication.instance()
-            apply_ui_font(app, self.config.font_family)
+            apply_ui_font(app, current.font_family)
             self.setFont(app.font())
+        if previous.language != current.language:
             # A changed language applies on Save, like its neighbours, and rewrites
             # what is already on screen (see _retranslate), which re-measures.
-            localizer.use(self.config.language)
-            self._refresh_layout_metrics()
-            log.info(
-                "settings.saved",
-                path=str(config_path()),
-                previous=config_log_payload(previous_config),
-                current=config_log_payload(self.config),
-            )
-            self.runner.schedule(self.config.max_concurrent_jobs)
-            return
-        log.info("settings.dialog_cancelled")
+            localizer.use(current.language)
+        self._refresh_layout_metrics()
+        log.info(
+            "settings.saved",
+            path=str(config_path()),
+            previous=config_log_payload(previous),
+            current=config_log_payload(current),
+        )
+        self.runner.schedule(current.max_concurrent_jobs)
 
     def _managed_models_dialog(self) -> None:
         self.model_manager.refresh_readiness()
@@ -1404,11 +1415,12 @@ class MainWindow(QMainWindow):
         if dialog is not None:
             dialog.accept()
         if isinstance(pending, PendingEnqueue):
-            self._materialize_jobs(
-                list(pending.input_paths),
-                list(pending.models),
-                pending.settings,
-            )
+            # Images removed while their models downloaded are no longer offered.
+            input_paths = [path for path in pending.input_paths if path in self._images_by_path]
+            if not input_paths:
+                log.info("models.pending_work_abandoned", reason="images_removed")
+                return
+            self._materialize_jobs(input_paths, list(pending.models), pending.settings)
         else:
             self._retry_failed_snapshot(pending.job_ids)
 
@@ -1740,10 +1752,14 @@ class MainWindow(QMainWindow):
                 else failed
             )
         else:
-            # The file now holds what this save wrote, whichever config is current.
+            # One save runs at a time and only a landed save changes self.config, so
+            # the landed result is the current settings, whether or not the editor
+            # that submitted it is still open.
+            previous = self.config
             self._settings_file = outcome.result.file
-            if self.config == operation.previous:
-                self.config = outcome.result.config
+            self.config = outcome.result.config
+            if not self._closing:
+                self._apply_saved_settings(previous, self.config)
         if self._parameter_edit_generation != self._saving_parameter_generation:
             self._parameters_save_timer.start()
         elif callback is None and failure is None:

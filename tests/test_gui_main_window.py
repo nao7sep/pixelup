@@ -2092,3 +2092,65 @@ def test_the_preview_reads_an_image_once_while_it_stays_selected(
     _settle_opens(window)
 
     assert reads == []
+
+
+def test_a_settings_save_that_lands_after_cancel_still_takes_effect(
+    make_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The dialog may close while its save is slow; the save still lands, so its
+    # language, font and job count must apply rather than wait for a restart.
+    from pixelup.i18n import localizer
+
+    window = make_window()
+    scheduled: list[int] = []
+    monkeypatch.setattr(window.runner, "schedule", scheduled.append)
+    release = threading.Event()
+    real_save = gui.save_app_config
+
+    def slow_save(candidate, previous, file):
+        assert release.wait(5)
+        return real_save(candidate, previous, file)
+
+    monkeypatch.setattr(gui, "save_app_config", slow_save)
+    outcomes: list[object] = []
+    candidate = replace(window.config, language="ja", max_concurrent_jobs=3)
+    try:
+        window._save_config_candidate(candidate, Message("settings.saveFailed"), outcomes.append)
+        # The dialog that submitted it is gone; nothing waits for the answer.
+        release.set()
+        _settle_config(window)
+
+        assert outcomes == [None]
+        assert window.config == candidate
+        assert localizer.preference() == "ja"
+        assert scheduled == [3]
+    finally:
+        localizer.use("system")
+
+
+def test_install_and_queue_skips_an_image_removed_while_models_downloaded(
+    make_window,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    _open(window, [image])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    required = ("realesr-general-x4v3", "realesr-general-wdn-x4v3")
+    for name in required:
+        model_file(window.runtime_dirs.models_dir, name).unlink()
+
+    window._queue_selected_image()
+    assert window._pending_model_work is not None
+    window._remove_selected_image()
+    assert window.image_table.rowCount() == 0
+    for name in required:
+        target = model_file(window.runtime_dirs.models_dir, name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"ready")
+    window.model_manager.refresh_readiness()
+    qapp.processEvents()
+
+    assert window._pending_model_work is None
+    assert window.jobs == []
