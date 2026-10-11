@@ -151,17 +151,34 @@ class _Recorder:
         self._disabled = False
 
     def submit(self, path: str, data: bytes) -> None:
+        failure: Exception | None = None
         with self._condition:
             if self._disabled:
                 return
-            self._pending.pop(path, None)
-            self._pending[path] = data
-            if self._thread is None:
-                self._thread = threading.Thread(
-                    target=self._run, name="pixelup-backups", daemon=True
-                )
-                self._thread.start()
+            try:
+                self._pending.pop(path, None)
+                self._pending[path] = data
+                if self._thread is None:
+                    thread = threading.Thread(target=self._run, name="pixelup-backups", daemon=True)
+                    thread.start()
+                    # Only a started thread is owned and eligible for close() to join.
+                    self._thread = thread
+            except Exception as exc:  # noqa: BLE001 - optional work cannot deny a landed save.
+                failure = exc
+                self._disabled = True
+                self._pending.clear()
             self._condition.notify_all()
+        if failure is not None:
+            # Diagnose outside the condition, after abandoning unstarted work.
+            # Diagnostic admission is best-effort too: it cannot undo primary success.
+            try:
+                log.warning(
+                    "backup_store.submit_failed",
+                    file=path,
+                    exc_info=(type(failure), failure, failure.__traceback__),
+                )
+            except Exception:  # noqa: BLE001 - the warning was attempted; keep the save successful.
+                pass
 
     def drain(self, timeout: float) -> bool:
         """Wait up to ``timeout`` seconds for pending writes; True when none remain."""
@@ -211,13 +228,18 @@ class _Recorder:
                 self._connection = _open_store()
                 self._session = current_session() or utc_now_iso_ms()
             except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable.
-                log.warning("backup_store.open_failed", file=str(_store_file()), reason=str(exc))
+                log.warning(
+                    "backup_store.open_failed",
+                    file=str(_store_file()),
+                    reason=str(exc),
+                    exc_info=True,
+                )
                 self._disable()
                 return
         try:
             _write(self._connection, self._session, path, data)
         except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable.
-            log.warning("backup_store.record_failed", file=path, reason=str(exc))
+            log.warning("backup_store.record_failed", file=path, reason=str(exc), exc_info=True)
             connection, self._connection = self._connection, None
             try:
                 connection.close()

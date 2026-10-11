@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import threading
@@ -9,6 +10,8 @@ from typing import Any
 import pytest
 
 from pixelup.backup_store import STORE_FILE_NAME, close_backup_store, drain_backups, record
+from pixelup.config import write_managed_text
+from pixelup.session_log import configure_session_logging, flush_records
 
 # How long a test waits on its own threads before it fails instead of hanging.
 _THREAD_WAIT_S = 10
@@ -348,6 +351,46 @@ def test_open_failure_disables_recording_with_one_warn(
     close_backup_store()
 
     assert warns == ["backup_store.open_failed"]
+
+
+@pytest.mark.parametrize("stage", ["open", "record"])
+def test_backup_failure_keeps_full_diagnostics_without_failing_the_primary_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    database = configure_session_logging()
+
+    def fail(*_args) -> None:
+        try:
+            raise ValueError("EIO /internal/backups ORIGINAL-BACKUP-SENTINEL")
+        except ValueError as cause:
+            raise RuntimeError("backup storage failed") from cause
+
+    monkeypatch.setattr(
+        "pixelup.backup_store." + ("_open_store" if stage == "open" else "_write"), fail
+    )
+
+    write_managed_text(target, "durable\n")
+    assert drain_backups(_THREAD_WAIT_S)
+    write_managed_text(target, "still durable\n")
+
+    assert target.read_bytes() == b"still durable\n"
+    assert drain_backups(0)
+    assert flush_records(5)
+    with sqlite3.connect(database) as connection:
+        entries = connection.execute(
+            "SELECT level, fields FROM logs WHERE message = ?",
+            (f"backup_store.{stage}_failed",),
+        ).fetchall()
+    assert len(entries) == 1
+    level, fields = entries[0]
+    assert level == "warn"
+    error = json.loads(fields)["error"]
+    assert error["type"] == "RuntimeError"
+    assert error["message"] == "backup storage failed"
+    assert "ValueError: EIO /internal/backups ORIGINAL-BACKUP-SENTINEL" in error["traceback"]
+    assert "in fail" in error["traceback"]
 
 
 def test_store_sidecars_are_the_stores_own_wal_artifacts(

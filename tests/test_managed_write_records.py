@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import stat
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from pixelup.app_config import AppConfig, load_app_config_result, save_app_confi
 from pixelup.backup_store import STORE_FILE_NAME, close_backup_store
 from pixelup.config import write_managed_text
 from pixelup.jobs import JobSettings
+from pixelup.session_log import configure_session_logging, flush_records, log
 
 
 def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -132,6 +135,88 @@ def test_a_failing_backup_never_breaks_the_save(
     write_managed_text(target, "durable\n")
 
     assert target.read_text(encoding="utf-8") == "durable\n"
+
+
+@pytest.mark.parametrize("stage", ["admission", "start"])
+@pytest.mark.parametrize("warning_fails", [False, True])
+def test_failed_backup_submission_preserves_the_landed_save_and_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, warning_fails: bool
+) -> None:
+    from pixelup import backup_store
+
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    database = configure_session_logging()
+    recorder = backup_store._recorder
+    starts: list[str] = []
+    warning_lock_owned: list[bool] = []
+
+    def fail_submission() -> None:
+        try:
+            raise OSError("EACCES /internal/backup ORIGINAL-SUBMISSION-SENTINEL")
+        except OSError as cause:
+            raise RuntimeError("backup submission failed") from cause
+
+    if stage == "admission":
+        class RejectPending(dict):
+            def __setitem__(self, path, data):
+                fail_submission()
+
+        recorder._pending = RejectPending()
+    else:
+        real_start = threading.Thread.start
+
+        def start(thread: threading.Thread) -> None:
+            if thread.name == "pixelup-backups":
+                starts.append(thread.name)
+                fail_submission()
+            real_start(thread)
+
+        monkeypatch.setattr(threading.Thread, "start", start)
+
+    real_warning = log.warning
+
+    def warning(message, **fields):
+        warning_lock_owned.append(recorder._condition._is_owned())
+        real_warning(message, **fields)
+        if warning_fails:
+            raise RuntimeError("diagnostic admission failed too")
+
+    monkeypatch.setattr(log, "warning", warning)
+    try:
+        write_managed_text(target, "first landed save\n")
+        write_managed_text(target, "latest landed save\n")
+
+        assert target.read_bytes() == b"latest landed save\n"
+        assert list(home.glob("*.tmp")) == []
+        assert recorder._disabled
+        assert not recorder._pending
+        assert recorder._thread is None
+        assert recorder.drain(0)
+        recorder.close(0)  # It cannot try joining the unstarted thread.
+        assert starts == (["pixelup-backups"] if stage == "start" else [])
+        assert warning_lock_owned == [False]
+        assert flush_records(5)
+        with sqlite3.connect(database) as connection:
+            entries = connection.execute(
+                "SELECT level, fields FROM logs WHERE message = 'backup_store.submit_failed'"
+            ).fetchall()
+        assert len(entries) == 1
+        level, fields = entries[0]
+        assert level == "warn"
+        error = json.loads(fields)["error"]
+        assert error["type"] == "RuntimeError"
+        assert error["message"] == "backup submission failed"
+        assert "OSError: EACCES /internal/backup ORIGINAL-SUBMISSION-SENTINEL" in error["traceback"]
+        assert "in fail_submission" in error["traceback"]
+    finally:
+        # Baseline failure must not strand its unstarted thread in fixture teardown.
+        with recorder._condition:
+            if recorder._thread is not None and recorder._thread.ident is None:
+                recorder._thread = None
+            recorder._pending.clear()
+            recorder._disabled = True
+            recorder._condition.notify_all()
 
 
 def test_a_failed_write_leaves_the_original_and_no_temp_file(

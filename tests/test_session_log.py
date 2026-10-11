@@ -157,6 +157,41 @@ def test_error_includes_type_message_and_cause_chain() -> None:
     assert "ValueError: root cause" in traceback_text
 
 
+@pytest.mark.parametrize("transported", [False, True])
+def test_warning_keeps_the_original_exception_and_cause(transported: bool) -> None:
+    database = configure_session_logging()
+
+    def fail() -> None:
+        try:
+            raise ValueError("original diagnostic sentinel")
+        except ValueError as cause:
+            raise RuntimeError("wrapped warning") from cause
+
+    try:
+        fail()
+    except RuntimeError as exc:
+        if transported:
+            failure = exc
+        else:
+            log.warning("optional.failed", exc_info=True, operation="save")
+    if transported:
+        # Worker outcomes are delivered after their except block has ended.
+        log.warning(
+            "optional.failed",
+            exc_info=(type(failure), failure, failure.__traceback__),
+            operation="save",
+        )
+
+    entry = _records(database)[-1]
+    assert entry["level"] == "warn"
+    assert entry["operation"] == "save"
+    assert "exc_info" not in entry
+    assert entry["error"]["type"] == "RuntimeError"
+    assert entry["error"]["message"] == "wrapped warning"
+    assert "ValueError: original diagnostic sentinel" in entry["error"]["traceback"]
+    assert "in fail" in entry["error"]["traceback"]
+
+
 def test_non_serializable_field_values_do_not_break_a_record() -> None:
     database = configure_session_logging()
     # Path objects are common in PixelUp's payloads and are not natively JSON

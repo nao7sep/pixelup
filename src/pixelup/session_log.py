@@ -327,8 +327,8 @@ class SessionLog:
     def info(self, message: str, **fields: Any) -> None:
         self._emit(logging.INFO, message, fields)
 
-    def warning(self, message: str, **fields: Any) -> None:
-        self._emit(logging.WARNING, message, fields)
+    def warning(self, message: str, *, exc_info: Any = None, **fields: Any) -> None:
+        self._emit(logging.WARNING, message, fields, exc_info=exc_info)
 
     def error(self, message: str, *, exc_info: Any = None, **fields: Any) -> None:
         self._emit(logging.ERROR, message, fields, exc_info=exc_info)
