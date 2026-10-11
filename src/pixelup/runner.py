@@ -60,10 +60,18 @@ class JobWorker(QObject):
     def run(self) -> None:
         warnings: list[Message] = []
         published_image: PublishedFile | None = None
+        sidecar_claim: PublishedFile | None = None
+        committed = False
 
         def capture_published_image(published: PublishedFile) -> None:
             nonlocal published_image
             published_image = published
+
+        def discard_uncommitted() -> None:
+            if not committed:
+                for claim in (sidecar_claim, published_image):
+                    if claim is not None:
+                        remove_published_file(claim)
 
         log.info("job.started", job_id=self.job.id, details=job_log_payload(self.job))
         try:
@@ -86,36 +94,29 @@ class JobWorker(QObject):
                 should_cancel=self._is_cancelled,
                 on_output_published=capture_published_image,
             )
-            try:
-                sidecar_claim = write_sidecar(
-                    input_path=self.job.input_path,
-                    output_path=self.job.output_path,
-                    options=options,
-                    result=result,
-                    warnings=warnings,
-                )
-            except Exception:
-                if published_image is not None:
-                    remove_published_file(published_image)
-                raise
+            self._check_cancelled()
+            sidecar_claim = write_sidecar(
+                input_path=self.job.input_path,
+                output_path=self.job.output_path,
+                options=options,
+                result=result,
+                warnings=warnings,
+                should_cancel=self._is_cancelled,
+            )
+            self._check_cancelled()
             if published_image is None:
-                remove_published_file(sidecar_claim)
                 raise PixelupError(
                     ErrorCode.INTERNAL_ERROR,
                     "Output image publication did not return an ownership claim.",
                 )
-            try:
-                # Image + sidecar together are the commit point. Revalidate both
-                # physical claims and every normalized shared-stem companion only
-                # after the sidecar descriptor has flushed and closed.
-                assert_output_bundle_claims_current(
-                    self.job.output_path,
-                    (published_image, sidecar_claim),
-                )
-            except Exception:
-                remove_published_file(sidecar_claim)
-                remove_published_file(published_image)
-                raise
+            # Both flushed claims and all shared-stem companions must still be
+            # ours. Cancellation before this final commit removes only our files;
+            # cancellation after it cannot undo or deny the accepted success.
+            assert_output_bundle_claims_current(
+                self.job.output_path, (published_image, sidecar_claim),
+            )
+            self._check_cancelled()
+            committed = True
             sidecar = sidecar_claim.path
             result["sidecar"] = str(sidecar)
             log.info(
@@ -129,6 +130,7 @@ class JobWorker(QObject):
                 self.job.id, True, Message("queue.statusDone"), result, warnings
             )
         except PixelupError as exc:
+            discard_uncommitted()
             if exc.code == ErrorCode.JOB_CANCELLED:
                 log.info("job.cancelled", job_id=self.job.id)
                 self.signals.finished.emit(
@@ -149,12 +151,17 @@ class JobWorker(QObject):
             )
             self.signals.finished.emit(self.job.id, False, failure_message(exc), {}, warnings)
         except Exception:
+            discard_uncommitted()
             log.exception(
                 "job.failed_unexpectedly",
                 job_id=self.job.id,
                 details=job_log_payload(self.job),
             )
             self.signals.finished.emit(self.job.id, False, FAILED_FALLBACK, {}, warnings)
+
+    def _check_cancelled(self) -> None:
+        if self._is_cancelled():
+            raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
 
 
 class JobRunner(QObject):

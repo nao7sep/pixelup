@@ -365,6 +365,112 @@ def _publish_fixture(path: Path, data: bytes) -> PublishedFile:
     return PublishedFile(path, written.st_dev, written.st_ino)
 
 
+def _worker_with_real_image_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> JobWorker:
+    from pixelup import inference
+
+    job = _make_job(81, tmp_path)
+    job.model = "custom-model"
+    job.settings = JobSettings(device="cpu")
+    Image.new("RGB", (3, 2), (20, 40, 60)).save(job.input_path)
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "custom-model.pth").write_bytes(b"weights")
+    monkeypatch.setattr(inference, "_import_torch", lambda: None)
+    monkeypatch.setattr(inference, "to_torch_device", lambda *args: "cpu")
+    monkeypatch.setattr(inference, "_create_upsampler", lambda *args, **kwargs:
+                        SimpleNamespace(enhance=lambda pixels, **kwargs: (pixels.copy(), None)))
+    return JobWorker(job, RuntimeDirs(models, tmp_path / "temp"))
+
+
+@pytest.mark.parametrize("boundary", ["encode", "sidecar"])
+def test_worker_cancel_during_real_writes_removes_owned_output(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str,
+) -> None:
+    worker = _worker_with_real_image_pipeline(tmp_path, monkeypatch)
+    finished, _ = _capture_worker(worker)
+    sidecar = worker.job.output_path.with_suffix(".json")
+    files_at_completion = []
+    worker.signals.finished.connect(lambda *args: files_at_completion.append(
+        (worker.job.output_path.exists(), sidecar.exists())
+    ))
+    if boundary == "encode":
+        original = Image.Image.save
+
+        def cancel_in_encoder(self, file, **kwargs):
+            original(self, file, **kwargs)
+            worker.request_cancel()
+
+        monkeypatch.setattr(Image.Image, "save", cancel_in_encoder)
+    else:
+        original_fsync = os.fsync
+
+        def cancel_in_sidecar(descriptor):
+            original_fsync(descriptor)
+            if sidecar.exists():
+                worker.request_cancel()
+
+        monkeypatch.setattr(os, "fsync", cancel_in_sidecar)
+
+    worker.run()
+
+    assert len(finished) == 1
+    assert finished[0][1:4] == (False, "Cancelled", {"cancelled": True})
+    assert files_at_completion == [(False, False)]
+    assert not worker.job.output_path.exists()
+    assert not sidecar.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.parametrize("replacement", ["image", "sidecar"])
+def test_worker_cancel_before_commit_preserves_replacement_winner(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str,
+) -> None:
+    worker = _worker_with_real_image_pipeline(tmp_path, monkeypatch)
+    finished, _ = _capture_worker(worker)
+    sidecar = worker.job.output_path.with_suffix(".json")
+    target = worker.job.output_path if replacement == "image" else sidecar
+    original_fsync = os.fsync
+
+    def cancel_and_replace(descriptor):
+        original_fsync(descriptor)
+        if sidecar.exists():
+            winner = tmp_path / "winner"
+            winner.write_bytes(b"replacement-winner")
+            winner.replace(target)
+            worker.request_cancel()
+
+    monkeypatch.setattr(os, "fsync", cancel_and_replace)
+    worker.run()
+
+    assert len(finished) == 1
+    assert finished[0][1:4] == (False, "Cancelled", {"cancelled": True})
+    assert target.read_bytes() == b"replacement-winner"
+    other = sidecar if replacement == "image" else worker.job.output_path
+    assert not other.exists()
+
+
+def test_worker_cancel_after_bundle_commit_keeps_success(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _worker_with_real_image_pipeline(tmp_path, monkeypatch)
+    finished, _ = _capture_worker(worker)
+    from pixelup.runner import log
+
+    original = log.info
+
+    def cancel_after_commit(event, **kwargs):
+        if event == "job.finished":
+            worker.request_cancel()
+        original(event, **kwargs)
+
+    monkeypatch.setattr(log, "info", cancel_after_commit)
+    worker.run()
+
+    assert finished[0][1] is True
+    assert worker.job.output_path.is_file()
+    assert worker.job.output_path.with_suffix(".json").is_file()
+
+
 NOTE = Message.of("warning.extensionMismatch", extension="png", format="jpg")
 
 
@@ -379,7 +485,7 @@ def test_worker_run_success_emits_done_with_sidecar(
     def fake_upscale(options: object, runtime_dirs: object, **kwargs: object) -> dict[str, object]:
         kwargs["on_warning"](NOTE)  # type: ignore[operator]
         kwargs["on_output_published"](_publish_fixture(job.output_path, b"image"))  # type: ignore[operator]
-        return {"ok": True, "output": getattr(options, "output_arg", "")}
+        return {"ok": True, "output": str(getattr(options, "output_path", ""))}
 
     monkeypatch.setattr("pixelup.runner.run_upscale", fake_upscale)
     monkeypatch.setattr(
@@ -638,7 +744,7 @@ def test_worker_run_forwards_processing_progress_as_text(
         kwargs["on_progress"]("upscale")  # type: ignore[operator]
         kwargs["on_tile"](1, 4)  # type: ignore[operator]
         kwargs["on_output_published"](_publish_fixture(job.output_path, b"image"))  # type: ignore[operator]
-        return {"ok": True, "output": getattr(options, "output_arg", "")}
+        return {"ok": True, "output": str(getattr(options, "output_path", ""))}
 
     monkeypatch.setattr("pixelup.runner.run_upscale", fake_upscale)
     monkeypatch.setattr(

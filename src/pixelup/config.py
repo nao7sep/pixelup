@@ -75,14 +75,6 @@ def window_settings_path() -> Path:
     return resolve_state_dir() / "window.ini"
 
 
-def ensure_models_dir(path: Path) -> Path:
-    return _ensure_dir(path, ErrorCode.MODEL_NOT_FOUND, Message("error.modelsDirCreateFailed"))
-
-
-def ensure_temp_dir(path: Path) -> Path:
-    return _ensure_dir(path, ErrorCode.OUTPUT_UNWRITABLE, Message("error.tempDirCreateFailed"))
-
-
 def _resolve_dir(
     override: Path | None,
     env_name: str,
@@ -205,16 +197,6 @@ def _tighten_root_permissions(root: Path) -> None:
             f"pixelup: could not tighten permissions on storage root {root}: {exc}",
             file=sys.stderr,
         )
-
-
-def _ensure_dir(path: Path, code: ErrorCode, message: Message) -> Path:
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise PixelupError(code, message, details={"path": str(path), "reason": str(exc)}) from exc
-    if not path.is_dir():
-        raise PixelupError(code, message, details={"path": str(path)})
-    return path
 
 
 def quarantine_corrupt_file(path: Path) -> Path:

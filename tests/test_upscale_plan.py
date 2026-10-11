@@ -13,16 +13,16 @@ from pixelup.upscale import UpscaleOptions, build_plan
 
 def options(
     input_path: Path,
-    output_arg: str,
+    output_path: Path,
     *,
     model: str = "RealESRGAN_x4plus",
     tile: int = 0,
     scale: int = 4,
-    output_format: OutputFormat | None = OutputFormat.PNG,
+    output_format: OutputFormat = OutputFormat.PNG,
 ) -> UpscaleOptions:
     return UpscaleOptions(
         input_path=input_path,
-        output_arg=output_arg,
+        output_path=output_path,
         model=model,
         scale=scale,
         tile=tile,
@@ -38,7 +38,6 @@ def options(
         background="white",
         strip_metadata=False,
         target_profile=None,
-        overwrite=False,
     )
 
 
@@ -64,7 +63,7 @@ def test_build_plan_validates_input_output_and_model(tmp_path: Path) -> None:
     Image.new("RGB", (3, 2), "white").save(input_path)
 
     plan = build_plan(
-        options(input_path, str(output_path), model="custom-model"),
+        options(input_path, output_path, model="custom-model"),
         RuntimeDirs(models_dir, temp_dir),
     )
 
@@ -73,30 +72,6 @@ def test_build_plan_validates_input_output_and_model(tmp_path: Path) -> None:
     assert plan.output_path == output_path
     assert plan.model == "custom-model"
 
-
-def test_build_plan_directory_output_defaults_to_png(tmp_path: Path) -> None:
-    input_path = tmp_path / "input.png"
-    models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
-    output_dir = tmp_path / "out"
-    models_dir.mkdir()
-    temp_dir.mkdir()
-    output_dir.mkdir()
-    (models_dir / "custom-model.pth").write_bytes(b"weights")
-    Image.new("RGB", (3, 2), "white").save(input_path)
-
-    plan = build_plan(
-        options(
-            input_path,
-            str(output_dir),
-            model="custom-model",
-            output_format=None,
-        ),
-        RuntimeDirs(models_dir, temp_dir),
-    )
-
-    assert plan.output_format == OutputFormat.PNG
-    assert plan.output_path == output_dir / "input-custom-model-4x.png"
 
 
 def test_build_plan_keeps_literal_input_and_uses_resolved_path_only_for_reads(
@@ -119,7 +94,7 @@ def test_build_plan_keeps_literal_input_and_uses_resolved_path_only_for_reads(
     output = chosen_dir / "dropped-link-custom-model-4x.png"
 
     plan = build_plan(
-        options(chosen, str(output), model="custom-model"),
+        options(chosen, output, model="custom-model"),
         RuntimeDirs(models_dir, temp_dir),
     )
 
@@ -138,7 +113,7 @@ def test_build_plan_rejects_missing_unknown_model(tmp_path: Path) -> None:
 
     with pytest.raises(PixelupError) as excinfo:
         build_plan(
-            options(input_path, str(tmp_path / "output.png"), model="custom-model"),
+            options(input_path, tmp_path / "output.png", model="custom-model"),
             RuntimeDirs(models_dir, temp_dir),
         )
 
@@ -166,7 +141,7 @@ def test_run_upscale_calls_inference_and_writes_output(
     _stub_successful_inference(monkeypatch)
 
     result = run_upscale(
-        options(input_path, str(output_path), model="custom-model", tile=128),
+        options(input_path, output_path, model="custom-model", tile=128),
         RuntimeDirs(models_dir, temp_dir),
         on_start=lambda plan, tiles: events.append(("start", tiles)),
         on_progress=lambda phase: events.append(("progress", phase)),
@@ -193,7 +168,7 @@ def test_run_upscale_errors_on_missing_model(tmp_path: Path) -> None:
 
     with pytest.raises(PixelupError) as excinfo:
         run_upscale(
-            options(input_path, str(tmp_path / "output.png")),
+            options(input_path, tmp_path / "output.png"),
             RuntimeDirs(models_dir, temp_dir),
         )
 
@@ -219,7 +194,7 @@ def test_run_upscale_warns_for_forced_format_extension_mismatch(
     run_upscale(
         options(
             input_path,
-            str(tmp_path / "output.png"),
+            tmp_path / "output.png",
             model="custom-model",
             output_format=OutputFormat.JPG,
         ),
@@ -253,7 +228,7 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
     run_upscale(
         options(
             input_path,
-            str(tmp_path / "output.png"),
+            tmp_path / "output.png",
             model="RealESRGAN_x2plus",
             scale=4,
         ),
@@ -267,39 +242,126 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
     ]
 
 
-def test_run_upscale_hashes_the_input_before_processing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_run_upscale_uses_one_source_capture_when_the_path_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import hashlib
+    import json
+    from types import SimpleNamespace
 
-    from pixelup import upscale as upscale_module
+    import numpy as np
+
+    from pixelup import inference
+    from pixelup.imaging import _profile_bytes
+    from pixelup.sidecar import write_sidecar
     from pixelup.upscale import run_upscale
 
-    input_path = tmp_path / "input.png"
+    source = tmp_path / "input.png"
+    output = tmp_path / "output.png"
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     models_dir.mkdir()
-    temp_dir.mkdir()
     (models_dir / "custom-model.pth").write_bytes(b"weights")
-    Image.new("RGB", (4, 4), "white").save(input_path)
-    original = input_path.read_bytes()
-    _stub_successful_inference(monkeypatch)
+    exif = Image.Exif()
+    exif[0x8769] = {0x9003: "2020:01:02 03:04:05", 0xA002: 3, 0xA003: 2}
+    original_pixels = Image.new("RGB", (3, 2), (20, 40, 60))
+    original_profile = _profile_bytes("p3")
+    original_pixels.save(source, exif=exif, icc_profile=original_profile)
+    original_bytes = source.read_bytes()
+    enhanced = []
 
-    def edit_input_during_inference(*args: object, **kwargs: object) -> object:
-        Image.new("RGB", (4, 4), "black").save(input_path)
-        return object()
+    def enhance(pixels, **kwargs):
+        enhanced.append(pixels.copy())
+        return np.repeat(np.repeat(pixels, 4, axis=0), 4, axis=1), None
 
-    monkeypatch.setattr(upscale_module, "run_inference", edit_input_during_inference)
+    monkeypatch.setattr(inference, "_import_torch", lambda: None)
+    monkeypatch.setattr(inference, "to_torch_device", lambda *args: "cpu")
+    monkeypatch.setattr(inference, "_create_upsampler", lambda *args, **kwargs:
+                        SimpleNamespace(enhance=enhance))
 
-    result = run_upscale(
-        options(input_path, str(tmp_path / "output.png"), model="custom-model"),
-        RuntimeDirs(models_dir, temp_dir),
-    )
+    def replace_after_capture(plan, tiles):
+        replacement_exif = Image.Exif()
+        replacement_exif[0x8769] = {0x9003: "2025:06:07 08:09:10"}
+        replacement = tmp_path / "replacement.png"
+        Image.new("RGB", (5, 4), (200, 180, 160)).save(
+            replacement, exif=replacement_exif, icc_profile=_profile_bytes("adobergb")
+        )
+        replacement.replace(source)
 
-    assert input_path.read_bytes() != original
-    assert result["input_sha256"] == hashlib.sha256(original).hexdigest()
-    assert result["input_size_bytes"] == len(original)
+    opts = options(source, output, model="custom-model")
+    result = run_upscale(opts, RuntimeDirs(models_dir, tmp_path / "temp"),
+                         on_start=replace_after_capture)
+    write_sidecar(input_path=source, output_path=output, options=opts,
+                  result=result, warnings=[])
+
+    assert source.read_bytes() != original_bytes
+    assert enhanced[0].shape == (2, 3, 3)
+    assert enhanced[0][0, 0].tolist() == [60, 40, 20]
+    assert result["input_size"] == [3, 2]
+    assert result["input_sha256"] == hashlib.sha256(original_bytes).hexdigest()
+    assert result["input_size_bytes"] == len(original_bytes)
+    with Image.open(output) as saved:
+        assert saved.size == (12, 8)
+        assert saved.getpixel((0, 0)) == (20, 40, 60)
+        assert saved.info["icc_profile"] == original_profile
+        assert saved.getexif().get_ifd(0x8769)[0x9003] == "2020:01:02 03:04:05"
+    sidecar = json.loads(output.with_suffix(".json").read_text())
+    assert sidecar["input"] == {"filename": "input.png", "dimensions": [3, 2],
+                               "sha256": hashlib.sha256(original_bytes).hexdigest(),
+                               "size_bytes": len(original_bytes)}
+
+
+def test_source_buffers_close_before_model_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import weakref
+    from types import SimpleNamespace
+
+    from pixelup import imaging, inference
+    from pixelup.upscale import run_upscale
+
+    source = tmp_path / "input.png"
+    output = tmp_path / "output.png"
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "custom-model.pth").write_bytes(b"weights")
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.new("L", (3, 2), 120).save(source, exif=exif)
+    stream_refs = []
+    image_refs = []
+    original_open = Image.open
+    original_transpose = imaging.ImageOps.exif_transpose
+    original_rgb = imaging.rgb_pixels
+
+    def observed_open(stream, **kwargs):
+        stream_refs.append(weakref.ref(stream))
+        result = original_open(stream, **kwargs)
+        image_refs.append(weakref.ref(result))
+        return result
+
+    def observed_transpose(image):
+        result = original_transpose(image)
+        image_refs.append(weakref.ref(result))
+        return result
+
+    def observed_rgb(image):
+        result = original_rgb(image)
+        image_refs.append(weakref.ref(result))
+        return result
+
+    def construct(*args, **kwargs):
+        assert len(stream_refs) == 1
+        assert all(reference() is None for reference in stream_refs + image_refs)
+        return SimpleNamespace(enhance=lambda pixels, **kwargs: (pixels, None))
+
+    monkeypatch.setattr(Image, "open", observed_open)
+    monkeypatch.setattr(imaging.ImageOps, "exif_transpose", observed_transpose)
+    monkeypatch.setattr(imaging, "rgb_pixels", observed_rgb)
+    monkeypatch.setattr(inference, "_import_torch", lambda: None)
+    monkeypatch.setattr(inference, "to_torch_device", lambda *args: "cpu")
+    monkeypatch.setattr(inference, "_create_upsampler", construct)
+    run_upscale(options(source, output, model="custom-model"),
+                RuntimeDirs(models, tmp_path / "temp"))
 
 
 def test_the_planned_record_keeps_the_input_version_when_inference_fails(
@@ -333,7 +395,7 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
 
     with pytest.raises(PixelupError):
         run_upscale(
-            options(input_path, str(tmp_path / "output.png"), model="custom-model"),
+            options(input_path, tmp_path / "output.png", model="custom-model"),
             RuntimeDirs(models_dir, temp_dir),
         )
 

@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Keep source pixels, dimensions, metadata and sidecar provenance consistent if the source changes during processing.
+- Preserve photo orientation when stripping metadata, grayscale tonal range and indexed-image transparency; show oriented previews and dimensions.
+- Honour cancellation during image and sidecar writing, remove only the job's owned files and preserve committed results.
+- Accept literal braces in image paths and keep large-batch output planning proportional to the number of jobs.
+- Keep landed settings saves successful when optional backups cannot start, and retain full save and backup diagnostics.
 - Retain failed submitted settings for retry after their dialog closes, and apply landed settings when quitting is cancelled.
 - Preserve multiple queue requests while their models download, including each request's parameters; removing an image also removes its waiting requests.
 - Choose unused output names across image formats, including when an older image has no sidecar.

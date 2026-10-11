@@ -61,6 +61,32 @@ def _settle(manager: ModelManager, process_until) -> None:
     process_until(lambda: not manager._scan_in_flight, timeout_s=10, what="The models scan")
 
 
+def test_async_readiness_uses_present_nonempty_files_and_refreshes_its_cache(
+    qapp: QApplication, tmp_path: Path, process_until
+) -> None:
+    present, empty, missing = MANAGED_ARTIFACT_NAMES[:3]
+    model_file(tmp_path, present).write_bytes(b"present")
+    model_file(tmp_path, empty).write_bytes(b"")
+    manager = ModelManager(tmp_path)
+    try:
+        _settle(manager, process_until)
+        assert manager.readiness_known
+        assert manager.ready_names == frozenset({present})
+        assert manager.missing((missing, empty, present)) == (missing, empty)
+        assert manager.ready_count() == (1, len(MANAGED_ARTIFACT_NAMES))
+
+        model_file(tmp_path, present).write_bytes(b"")
+        model_file(tmp_path, empty).write_bytes(b"now present")
+        manager.rescan()
+        _settle(manager, process_until)
+
+        assert manager.ready_names == frozenset({empty})
+        assert manager.missing((missing, empty, present)) == (missing, present)
+        assert manager.ready_count() == (1, len(MANAGED_ARTIFACT_NAMES))
+    finally:
+        manager.deleteLater()
+
+
 def test_rescan_reads_the_folder_off_the_ui_thread_and_reports_a_change(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
 ) -> None:

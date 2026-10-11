@@ -23,7 +23,7 @@ from pixelup.upscale import (
 def make_options(**overrides: object) -> UpscaleOptions:
     base: dict[str, object] = dict(
         input_path=Path("in.png"),
-        output_arg="out.png",
+        output_path=Path("out.png"),
         model="RealESRGAN_x4plus",
         scale=4,
         tile=0,
@@ -39,7 +39,6 @@ def make_options(**overrides: object) -> UpscaleOptions:
         background="white",
         strip_metadata=False,
         target_profile=None,
-        overwrite=False,
     )
     base.update(overrides)
     return UpscaleOptions(**base)  # type: ignore[arg-type]
@@ -160,7 +159,7 @@ def test_format_extension_mismatch(
 def test_validate_output_path_rejects_missing_parent(tmp_path: Path) -> None:
     target = tmp_path / "missing" / "out.png"
     with pytest.raises(PixelupError) as exc_info:
-        validate_output_path(target, overwrite=False)
+        validate_output_path(target)
     assert exc_info.value.code == ErrorCode.OUTPUT_DIR_MISSING
 
 
@@ -168,7 +167,7 @@ def test_validate_output_path_rejects_parent_that_is_a_file(tmp_path: Path) -> N
     parent = tmp_path / "afile"
     parent.write_text("not a directory", encoding="utf-8")
     with pytest.raises(PixelupError) as exc_info:
-        validate_output_path(parent / "out.png", overwrite=False)
+        validate_output_path(parent / "out.png")
     assert exc_info.value.code == ErrorCode.OUTPUT_DIR_MISSING
 
 
@@ -176,14 +175,9 @@ def test_validate_output_path_rejects_existing_file_without_overwrite(tmp_path: 
     target = tmp_path / "out.png"
     target.write_bytes(b"")
     with pytest.raises(PixelupError) as exc_info:
-        validate_output_path(target, overwrite=False)
+        validate_output_path(target)
     assert exc_info.value.code == ErrorCode.OUTPUT_EXISTS
 
-
-def test_validate_output_path_allows_existing_file_with_overwrite(tmp_path: Path) -> None:
-    target = tmp_path / "out.png"
-    target.write_bytes(b"")
-    validate_output_path(target, overwrite=True)
 
 
 def test_validate_output_path_rejects_unwritable_parent(
@@ -193,7 +187,7 @@ def test_validate_output_path_rejects_unwritable_parent(
 
     monkeypatch.setattr(upscale_module.os, "access", lambda *args, **kwargs: False)
     with pytest.raises(PixelupError) as exc_info:
-        validate_output_path(tmp_path / "out.png", overwrite=False)
+        validate_output_path(tmp_path / "out.png")
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
 
 

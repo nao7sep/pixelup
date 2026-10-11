@@ -26,7 +26,9 @@ Managed models shows which pinned model files are ready and installs or repairs 
 
 Parameter edits save automatically. Settings changes save when you press OK; cancelling asks before discarding edits. If a saved setting cannot be used, PixelUp names it at startup and uses its default while preserving the saved value until you change that setting. Close PixelUp before editing its settings file by hand.
 
-Outputs never replace existing files. Each completed image has a JSON sidecar describing its processing settings. A forced quit can leave a completed image without its sidecar. Use Records to inspect warnings and errors from the session.
+Outputs never replace existing files. Each completed image has a JSON sidecar describing its processing settings and the source bytes used for that result. Cancelling before completion removes the job's image and sidecar; a forced quit can leave an image without its sidecar. Use Records to inspect warnings and errors from the session.
+
+Photo orientation is applied to the pixels, including when metadata is removed. Transparent inputs keep their alpha in PNG and WebP; JPEG uses a white background. Unsigned 16-bit grayscale inputs are mapped across the model's 8-bit working range.
 
 ## Requirements
 

@@ -193,13 +193,6 @@ class ModelManager(QObject):
             if names.intersection(operation.artifact_names)
         )
 
-    def active_for(self, artifact_names: tuple[str, ...]) -> tuple[ModelOperation, ...]:
-        return tuple(
-            operation
-            for operation in self.operations_for(artifact_names)
-            if operation.kind == "running"
-        )
-
     def in_progress_for(self, artifact_names: tuple[str, ...]) -> tuple[ModelOperation, ...]:
         return tuple(
             operation

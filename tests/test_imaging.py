@@ -15,7 +15,7 @@ from pixelup.icc_profiles import D50_XYZ, _description_tag, _profile_with_tags, 
 from pixelup.imaging import (
     SourceMetadata,
     _profile_bytes,
-    load_source_metadata,
+    load_source_image,
     rgb_pixels,
     save_output_image,
 )
@@ -645,7 +645,7 @@ def test_non_rgb_input_is_decoded_through_its_profile_and_output_profile_describ
 
     with Image.open(source) as image:
         decoded = rgb_pixels(image)
-    metadata = load_source_metadata(source)
+    metadata = load_source_image(source).metadata
     save_output_image(
         decoded,
         output_path=output,
@@ -673,11 +673,352 @@ def test_non_rgb_input_is_decoded_through_its_profile_and_output_profile_describ
 
 
 def test_inference_reads_a_non_rgb_input_through_its_profile(tmp_path: Path) -> None:
-    from pixelup.inference import _read_input_image
+    from pixelup.imaging import load_source_image
 
     source = tmp_path / "in.jpg"
     Image.new("CMYK", (2, 1), (255, 0, 0, 0)).save(source, icc_profile=CMYK_PROFILE)
 
-    blue, green, red = _read_input_image(source)[0, 0]
+    blue, green, red = load_source_image(source).pixels[0, 0]
 
     assert blue == green == red
+
+
+@pytest.mark.parametrize("orientation", range(1, 9))
+@pytest.mark.parametrize("strip_metadata", [False, True])
+def test_oriented_pixels_survive_metadata_policy(
+    tmp_path: Path, orientation: int, strip_metadata: bool
+) -> None:
+    from pixelup.imaging import image_from_bgr_array, load_source_image, read_image_size
+
+    source = tmp_path / "source.png"
+    pixels = Image.new("RGB", (3, 2))
+    pixels.putdata([(10, 20, 30), (40, 50, 60), (70, 80, 90),
+                    (100, 110, 120), (130, 140, 150), (160, 170, 180)])
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    exif[0x8769] = {0x9003: "2020:01:02 03:04:05"}
+    xmp = (
+        b'<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"'
+        b' xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="'
+        + str(orientation).encode() + b'"/>'
+    )
+    from PIL import PngImagePlugin
+
+    pnginfo = PngImagePlugin.PngInfo()
+    pnginfo.add_itxt("XML:com.adobe.xmp", xmp.decode())
+    pixels.save(source, exif=exif, pnginfo=pnginfo)
+    transforms = {
+        2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180,
+        4: Image.Transpose.FLIP_TOP_BOTTOM, 5: Image.Transpose.TRANSPOSE,
+        6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE,
+        8: Image.Transpose.ROTATE_90,
+    }
+    expected = pixels.transpose(transforms[orientation]) if orientation != 1 else pixels
+    assert read_image_size(source) == expected.size
+    decoded = image_from_bgr_array(load_source_image(source).pixels)
+    output = tmp_path / "out.png"
+    save_output_image(
+        decoded, output_path=output, output_format=OutputFormat.PNG, quality=95,
+        background="white", source_metadata=load_source_image(source).metadata,
+        strip_metadata=strip_metadata, target_profile=None,
+    )
+    with Image.open(output) as saved:
+        assert saved.size == expected.size
+        assert list(saved.get_flattened_data()) == list(expected.get_flattened_data())
+        if strip_metadata:
+            assert "exif" not in saved.info
+            assert "xmp" not in saved.info
+        else:
+            assert saved.getexif()[0x0112] == 1
+            assert saved.getexif().get_ifd(0x8769)[0x9003] == "2020:01:02 03:04:05"
+            description = ElementTree.fromstring(saved.info["xmp"])
+            assert description.get("{http://ns.adobe.com/tiff/1.0/}Orientation") == "1"
+
+
+@pytest.mark.parametrize("profile", [None, GRAY_PROFILE], ids=["untagged", "gray-icc"])
+def test_16_bit_grayscale_retains_the_tonal_range(tmp_path: Path, profile: bytes | None) -> None:
+    import numpy as np
+
+    from pixelup.imaging import load_source_image
+
+    source = tmp_path / "gray.png"
+    Image.fromarray(np.array([[0, 16384, 32768, 49152, 65535]], dtype=np.uint16)).save(
+        source, icc_profile=profile
+    )
+    values = load_source_image(source).pixels[0, :, 0].tolist()
+    assert values[0] == 0
+    assert values[-1] == 255
+    assert all(left < right for left, right in zip(values, values[1:], strict=False))
+    if profile is None:
+        assert values == [0, 64, 128, 191, 255]
+
+
+@pytest.mark.parametrize("mode,transparency,expected", [
+    ("P", 0, [0, 255, 255]),
+    ("P", bytes((0, 128, 255)), [0, 128, 255]),
+    ("L", 0, [0, 255, 255]),
+    ("RGB", (0, 0, 0), [0, 255, 255]),
+])
+@pytest.mark.parametrize("output_format", list(OutputFormat))
+def test_png_transparency_survives_decode_and_profile_conversion(
+    tmp_path: Path, mode: str, transparency: object, expected: list[int],
+    output_format: OutputFormat,
+) -> None:
+    from pixelup.imaging import image_from_bgr_array, load_source_image
+
+    source = tmp_path / "source.png"
+    pixels = Image.new(mode, (3, 1))
+    if mode == "P":
+        pixels.putpalette([0, 0, 0, 120, 120, 120, 240, 240, 240] + [0] * 759)
+        pixels.putdata([0, 1, 2])
+    elif mode == "L":
+        pixels.putdata([0, 120, 240])
+    else:
+        pixels.putdata([(0, 0, 0), (120, 120, 120), (240, 240, 240)])
+    pixels.save(source, transparency=transparency, icc_profile=_profile_bytes("p3"))
+    decoded = image_from_bgr_array(load_source_image(source).pixels)
+    assert decoded.mode == "RGBA"
+    assert list(decoded.getchannel("A").get_flattened_data()) == expected
+    output = tmp_path / ("out." + output_format.value)
+    save_output_image(
+        decoded, output_path=output, output_format=output_format, quality=100,
+        background="white", source_metadata=load_source_image(source).metadata,
+        strip_metadata=True, target_profile=None,
+    )
+    with Image.open(output) as saved:
+        if output_format == OutputFormat.JPG:
+            assert saved.mode == "RGB"
+            assert all(channel >= 250 for channel in saved.getpixel((0, 0)))
+        else:
+            assert saved.mode == "RGBA"
+            assert list(saved.getchannel("A").get_flattened_data()) == expected
+
+
+@pytest.mark.parametrize("dtype", ["<u2", ">u2"])
+def test_16_bit_grayscale_conversion_is_endian_safe(dtype: str) -> None:
+    import numpy as np
+
+    image = Image.fromarray(np.array([[0, 16384, 32768, 49152, 65535]], dtype=dtype))
+    with rgb_pixels(image) as decoded:
+        assert [pixel[0] for pixel in decoded.get_flattened_data()] == [0, 64, 128, 191, 255]
+
+
+def test_gray_icc_16_bit_midtones_convert_from_normalized_levels(tmp_path: Path) -> None:
+    import numpy as np
+
+    from pixelup.imaging import load_source_image
+
+    source = tmp_path / "gray.png"
+    Image.fromarray(np.array([[0, 16384, 32768, 49152, 65535]], dtype=np.uint16)).save(
+        source, icc_profile=GRAY_PROFILE,
+    )
+    captured = load_source_image(source)
+    reference = Image.fromarray(np.array([[0, 64, 128, 191, 255]], dtype=np.uint8))
+    reference.info["icc_profile"] = GRAY_PROFILE
+    with rgb_pixels(reference) as expected:
+        assert captured.pixels[:, :, ::-1].tolist() == np.asarray(expected).tolist()
+    assert captured.metadata.icc_profile == _profile_bytes("srgb")
+    assert captured.metadata.decoded_to_srgb is True
+
+
+def test_16_bit_transparency_keys_precede_quantization_and_orientation(tmp_path: Path) -> None:
+    import numpy as np
+
+    from pixelup.imaging import load_source_image
+
+    source = tmp_path / "gray.png"
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.fromarray(np.array([[32768, 32769], [0, 65535]], dtype=np.uint16)).save(
+        source, transparency=32768, exif=exif,
+    )
+    captured = load_source_image(source)
+
+    assert captured.pixels[:, :, 0].tolist() == [[0, 128], [255, 128]]
+    assert captured.pixels[:, :, 3].tolist() == [[255, 0], [255, 255]]
+
+
+def test_source_capture_keeps_original_exif_offsets_before_transpose(tmp_path: Path) -> None:
+    from pixelup.imaging import image_from_bgr_array, load_source_image
+
+    note = b"MAKER-NOTE-BYTES"
+    thumbnail = b"\xff\xd8thumbnail\xff\xd9"
+    header = b"II*\x00" + pack("<I", 8)
+    ifd0 = (
+        pack("<H", 2) + pack("<HHIHH", 0x0112, 3, 1, 6, 0)
+        + pack("<HHII", 0x8769, 4, 1, 38) + pack("<I", 72)
+    )
+    exif_ifd = pack("<H", 1) + pack("<HHII", 0x927C, 7, len(note), 56) + bytes(4)
+    ifd1 = (
+        pack("<H", 3) + pack("<HHIHH", 0x0112, 3, 1, 8, 0)
+        + pack("<HHII", 0x0201, 4, 1, 114)
+        + pack("<HHII", 0x0202, 4, 1, len(thumbnail)) + bytes(4)
+    )
+    original = b"Exif\x00\x00" + header + ifd0 + exif_ifd + note + ifd1 + thumbnail
+    source = tmp_path / "source.png"
+    Image.new("RGB", (3, 2), "red").save(source, exif=original)
+    captured = load_source_image(source)
+    assert captured.metadata.exif == original
+    output = tmp_path / "out.png"
+    save_output_image(
+        image_from_bgr_array(captured.pixels), output_path=output,
+        output_format=OutputFormat.PNG, quality=95, background="white",
+        source_metadata=captured.metadata, strip_metadata=False, target_profile=None,
+    )
+    with Image.open(output) as saved:
+        exif = saved.getexif()
+        assert exif[0x0112] == 1
+        assert exif.get_ifd(0x8769)[0x927C] == note
+        preview = exif.get_ifd(-1)
+        assert preview[0x0112] == 8
+        assert (preview[0x0201], preview[0x0202]) == (114, len(thumbnail))
+        block = saved.info["exif"]
+        assert block[6 + 56:6 + 72] == note
+        assert block[6 + 114:6 + 114 + len(thumbnail)] == thumbnail
+
+
+def test_heif_opener_applies_orientation_once(tmp_path: Path) -> None:
+    from PIL import ImageOps
+    from pillow_heif import register_heif_opener
+
+    from pixelup.imaging import (
+        image_from_bgr_array,
+        load_source_image,
+        read_image_orientation,
+        read_image_size,
+    )
+
+    register_heif_opener()
+    pixels = Image.new("RGB", (12, 8))
+    pixels.paste("red", (0, 0, 6, 8))
+    pixels.paste("blue", (6, 0, 12, 8))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    source = tmp_path / "source.heic"
+    pixels.save(source, format="HEIF", quality=100, exif=exif.tobytes())
+    with Image.open(source) as ordinary:
+        assert ordinary.info["original_orientation"] == 6
+        assert ordinary.getexif()[0x0112] == 1
+        expected = ImageOps.exif_transpose(ordinary)
+    assert read_image_size(source) == (8, 12)
+    assert read_image_orientation(source) == 1
+    captured = load_source_image(source)
+    with image_from_bgr_array(captured.pixels) as decoded:
+        assert decoded.size == expected.size == (8, 12)
+        assert decoded.tobytes() == expected.tobytes()
+
+
+def test_header_probe_does_not_decode_png_pixels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from PIL import PngImagePlugin
+
+    from pixelup.imaging import read_image_size
+
+    source = tmp_path / "source.png"
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.new("RGB", (3, 2)).save(source, exif=exif)
+    monkeypatch.setattr(PngImagePlugin.PngImageFile, "load", lambda *args:
+                        pytest.fail("header size probe must not decode the raster"))
+    assert read_image_size(source) == (2, 3)
+
+
+@pytest.mark.parametrize("orientation", [b'tiff:Orientation="6"',
+                                         b"><tiff:Orientation>6</tiff:Orientation>"])
+def test_xmp_only_orientation_agrees_with_the_header_probe_without_decode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, orientation: bytes,
+) -> None:
+    from PIL import PngImagePlugin
+
+    from pixelup.imaging import load_source_image, read_image_size
+
+    xmp = (
+        b'<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"'
+        b' xmlns:tiff="http://ns.adobe.com/tiff/1.0/" '
+        + orientation
+        + (b"</rdf:Description>" if orientation.startswith(b">") else b"/>")
+    )
+    pnginfo = PngImagePlugin.PngInfo()
+    pnginfo.add_itxt("XML:com.adobe.xmp", xmp.decode())
+    source = tmp_path / "source.png"
+    Image.new("RGB", (3, 2)).save(source, pnginfo=pnginfo)
+    captured = load_source_image(source)
+    assert captured.size == (2, 3)
+    monkeypatch.setattr(PngImagePlugin.PngImageFile, "load", lambda *args:
+                        pytest.fail("header size probe must not decode the raster"))
+    assert read_image_size(source) == captured.size
+
+
+@pytest.mark.parametrize("metadata,expected", [
+    ("absent", 1), ("exif", 6), ("xmp-attribute", 6), ("xmp-element", 6), ("both", 2),
+])
+def test_orientation_reader_uses_metadata_without_decoding_or_verifying(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, metadata: str, expected: int,
+) -> None:
+    from PIL import PngImagePlugin
+
+    from pixelup.imaging import read_image_orientation
+
+    source = tmp_path / "source.png"
+    kwargs = {}
+    if metadata in {"exif", "both"}:
+        exif = Image.Exif()
+        exif[0x0112] = 2 if metadata == "both" else 6
+        kwargs["exif"] = exif
+    if metadata in {"xmp-attribute", "xmp-element", "both"}:
+        description = (
+            '<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"'
+            ' xmlns:tiff="http://ns.adobe.com/tiff/1.0/"'
+        )
+        xmp = description + (
+            "><tiff:Orientation>6</tiff:Orientation></rdf:Description>"
+            if metadata == "xmp-element" else ' tiff:Orientation="6"/>'
+        )
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_itxt("XML:com.adobe.xmp", xmp)
+        kwargs["pnginfo"] = pnginfo
+    Image.new("RGB", (3, 2)).save(source, **kwargs)
+
+    def unexpected(*args):
+        pytest.fail("orientation reading must remain metadata-only")
+
+    monkeypatch.setattr(PngImagePlugin.PngImageFile, "load", unexpected)
+    monkeypatch.setattr(PngImagePlugin.PngImageFile, "verify", unexpected)
+    assert read_image_orientation(source) == expected
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_orientation_reader_preserves_input_error_causes(tmp_path: Path, exists: bool) -> None:
+    from PIL import UnidentifiedImageError
+
+    from pixelup.errors import ErrorCode
+    from pixelup.imaging import read_image_orientation
+
+    source = tmp_path / "source.png"
+    if exists:
+        source.write_bytes(b"invalid image content")
+    with pytest.raises(PixelupError) as error:
+        read_image_orientation(source)
+    assert error.value.code == (
+        ErrorCode.INPUT_INVALID_FORMAT if exists else ErrorCode.INPUT_UNREADABLE
+    )
+    assert isinstance(
+        error.value.__cause__, UnidentifiedImageError if exists else FileNotFoundError
+    )
+    assert error.value.details["input"] == str(source)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file read permissions")
+def test_orientation_reader_reports_permission_denial(tmp_path: Path) -> None:
+    from pixelup.errors import ErrorCode
+    from pixelup.imaging import read_image_orientation
+
+    source = tmp_path / "source.png"
+    Image.new("RGB", (3, 2)).save(source)
+    source.chmod(0)
+    try:
+        with pytest.raises(PixelupError) as error:
+            read_image_orientation(source)
+        assert error.value.code == ErrorCode.INPUT_UNREADABLE
+        assert isinstance(error.value.__cause__, PermissionError)
+    finally:
+        source.chmod(0o600)

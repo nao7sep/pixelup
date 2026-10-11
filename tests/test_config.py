@@ -10,8 +10,6 @@ import pytest
 from pixelup import config as config_module
 from pixelup.config import (
     RuntimeDirs,
-    ensure_models_dir,
-    ensure_temp_dir,
     quarantine_corrupt_file,
     resolve_models_dir,
     resolve_runtime_dirs,
@@ -225,28 +223,6 @@ def test_pixelup_home_with_an_empty_or_absent_reference_is_a_reported_error(
 
     with pytest.raises(PixelupError) as exc_info:
         resolve_state_dir()
-    assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
-
-
-def test_ensure_models_dir_creates_directory(tmp_path: Path) -> None:
-    target = tmp_path / "nested" / "models"
-    assert ensure_models_dir(target) == target
-    assert target.is_dir()
-
-
-def test_ensure_models_dir_wraps_oserror(tmp_path: Path) -> None:
-    blocker = tmp_path / "blocker"
-    blocker.write_text("not a directory", encoding="utf-8")
-    with pytest.raises(PixelupError) as exc_info:
-        ensure_models_dir(blocker / "models")
-    assert exc_info.value.code == ErrorCode.MODEL_NOT_FOUND
-
-
-def test_ensure_temp_dir_wraps_oserror(tmp_path: Path) -> None:
-    blocker = tmp_path / "blocker"
-    blocker.write_text("not a directory", encoding="utf-8")
-    with pytest.raises(PixelupError) as exc_info:
-        ensure_temp_dir(blocker / "temp")
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
 
 

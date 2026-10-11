@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -10,9 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
+from PIL import Image, PngImagePlugin
 from PySide6.QtCore import QEvent, QMargins, QRect, QSettings, QSize, Qt, QUrl
-from PySide6.QtGui import QCloseEvent, QColor, QKeySequence, QPalette
+from PySide6.QtGui import QCloseEvent, QColor, QImageReader, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
 from pixelup import gui, theme
@@ -34,7 +35,7 @@ from pixelup.models import model_file
 from pixelup.parameters import DEFAULT_SCALE, TILE_VALUES
 from pixelup.paths import absolute_user_path
 from pixelup.runner import JobRunner
-from pixelup.session_log import configure_session_logging
+from pixelup.session_log import configure_session_logging, flush_records
 from pixelup.window_placement import restored_window_state
 
 # The MainWindow orchestration (open/dedup, enqueue -> rows + summaries, the
@@ -1255,6 +1256,50 @@ def test_failed_parameter_save_keeps_old_authority_and_retries_the_visible_draft
     assert window.parameters_result.isHidden()
 
 
+@pytest.mark.parametrize("structured", [False, True])
+def test_delivered_config_failure_keeps_original_diagnostics_and_safe_presentation(
+    make_window, monkeypatch: pytest.MonkeyPatch, structured: bool
+) -> None:
+    window = make_window()
+    original = window.config
+    sentinel = "EACCES /internal/config ORIGINAL-CONFIG-SENTINEL"
+
+    def failing_save(*_args):
+        try:
+            raise OSError(sentinel)
+        except OSError as cause:
+            if structured:
+                raise PixelupError(ErrorCode.INTERNAL_ERROR, "wrapped " + sentinel) from cause
+            raise RuntimeError("wrapped " + sentinel) from cause
+
+    monkeypatch.setattr(gui, "save_app_config", failing_save)
+    window.quality.setValue(10)
+
+    assert _flush(window) is False
+
+    assert window.config is original
+    assert window.current_job_settings().quality == 10
+    presented = window.parameters_result.message_label.text()
+    assert presented == english().of(Message("parameters.saveFailed"))
+    assert sentinel not in presented
+    assert "RuntimeError" not in presented
+    assert "PixelupError" not in presented
+    assert flush_records(5)
+    with sqlite3.connect(config_path().parent / "records.sqlite3") as connection:
+        entries = connection.execute(
+            "SELECT level, fields FROM logs WHERE message = 'config.save_failed'"
+        ).fetchall()
+    assert len(entries) == 1
+    level, fields = entries[0]
+    assert level == "warn"
+    error = json.loads(fields)["error"]
+    assert error["type"] == ("PixelupError" if structured else "RuntimeError")
+    assert error["message"] == "wrapped " + sentinel
+    assert "OSError: " + sentinel in error["traceback"]
+    assert "in failing_save" in error["traceback"]
+    assert "in _run" in error["traceback"]
+
+
 def test_close_waits_for_worker_ownership_to_end(
     make_window,
     monkeypatch: pytest.MonkeyPatch,
@@ -2113,24 +2158,156 @@ def test_opening_images_never_waits_on_the_volume(
     assert window._selected_path() == image.resolve()
 
 
+@pytest.mark.parametrize(
+    ("metadata", "orientation", "expected_size", "quadrants"),
+    [
+        ("jpeg", 2, (40, 20), ("green", "red", "yellow", "blue")),
+        ("jpeg", 6, (20, 40), ("blue", "red", "yellow", "green")),
+        ("png-exif", 2, (40, 20), ("green", "red", "yellow", "blue")),
+        ("png-exif", 3, (40, 20), ("yellow", "blue", "green", "red")),
+        ("png-exif", 4, (40, 20), ("blue", "yellow", "red", "green")),
+        ("png-exif", 5, (20, 40), ("red", "blue", "green", "yellow")),
+        ("png-exif", 6, (20, 40), ("blue", "red", "yellow", "green")),
+        ("png-exif", 7, (20, 40), ("yellow", "green", "blue", "red")),
+        ("png-exif", 8, (20, 40), ("green", "yellow", "red", "blue")),
+        ("png-xmp-attribute", 6, (20, 40), ("blue", "red", "yellow", "green")),
+        ("png-xmp-element", 6, (20, 40), ("blue", "red", "yellow", "green")),
+    ],
+)
+def test_background_preview_honors_orientation_in_dimensions_and_pixels(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+    metadata: str, orientation: int, expected_size: tuple[int, int], quadrants: tuple[str, ...],
+) -> None:
+    colors = {
+        "red": (240, 20, 20), "green": (20, 240, 20),
+        "blue": (20, 20, 240), "yellow": (240, 240, 20),
+    }
+    pixels = Image.new("RGB", (40, 20))
+    for color, box in zip(
+        ("red", "green", "blue", "yellow"),
+        ((0, 0, 20, 10), (20, 0, 40, 10), (0, 10, 20, 20), (20, 10, 40, 20)),
+        strict=True,
+    ):
+        pixels.paste(colors[color], box)
+    source = tmp_path / ("oriented.jpg" if metadata == "jpeg" else "oriented.png")
+    if metadata.startswith("png-xmp"):
+        xmp = (
+            '<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"'
+            ' xmlns:tiff="http://ns.adobe.com/tiff/1.0/"'
+        )
+        xmp += (
+            f' tiff:Orientation="{orientation}"/>' if metadata.endswith("attribute")
+            else f'><tiff:Orientation>{orientation}</tiff:Orientation></rdf:Description>'
+        )
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_itxt("XML:com.adobe.xmp", xmp)
+        pixels.save(source, pnginfo=pnginfo)
+    else:
+        exif = Image.Exif()
+        exif[0x0112] = orientation
+        if metadata == "jpeg":
+            pixels.save(source, "JPEG", quality=100, subsampling=0, exif=exif)
+        else:
+            pixels.save(source, exif=exif)
+    reads: list[tuple[Path, threading.Thread]] = []
+    real_read = QImageReader.read
+
+    def read(reader):
+        reads.append((Path(reader.fileName()), threading.current_thread()))
+        return real_read(reader)
+
+    monkeypatch.setattr(QImageReader, "read", read)
+    window = make_window()
+
+    _open(window, [source])
+
+    preview = window.preview._pixmap
+    assert preview is not None
+    assert (preview.width(), preview.height()) == expected_size
+    assert window._images_by_path[source].input_size == expected_size
+    displayed = preview.toImage()
+    width, height = expected_size
+    points = ((width // 4, height // 4), (3 * width // 4, height // 4),
+              (width // 4, 3 * height // 4), (3 * width // 4, 3 * height // 4))
+    for (x, y), color in zip(points, quadrants, strict=True):
+        pixel = displayed.pixelColor(x, y)
+        assert (pixel.red(), pixel.green(), pixel.blue()) == pytest.approx(colors[color], abs=4)
+    assert len(reads) == 1
+    assert reads[0][0] == source
+    assert reads[0][1] is not threading.main_thread()
+    process_until(lambda: window.preview.reads.settled, timeout_s=5, what="Preview read return")
+
+
+def test_optional_preview_metadata_failure_preserves_the_decoded_image(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    window = make_window()
+    source = _png(tmp_path, "readable.png")
+    sentinel = "EACCES /internal/image ORIGINAL-PREVIEW-METADATA-SENTINEL"
+    probes: list[threading.Thread] = []
+    reads: list[Path] = []
+    real_read = QImageReader.read
+
+    def read(reader):
+        reads.append(Path(reader.fileName()))
+        return real_read(reader)
+
+    def fail_probe(path):
+        assert path == source
+        probes.append(threading.current_thread())
+        try:
+            raise OSError(sentinel)
+        except OSError as cause:
+            raise RuntimeError("metadata probe failed") from cause
+
+    monkeypatch.setattr(QImageReader, "read", read)
+    monkeypatch.setattr(gui, "read_image_orientation", fail_probe)
+
+    _open(window, [source])
+
+    assert reads == [source]
+    assert len(probes) == 1
+    assert probes[0] is not threading.main_thread()
+    preview = window.preview._pixmap
+    assert preview is not None
+    assert (preview.width(), preview.height()) == (8, 6)
+    assert preview.toImage().pixelColor(0, 0) == QColor("white")
+    assert window.preview.text() == ""
+    process_until(lambda: window.preview.reads.settled, timeout_s=5, what="Preview read return")
+    assert flush_records(5)
+    with sqlite3.connect(config_path().parent / "records.sqlite3") as connection:
+        entries = connection.execute(
+            "SELECT level, fields FROM logs WHERE message = 'preview.orientation_failed'"
+        ).fetchall()
+    assert len(entries) == 1
+    level, fields = entries[0]
+    assert level == "warn"
+    error = json.loads(fields)["error"]
+    assert error["type"] == "RuntimeError"
+    assert error["message"] == "metadata probe failed"
+    assert "OSError: " + sentinel in error["traceback"]
+
+
 def test_the_preview_reads_an_image_once_while_it_stays_selected(
     make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window = make_window()
-    _open(window, [_png(tmp_path, "a.png")])
+    image = _png(tmp_path, "a.png")
     reads: list[str] = []
-    real_image = gui.QImage
+    real_read = gui.QImageReader.read
 
-    def counted_image(*args):
-        reads.append(str(args[0]) if args else "")
-        return real_image(*args)
+    def counted_read(reader):
+        reads.append(reader.fileName())
+        return real_read(reader)
 
-    monkeypatch.setattr(gui, "QImage", counted_image)
+    monkeypatch.setattr(gui.QImageReader, "read", counted_read)
+    _open(window, [image])
+    assert reads == [str(image)]
     for _ in range(3):
         window._update_selected_image()
     _settle_opens(window)
 
-    assert reads == []
+    assert reads == [str(image)]
 
 
 def test_a_settings_save_that_lands_after_cancel_still_takes_effect(
@@ -2659,15 +2836,15 @@ def test_quit_retains_background_reads_until_physical_return(
         window.open_paths([tmp_path / "missing.png"])
     else:
         image = _png(tmp_path, "held.png")
-        real_image = gui.QImage
+        real_read = gui.QImageReader.read
 
-        def decode(path):
-            if Path(path) == image:
+        def decode(reader):
+            if Path(reader.fileName()) == image:
                 entered.set()
                 assert release.wait(5)
-            return real_image(path)
+            return real_read(reader)
 
-        monkeypatch.setattr(gui, "QImage", decode)
+        monkeypatch.setattr(gui.QImageReader, "read", decode)
         window.preview.set_image(image)
         if kind == "superseded_preview":
             window.preview.set_image(None)

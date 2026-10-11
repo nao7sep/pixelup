@@ -23,6 +23,7 @@ _ASCII = 2
 _IFD = 13
 _TAG_IMAGE_WIDTH = 0x0100
 _TAG_IMAGE_LENGTH = 0x0101
+_TAG_ORIENTATION = 0x0112
 _TAG_DATE_TIME = 0x0132
 _TAG_EXIF_IFD = 0x8769
 _TAG_OFFSET_TIME = 0x9010
@@ -95,6 +96,9 @@ def exif_for_output(
     ifd0 = tiff.entries(tiff.first_ifd)
     tiff.set_integer(ifd0.get(_TAG_IMAGE_WIDTH), width)
     tiff.set_integer(ifd0.get(_TAG_IMAGE_LENGTH), height)
+    # The output's pixels are normalized; IFD1's unchanged thumbnail keeps its
+    # own orientation and offsets. Patch the original block, never reserialize it.
+    tiff.set_integer(ifd0.get(_TAG_ORIENTATION), 1, short=True)
     exif_ifd = tiff.sub_ifd(ifd0, _TAG_EXIF_IFD)
     subsec = None
     if exif_ifd is not None:
@@ -147,6 +151,7 @@ def xmp_for_output(
         values = {
             (_TIFF_NAMESPACE, "ImageWidth"): str(width),
             (_TIFF_NAMESPACE, "ImageLength"): str(height),
+            (_TIFF_NAMESPACE, "Orientation"): "1",
             (_EXIF_NAMESPACE, "PixelXDimension"): str(width),
             (_EXIF_NAMESPACE, "PixelYDimension"): str(height),
         }

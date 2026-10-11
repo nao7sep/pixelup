@@ -84,13 +84,11 @@ def create_jobs(
     the snapshot each job freezes is exactly the one the caller passed, with nothing
     arriving alongside it to drift out of sync.
     """
-    # One reservation set for the whole batch, keyed by resolved absolute path, so
-    # inputs whose stems differ only in case (Photo.png vs photo.png) disambiguate
-    # against each other and not just against pre-existing files.
-    reserved: set[Path] = set()
+    # The naming owner reserves each bundle once for this pass; inputs whose
+    # stems differ only in case disambiguate against queued jobs and live files.
     cache = NamePlanCache()
     for job in existing_jobs:
-        _reserve_output_bundle(reserved, job.output_path)
+        cache.reserve_output_bundle(job.output_path)
 
     jobs: list[Job] = []
     for input_path in input_paths:
@@ -101,10 +99,9 @@ def create_jobs(
                 model=model,
                 scale=model_settings.scale,
                 output_format=model_settings.output_format,
-                reserved=reserved,
                 cache=cache,
             )
-            _reserve_output_bundle(reserved, output_path)
+            cache.reserve_output_bundle(output_path)
             jobs.append(
                 Job(
                     id=next(job_ids),
@@ -122,13 +119,11 @@ def retry_failed_jobs(
     *,
     only_job_ids: Collection[int] | None = None,
 ) -> list[int]:
-    # One reservation set for the whole batch (see create_jobs): case-only
-    # sibling inputs must disambiguate against each other, not just live files.
-    reserved: set[Path] = set()
+    # Retry owns a fresh planning pass, excluding only the jobs it will replan.
     cache = NamePlanCache()
     for job in jobs:
         if job.status != "failed" or (only_job_ids is not None and job.id not in only_job_ids):
-            _reserve_output_bundle(reserved, job.output_path)
+            cache.reserve_output_bundle(job.output_path)
 
     retried: list[int] = []
     for job in jobs:
@@ -139,10 +134,9 @@ def retry_failed_jobs(
             model=job.model,
             scale=job.settings.scale,
             output_format=job.settings.output_format,
-            reserved=reserved,
             cache=cache,
         )
-        _reserve_output_bundle(reserved, job.output_path)
+        cache.reserve_output_bundle(job.output_path)
         job.status = "pending"
         job.message = None
         job.warnings = []
@@ -150,15 +144,10 @@ def retry_failed_jobs(
     return retried
 
 
-def _reserve_output_bundle(reserved: set[Path], output_path: Path) -> None:
-    reserved.add(output_path)
-    reserved.add(output_path.with_suffix(".json"))
-
-
 def options_for_job(job: Job) -> UpscaleOptions:
     return UpscaleOptions(
         input_path=job.input_path,
-        output_arg=str(job.output_path),
+        output_path=job.output_path,
         model=job.model,
         scale=job.settings.scale,
         tile=job.settings.tile,
@@ -176,7 +165,6 @@ def options_for_job(job: Job) -> UpscaleOptions:
         background="white",
         strip_metadata=job.settings.strip_metadata,
         target_profile=job.settings.target_profile,
-        overwrite=False,
     )
 
 

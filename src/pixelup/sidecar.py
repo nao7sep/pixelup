@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from pixelup import __version__
@@ -27,6 +28,7 @@ def write_sidecar(
     options: UpscaleOptions,
     result: dict[str, object],
     warnings: list[Message],
+    should_cancel: Callable[[], bool] | None = None,
 ) -> PublishedFile:
     sidecar_path = output_path.with_suffix(".json")
     payload = {
@@ -59,7 +61,7 @@ def write_sidecar(
             "alpha_mode": options.alpha_mode,
             "device": options.device,
             "gpu_id": options.gpu_id,
-            "output_format": options.output_format.value if options.output_format else None,
+            "output_format": options.output_format.value,
             "quality": options.quality,
             "background": options.background,
             "strip_metadata": options.strip_metadata,
@@ -116,6 +118,9 @@ def write_sidecar(
         remove_published_file(close_published_file(sidecar_path, descriptor))
         raise
     claim = close_published_file(sidecar_path, descriptor)
+    if should_cancel is not None and should_cancel():
+        remove_published_file(claim)
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
     if not published_file_is_current(claim):
         remove_published_file(claim)
         raise PixelupError(

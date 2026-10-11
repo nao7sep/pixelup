@@ -34,10 +34,13 @@ from PySide6.QtGui import (
     QGuiApplication,
     QIcon,
     QImage,
+    QImageIOHandler,
+    QImageReader,
     QKeySequence,
     QPixmap,
     QResizeEvent,
     QShortcut,
+    QTransform,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -83,7 +86,7 @@ from pixelup.i18n import localizer
 from pixelup.i18n.bootstrap import settle_language
 from pixelup.i18n.localized import localize, unlocalize
 from pixelup.i18n.message import Message, join
-from pixelup.imaging import read_image_size, register_image_plugins
+from pixelup.imaging import read_image_orientation, read_image_size, register_image_plugins
 from pixelup.jobs import (
     ImageEntry,
     Job,
@@ -160,11 +163,10 @@ _CELL_PADDING = 24
 _NAME_MIN_WIDTH = 180
 
 # How long the Parameters panel waits after the last edit before writing config.json.
-# The panel saves as it is edited rather than only at a well-behaved quit, so a crash
-# or a force-quit cannot cost the user their parameters — but the quality and denoise
-# spin boxes emit a change per typed digit, and every save is an atomic rewrite plus a
-# backup record, so the writes are coalesced. Long enough to absorb typing "100" or
-# "0.75", short enough that the save is landed by the time the user has moved on.
+# Coalescing absorbs the quality and denoise spin boxes' per-digit changes before
+# each atomic rewrite and backup submission. A crash or force-quit can lose edits
+# whose save has not landed yet. Ordinary quit flushes the latest edit within its
+# existing bound; OS exit never waits beyond that bound to guarantee a save.
 _PARAMETERS_SAVE_DELAY_MS = 500
 
 # How long a quit may take once it is under way, under the five or so seconds an OS
@@ -362,7 +364,28 @@ class ImagePreview(QLabel):
         self._request = next(_preview_requests)
         request = self._request
         def read() -> None:
-            image = QImage(str(path))
+            reader = QImageReader(str(path))
+            # Match the displayed orientation used by size probes and processing.
+            reader.setAutoTransform(True)
+            image = reader.read()
+            if (
+                not image.isNull()
+                and reader.transformation() == QImageIOHandler.Transformation.TransformationNone
+            ):
+                # Qt omits some PNG EXIF/XMP transforms. The shared header probe
+                # returns only pending orientation; HEIF's applied transform is 1.
+                try:
+                    orientation = read_image_orientation(path)
+                except Exception:  # noqa: BLE001 - optional metadata cannot hide a decoded image.
+                    log.warning("preview.orientation_failed", input=str(path), exc_info=True)
+                else:
+                    rotation = {3: 180, 5: 90, 6: 90, 7: 90, 8: 270}.get(orientation)
+                    if rotation is not None:
+                        image = image.transformed(QTransform().rotate(rotation))
+                    if orientation in {2, 5}:
+                        image = image.flipped(Qt.Orientation.Horizontal)
+                    elif orientation in {4, 7}:
+                        image = image.flipped(Qt.Orientation.Vertical)
             try:
                 self._loaded.ready.emit(request, image)
             except RuntimeError:
@@ -1900,7 +1923,12 @@ class MainWindow(QMainWindow):
         failure = None
         if outcome.error is not None:
             exc = outcome.error
-            log.warning("config.save_failed", path=str(config_path()), reason=str(exc))
+            log.warning(
+                "config.save_failed",
+                path=str(config_path()),
+                reason=str(exc),
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
             failure = (
                 user_text(exc, internal_fallback=failed)
                 if isinstance(exc, PixelupError)

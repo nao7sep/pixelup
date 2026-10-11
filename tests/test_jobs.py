@@ -5,7 +5,10 @@ from itertools import count
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
+from pixelup import upscale as upscale_module
+from pixelup.config import RuntimeDirs
 from pixelup.devices import DEFAULT_DEVICE
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
@@ -21,7 +24,7 @@ from pixelup.jobs import (
     retry_failed_jobs,
     settings_for_model,
 )
-from pixelup.output_reservation import assert_output_bundle_available
+from pixelup.output_reservation import BUNDLE_SUFFIXES, assert_output_bundle_available
 from pixelup.parameters import (
     DEFAULT_SCALE,
     DEFAULT_TILE,
@@ -30,7 +33,109 @@ from pixelup.parameters import (
     TILE_CHOICES,
     TILE_VALUES,
 )
-from pixelup.paths import OutputFormat
+from pixelup.paths import NamePlanCache, OutputFormat
+from pixelup.upscale import build_plan
+
+
+@pytest.mark.parametrize(
+    ("directory_name", "filename"),
+    [
+        ("album{2026}", "photo.png"),
+        ("album", "photo{edited}.png"),
+        ("album{2026}", "photo{edited}.png"),
+    ],
+)
+def test_planned_output_preserves_literal_braces_through_the_processing_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    directory_name: str,
+    filename: str,
+) -> None:
+    directory = tmp_path / directory_name
+    directory.mkdir()
+    source = directory / filename
+    with Image.new("RGB", (2, 3), "white") as image:
+        image.save(source)
+    monkeypatch.setattr(upscale_module, "resolve_device", lambda _device, _gpu: "cpu")
+    job = create_jobs(
+        input_paths=[source],
+        models=["realesr-general-x4v3"],
+        settings=JobSettings(scale=2, output_format=OutputFormat.WEBP),
+        existing_jobs=[],
+        job_ids=count(1),
+    )[0]
+
+    plan = build_plan(
+        options_for_job(job),
+        RuntimeDirs(tmp_path / "models", tmp_path / "temp"),
+        check_model=False,
+    )
+
+    assert plan.input_path == source
+    assert plan.output_path == job.output_path
+    assert plan.output_path == directory / f"{source.stem}-realesr-general-x4v3-2x.webp"
+    assert plan.output_format == OutputFormat.WEBP
+    assert plan.input_size == (2, 3)
+    assert plan.output_size == (4, 6)
+
+
+@pytest.mark.parametrize("planning_pass", ["create", "retry"])
+def test_large_batch_reservation_work_grows_with_the_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, planning_pass: str
+) -> None:
+    # 1,000 images compared with six models produce 6,000 jobs. Count collision
+    # identity work, rather than elapsed time: revisiting all earlier reservations
+    # would block the window with quadratic work even if each key were cached.
+    models = [
+        "realesr-general-x4v3",
+        "RealESRGAN_x4plus",
+        "RealESRNet_x4plus",
+        "RealESRGAN_x4plus_anime_6B",
+        "RealESRGAN_x2plus",
+        "realesr-animevideov3",
+    ]
+    inputs = [tmp_path / f"image-{index:04d}.png" for index in range(1000)]
+    job_count = len(inputs) * len(models)
+    identity_operations = 0
+    real_key = NamePlanCache.key
+
+    def counted_key(self: NamePlanCache, path: Path) -> str:
+        nonlocal identity_operations
+        identity_operations += 1
+        return real_key(self, path)
+
+    monkeypatch.setattr(NamePlanCache, "key", counted_key)
+    if planning_pass == "create":
+        jobs = create_jobs(
+            input_paths=inputs,
+            models=models,
+            settings=JobSettings(),
+            existing_jobs=[],
+            job_ids=count(1),
+        )
+    else:
+        jobs = [
+            Job(
+                id=index,
+                input_path=input_path,
+                model=model,
+                output_path=tmp_path / f"old-{index}.png",
+                settings=JobSettings(),
+                status="failed",
+            )
+            for index, (input_path, model) in enumerate(
+                ((path, model) for path in inputs for model in models), start=1
+            )
+        ]
+        assert retry_failed_jobs(jobs) == list(range(1, job_count + 1))
+
+    assert len(jobs) == job_count
+    assert jobs[0].output_path.name == "image-0000-realesr-general-x4v3-4x.png"
+    assert jobs[-1].output_path.name == "image-0999-realesr-animevideov3-4x.png"
+    assert len({job.output_path for job in jobs}) == job_count
+    # At most one reservation and one candidate bundle per job; allow the
+    # candidate itself as well as every image/sidecar suffix in each bundle.
+    assert identity_operations <= 2 * (len(BUNDLE_SUFFIXES) + 1) * job_count
 
 
 @pytest.mark.parametrize("extension", ["png", "JPG", "jpeg", "webp", "json"])
@@ -100,7 +205,7 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
     options = options_for_job(job)
 
     assert options.input_path == job.input_path
-    assert options.output_arg == str(job.output_path)
+    assert options.output_path is job.output_path
     assert options.model == "realesr-general-x4v3"
     assert options.scale == 2
     assert options.tile == 128
@@ -112,7 +217,6 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
     assert options.tile_pad == 10
     assert options.pre_pad == 0
     assert options.background == "white"
-    assert options.overwrite is False
 
 
 def test_bare_job_settings_defaults_to_a_safe_tile() -> None:

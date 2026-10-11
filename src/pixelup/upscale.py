@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import math
 import os
 import time
@@ -16,7 +15,7 @@ from pixelup.i18n.message import Message
 from pixelup.imaging import (
     PublishedCallback,
     image_from_bgr_array,
-    load_source_metadata,
+    load_source_image,
     read_image_size,
     save_output_image,
 )
@@ -33,13 +32,7 @@ from pixelup.parameters import (
     TARGET_PROFILE_VALUES,
     TILE_VALUES,
 )
-from pixelup.paths import (
-    OutputContext,
-    OutputFormat,
-    absolute_user_path,
-    infer_output_format,
-    resolve_output_path,
-)
+from pixelup.paths import OutputFormat, absolute_user_path
 from pixelup.session_log import log
 
 StartCallback = Callable[["UpscalePlan", int], None]
@@ -52,7 +45,7 @@ CancelCheck = Callable[[], bool]
 @dataclass(frozen=True, slots=True)
 class UpscaleOptions:
     input_path: Path
-    output_arg: str
+    output_path: Path
     model: str
     scale: int
     tile: int
@@ -63,12 +56,11 @@ class UpscaleOptions:
     alpha_mode: str
     gpu_id: int | None
     device: str
-    output_format: OutputFormat | None
+    output_format: OutputFormat
     quality: int
     background: str
     strip_metadata: bool
     target_profile: str | None
-    overwrite: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +81,7 @@ def build_plan(
     runtime_dirs: RuntimeDirs,
     *,
     check_model: bool = True,
+    input_size: tuple[int, int] | None = None,
 ) -> UpscalePlan:
     validate_options(options)
     input_path = absolute_user_path(options.input_path)
@@ -106,18 +99,10 @@ def build_plan(
             details={"input": str(input_path)},
         )
 
-    input_size = read_image_size(read_path)
-    output_format = infer_output_format(options.output_arg, options.output_format)
-    context = OutputContext(
-        input_path=input_path,
-        output_arg=options.output_arg,
-        model=options.model,
-        scale=options.scale,
-        output_format=output_format,
-        input_size=input_size,
-    )
-    output_path = resolve_output_path(context)
-    validate_output_path(output_path, overwrite=options.overwrite)
+    if input_size is None:
+        input_size = read_image_size(read_path)
+    output_path = absolute_user_path(options.output_path)
+    validate_output_path(output_path)
     if check_model:
         for name in required_model_names(options):
             require_model_present(runtime_dirs.models_dir, name)
@@ -129,8 +114,8 @@ def build_plan(
         model=options.model,
         scale=options.scale,
         input_size=input_size,
-        output_size=context.output_size,
-        output_format=output_format,
+        output_size=tuple(dimension * options.scale for dimension in input_size),
+        output_format=options.output_format,
         device=device,
     )
 
@@ -147,15 +132,13 @@ def run_upscale(
     on_output_published: PublishedCallback | None = None,
 ) -> dict[str, object]:
     started = time.perf_counter()
-    plan = build_plan(
-        options,
-        runtime_dirs,
-        check_model=True,
-    )
-    # Every fact about the input is read before processing starts, so the sidecar and
-    # the output's metadata describe the input this job began from.
-    input_sha256, input_size_bytes = _hash_input(plan.read_path)
-    source_metadata = load_source_metadata(plan.read_path)
+    validate_options(options)
+    if should_cancel and should_cancel():
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+    # Decode before loading models. Header dimensions, pixels, embedded metadata,
+    # digest and byte count now all belong to one transient encoded capture.
+    source = load_source_image(absolute_user_path(options.input_path).resolve())
+    plan = build_plan(options, runtime_dirs, check_model=True, input_size=source.size)
     log.info(
         "upscale.planned",
         input=str(plan.input_path),
@@ -166,8 +149,8 @@ def run_upscale(
         output_size=list(plan.output_size),
         output_format=plan.output_format.value,
         device=plan.device,
-        input_sha256=input_sha256,
-        input_size_bytes=input_size_bytes,
+        input_sha256=source.sha256,
+        input_size_bytes=source.size_bytes,
     )
     for warning in plan_warnings(options, plan):
         log.warning("upscale.warning", input=str(plan.input_path), text=english().of(warning))
@@ -180,7 +163,6 @@ def run_upscale(
     inference_started = time.perf_counter()
     output_array = run_inference(
         InferenceConfig(
-            input_path=plan.read_path,
             models_dir=runtime_dirs.models_dir,
             model=options.model,
             scale=options.scale,
@@ -193,6 +175,7 @@ def run_upscale(
             gpu_id=options.gpu_id,
             device=plan.device,
         ),
+        source.pixels,
         on_progress=on_progress,
         on_tile=on_tile,
         should_cancel=should_cancel,
@@ -213,7 +196,7 @@ def run_upscale(
         output_format=plan.output_format,
         quality=options.quality,
         background=options.background,
-        source_metadata=source_metadata,
+        source_metadata=source.metadata,
         strip_metadata=options.strip_metadata,
         target_profile=options.target_profile,
         on_published=on_output_published,
@@ -225,30 +208,12 @@ def run_upscale(
         "model": plan.model,
         "scale": plan.scale,
         "input_size": list(plan.input_size),
-        "input_sha256": input_sha256,
-        "input_size_bytes": input_size_bytes,
+        "input_sha256": source.sha256,
+        "input_size_bytes": source.size_bytes,
         "output_size": list(output_size),
         "format": plan.output_format.value,
         "ms": round((time.perf_counter() - started) * 1000),
     }
-
-
-def _hash_input(path: Path) -> tuple[str, int]:
-    """The input's SHA-256 and byte count, both from one read."""
-    digest = hashlib.sha256()
-    size = 0
-    try:
-        with path.open("rb") as file:
-            while chunk := file.read(1024 * 1024):
-                digest.update(chunk)
-                size += len(chunk)
-    except OSError as exc:
-        raise PixelupError(
-            ErrorCode.INPUT_UNREADABLE,
-            Message("error.inputOpenFailed"),
-            details={"input": str(path), "reason": str(exc)},
-        ) from exc
-    return digest.hexdigest(), size
 
 
 def validate_options(options: UpscaleOptions) -> None:
@@ -343,7 +308,7 @@ def count_tiles(input_size: tuple[int, int], tile: int) -> int:
     return max(1, math.ceil(width / tile) * math.ceil(height / tile))
 
 
-def validate_output_path(path: Path, *, overwrite: bool) -> None:
+def validate_output_path(path: Path) -> None:
     parent = path.parent
     if not parent.exists():
         raise PixelupError(
@@ -357,7 +322,7 @@ def validate_output_path(path: Path, *, overwrite: bool) -> None:
             Message("error.outputDirNotDirectory"),
             details={"output": str(path), "parent": str(parent)},
         )
-    if path.exists() and not overwrite:
+    if path.exists() or path.is_symlink():
         raise PixelupError(
             ErrorCode.OUTPUT_EXISTS,
             Message("error.outputExists"),

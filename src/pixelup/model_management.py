@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
 
 from pixelup.i18n.message import Message
 from pixelup.model_registry import ModelInfo, known_model
-from pixelup.models import model_is_ready
 
 GENERAL_MODEL = "realesr-general-x4v3"
 GENERAL_DENOISE_MODEL = "realesr-general-wdn-x4v3"
@@ -69,21 +67,6 @@ def required_artifact_names(
         if model_supports_denoise(model) and denoise_strength != DENOISE_NEUTRAL:
             required.append(GENERAL_DENOISE_MODEL)
     return tuple(dict.fromkeys(required))
-
-
-def missing_artifact_names(models_dir: Path, artifact_names: Iterable[str]) -> tuple[str, ...]:
-    return tuple(name for name in artifact_names if not model_is_ready(models_dir, name))
-
-
-def bundle_ready_count(models_dir: Path, bundle: ManagedModelBundle) -> int:
-    return sum(model_is_ready(models_dir, name) for name in bundle.artifact_names)
-
-
-def ready_artifact_count(models_dir: Path) -> tuple[int, int]:
-    return (
-        sum(model_is_ready(models_dir, name) for name in MANAGED_ARTIFACT_NAMES),
-        len(MANAGED_ARTIFACT_NAMES),
-    )
 
 
 def artifact_info(name: str) -> ModelInfo:

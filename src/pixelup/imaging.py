@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import os
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageCms, ImageColor, PngImagePlugin, UnidentifiedImageError
+from PIL import Image, ImageCms, ImageColor, ImageOps, PngImagePlugin, UnidentifiedImageError
 
 from pixelup.derived_metadata import (
     OutputColor,
@@ -45,6 +46,17 @@ class SourceMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceImage:
+    """One accepted decode; all provenance describes the bytes that made these pixels."""
+
+    pixels: Any  # BGR/BGRA, the inference engine's existing 8-bit working range.
+    size: tuple[int, int]
+    metadata: SourceMetadata
+    sha256: str
+    size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class _ColorPlan:
     source_profile: bytes
     # The profile the written pixels are in, and whether the file embeds it.
@@ -69,8 +81,13 @@ def read_image_size(path: Path) -> tuple[int, int]:
     register_image_plugins()
     try:
         with Image.open(path) as image:
+            # Probe the display dimensions without decoding the entire source.
+            # HEIF's opener already applies its transforms and resets EXIF to 1;
+            # its original_orientation info is history, never a pending transform.
+            width, height = image.size
+            orientation = _orientation(image)
             image.verify()
-            return image.size
+            return (height, width) if orientation in {5, 6, 7, 8} else (width, height)
     except UnidentifiedImageError as exc:
         raise PixelupError(
             ErrorCode.INPUT_INVALID_FORMAT,
@@ -87,6 +104,93 @@ def read_image_size(path: Path) -> tuple[int, int]:
         raise PixelupError(
             ErrorCode.INPUT_UNREADABLE,
             Message("error.inputOpenFailed"),
+            details={"input": str(path), "reason": str(exc)},
+        ) from exc
+
+
+def read_image_orientation(path: Path) -> int:
+    """Read the pending display transform from metadata, without decoding pixels."""
+    register_image_plugins()
+    try:
+        with Image.open(path) as image:
+            return _orientation(image)
+    except UnidentifiedImageError as exc:
+        raise PixelupError(
+            ErrorCode.INPUT_INVALID_FORMAT,
+            Message("error.inputInvalidFormat"),
+            details={"input": str(path)},
+        ) from exc
+    except PermissionError as exc:
+        raise PixelupError(
+            ErrorCode.INPUT_UNREADABLE,
+            Message("error.inputUnreadable"),
+            details={"input": str(path), "reason": str(exc)},
+        ) from exc
+    except OSError as exc:
+        raise PixelupError(
+            ErrorCode.INPUT_UNREADABLE,
+            Message("error.inputOpenFailed"),
+            details={"input": str(path), "reason": str(exc)},
+        ) from exc
+
+
+def _orientation(image: Image.Image) -> int:
+    # Pillow's base reader includes its XMP fallback and reads loaded metadata.
+    # PNG's override calls load() when EXIF is absent; bypass that override for
+    # the header probe so XMP-only files do not require raster decoding.
+    return Image.Image.getexif(image).get(0x0112, 1)
+
+
+def load_source_image(path: Path) -> SourceImage:
+    """Capture once, then release encoded bytes and decoder images before inference.
+
+    A concurrent in-place writer can still change bytes during this read: this is an
+    accepted byte capture, not a filesystem transaction over somebody else's file.
+    """
+    register_image_plugins()
+    try:
+        encoded = path.read_bytes()
+        digest = hashlib.sha256(encoded).hexdigest()
+        with BytesIO(encoded) as stream, Image.open(stream) as image, ExitStack() as images:
+            image.load()
+            # Pillow's transpose rewrites EXIF. Keep its original binary block first
+            # so output patching preserves maker-note offsets and the IFD1 thumbnail.
+            metadata = _source_metadata(image)
+            oriented = image
+            if _orientation(image) in {2, 3, 4, 5, 6, 7, 8}:
+                oriented = ImageOps.exif_transpose(image)
+                images.callback(oriented.close)
+            pixels = rgb_pixels(oriented)
+            if pixels is not oriented:
+                images.callback(pixels.close)
+            import numpy as np
+
+            array = np.asarray(pixels)
+            if pixels.mode == "RGBA":
+                bgr = np.empty_like(array)
+                for destination, source in enumerate((2, 1, 0, 3)):
+                    bgr[:, :, destination] = array[:, :, source]
+            else:
+                bgr = array[:, :, ::-1].copy()
+            return SourceImage(bgr, pixels.size, metadata, digest, len(encoded))
+    except FileNotFoundError as exc:
+        raise PixelupError(
+            ErrorCode.INPUT_NOT_FOUND, Message("error.inputMissing"),
+            details={"input": str(path)},
+        ) from exc
+    except UnidentifiedImageError as exc:
+        raise PixelupError(
+            ErrorCode.INPUT_INVALID_FORMAT, Message("error.inputInvalidFormat"),
+            details={"input": str(path)},
+        ) from exc
+    except PermissionError as exc:
+        raise PixelupError(
+            ErrorCode.INPUT_UNREADABLE, Message("error.inputUnreadable"),
+            details={"input": str(path), "reason": str(exc)},
+        ) from exc
+    except (OSError, ImageCms.PyCMSError) as exc:
+        raise PixelupError(
+            ErrorCode.INPUT_UNREADABLE, Message("error.inputOpenFailed"),
             details={"input": str(path), "reason": str(exc)},
         ) from exc
 
@@ -114,25 +218,49 @@ def image_from_bgr_array(array: Any) -> Image.Image:
 
 
 def rgb_pixels(image: Image.Image) -> Image.Image:
-    """The image as RGB or RGBA pixels, in the profile ``load_source_metadata`` reports.
+    """RGB/RGBA in the effective profile reported by source metadata.
 
-    Pixels in a non-RGB ICC profile, such as CMYK or grayscale, are converted through it
-    to sRGB. Raises ImageCms.PyCMSError when the profile cannot convert the pixels.
+    Unsigned 16-bit grayscale maps its fixed 0–65535 range to the inference
+    engine's 8-bit working range; non-RGB profiles then convert through sRGB.
+    Transparency keys are resolved before quantization or RGB conversion.
     """
-    if image.mode in {"RGB", "RGBA"}:
-        return image
     profile = _non_rgb_profile(image)
+    pixels = image
+    alpha = None
+    if image.mode in {"I;16", "I;16L", "I;16B", "I;16N"}:
+        import numpy as np
+
+        samples = np.asarray(image).astype(np.uint32)
+        pixels = Image.fromarray(((samples * 255 + 32767) // 65535).astype(np.uint8))
+        if image.has_transparency_data:
+            # A 16-bit PNG key identifies original samples. Adjacent samples can
+            # map to one 8-bit value but must retain their distinct alpha.
+            alpha = Image.fromarray(np.where(samples == image.info["transparency"], 0, 255)
+                                    .astype(np.uint8))
+    elif image.has_transparency_data and image.mode != "RGBA":
+        pixels = image.convert("RGBA")
     if profile is None:
-        return image.convert("RGBA" if "A" in image.getbands() else "RGB")
-    pixels = image.convert("L") if profile.profile.xcolor_space == "GRAY" else image
-    rgb = ImageCms.profileToProfile(
-        pixels,
-        profile,
-        ImageCms.ImageCmsProfile(BytesIO(_profile_bytes("srgb"))),
-        outputMode="RGB",
-    )
-    if "A" in image.getbands():
-        rgb.putalpha(image.getchannel("A"))
+        rgb = pixels if pixels.mode in {"RGB", "RGBA"} else pixels.convert("RGB")
+    else:
+        gray = pixels
+        if profile.profile.xcolor_space == "GRAY" and pixels.mode != "L":
+            gray = pixels.convert("L")
+        try:
+            rgb = ImageCms.profileToProfile(
+                gray, profile, ImageCms.ImageCmsProfile(BytesIO(_profile_bytes("srgb"))),
+                outputMode="RGB",
+            )
+        finally:
+            if gray is not pixels:
+                gray.close()
+        if "A" in pixels.getbands():
+            with pixels.getchannel("A") as channel:
+                rgb.putalpha(channel)
+    if alpha is not None:
+        rgb.putalpha(alpha)
+        alpha.close()
+    if pixels is not image and pixels is not rgb:
+        pixels.close()
     return rgb
 
 
@@ -148,19 +276,11 @@ def _non_rgb_profile(image: Image.Image) -> ImageCms.ImageCmsProfile | None:
     return None if profile.profile.xcolor_space == "RGB " else profile
 
 
-def load_source_metadata(path: Path) -> SourceMetadata:
-    register_image_plugins()
-    try:
-        with Image.open(path) as image:
-            icc_profile = image.info.get("icc_profile")
-            exif = image.info.get("exif")
-            xmp = image.info.get("xmp")
-            decoded_to_srgb = _non_rgb_profile(image) is not None
-    except (OSError, UnidentifiedImageError) as exc:
-        # Source metadata is optional; an unreadable header is not a failure of
-        # the upscale. Note it at debug for diagnosis without alarming a run.
-        log.debug("metadata.read_failed", input=str(path), reason=str(exc))
-        return SourceMetadata()
+def _source_metadata(image: Image.Image) -> SourceMetadata:
+    icc_profile = image.info.get("icc_profile")
+    exif = image.info.get("exif")
+    xmp = image.info.get("xmp")
+    decoded_to_srgb = _non_rgb_profile(image) is not None
     if decoded_to_srgb:
         icc_profile = _profile_bytes("srgb")
     return SourceMetadata(

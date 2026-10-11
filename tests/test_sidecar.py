@@ -27,7 +27,7 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
         output_path=output_path,
         options=UpscaleOptions(
             input_path=input_path,
-            output_arg=str(output_path),
+            output_path=output_path,
             model="realesr-general-x4v3",
             scale=4,
             tile=0,
@@ -43,7 +43,6 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
             background="white",
             strip_metadata=False,
             target_profile=None,
-            overwrite=False,
         ),
         result={
             "input_size": [1, 1],

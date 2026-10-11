@@ -9,12 +9,9 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageCms, UnidentifiedImageError
-
 from pixelup.devices import resolve_device, to_torch_device
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
-from pixelup.imaging import register_image_plugins, rgb_pixels
 from pixelup.models import model_file
 
 ProgressCallback = Callable[[str], None]
@@ -23,7 +20,6 @@ CancelCheck = Callable[[], bool]
 
 @dataclass(frozen=True, slots=True)
 class InferenceConfig:
-    input_path: Path
     models_dir: Path
     model: str
     scale: int
@@ -62,6 +58,7 @@ def model_architecture_spec(model: str, *, requested_scale: int = 4) -> ModelArc
 
 def run_inference(
     config: InferenceConfig,
+    pixels: Any,
     *,
     on_progress: ProgressCallback | None = None,
     on_tile: TileCallback | None = None,
@@ -70,6 +67,7 @@ def run_inference(
     try:
         return _run_inference(
             config,
+            pixels,
             on_progress=on_progress,
             on_tile=on_tile,
             should_cancel=should_cancel,
@@ -98,6 +96,7 @@ def run_inference(
 
 def _run_inference(
     config: InferenceConfig,
+    pixels: Any,
     *,
     on_progress: ProgressCallback | None = None,
     on_tile: TileCallback | None = None,
@@ -106,7 +105,6 @@ def _run_inference(
     _check_cancelled(should_cancel)
     _emit(on_progress, "load_model")
     _import_torch()  # surface a friendly error if torch is not installed
-    image = _read_input_image(config.input_path)
     concrete_device = resolve_device(config.device, config.gpu_id)
     torch_device = to_torch_device(concrete_device, config.gpu_id)
     upsampler = _create_upsampler(
@@ -119,7 +117,7 @@ def _run_inference(
 
     _check_cancelled(should_cancel)
     _emit(on_progress, "upscale")
-    output, _ = upsampler.enhance(image, outscale=config.scale, alpha_upsampler=config.alpha_mode)
+    output, _ = upsampler.enhance(pixels, outscale=config.scale, alpha_upsampler=config.alpha_mode)
     return output
 
 
@@ -278,42 +276,6 @@ def _build_network(spec: ModelArchitectureSpec) -> Any:
         details={"kind": spec.kind},
     )
 
-def _read_input_image(path: Path) -> Any:
-    np = _import_numpy()
-    register_image_plugins()
-    try:
-        with Image.open(path) as image:
-            array = np.array(rgb_pixels(image))
-    except UnidentifiedImageError as exc:
-        raise PixelupError(
-            ErrorCode.INPUT_INVALID_FORMAT,
-            Message("error.inputInvalidFormat"),
-            details={"input": str(path)},
-        ) from exc
-    except PermissionError as exc:
-        raise PixelupError(
-            ErrorCode.INPUT_UNREADABLE,
-            Message("error.inputUnreadable"),
-            details={"input": str(path), "reason": str(exc)},
-        ) from exc
-    except (OSError, ImageCms.PyCMSError) as exc:
-        raise PixelupError(
-            ErrorCode.INPUT_UNREADABLE,
-            Message("error.inputOpenFailed"),
-            details={"input": str(path), "reason": str(exc)},
-        ) from exc
-
-    channels = array.shape[2]
-    if channels == 3:
-        return array[:, :, ::-1].copy()
-    if channels == 4:
-        return array[:, :, [2, 1, 0, 3]].copy()
-    raise PixelupError(
-        ErrorCode.INPUT_INVALID_FORMAT,
-        Message("error.inputChannelsUnsupported"),
-        details={"input": str(path), "channels": channels},
-    )
-
 
 # PixelUp's adapted RealESRGANer calls torch.load without a weights_only argument.
 # Model-load
@@ -350,14 +312,6 @@ def _assert_safe_torch_load(torch_module: Any) -> None:
             "weights with full unpickling.",
             details={"torch_version": str(torch_module.__version__)},
         )
-
-
-def _import_numpy() -> Any:
-    try:
-        import numpy as np
-    except ImportError as exc:
-        raise _missing_inference_dependency("numpy", exc) from exc
-    return np
 
 
 def _missing_inference_dependency(package: str, exc: ImportError) -> PixelupError:
