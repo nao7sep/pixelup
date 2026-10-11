@@ -18,6 +18,7 @@
   "actions.cancelQueue": "Cancel queue",
   "actions.needImages": "Open or select at least one image before queueing.",
   "actions.needModels": "Select at least one model before queueing.",
+  "actions.queueFailed": "These images could not be queued. See Records for details, then try again.",
   "actions.queueAllAllModels": "Queue all images with all models",
   "actions.queueAllSelectedModels": "Queue all images with selected models",
   "actions.queueSelected": "Queue selected image",

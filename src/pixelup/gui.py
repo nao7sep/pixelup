@@ -213,6 +213,15 @@ class PendingRetry:
 
 
 PendingModelWork = PendingEnqueue | PendingRetry
+
+
+@dataclass(frozen=True, slots=True)
+class _JobPlanning:
+    work: PendingModelWork
+    images: tuple[tuple[Path, ImageEntry | None], ...]
+    runtime_dirs: RuntimeDirs
+
+
 _WINDOW_TARGET_EXTRA_WIDTH = 160
 _WINDOW_TARGET_EXTRA_HEIGHT = 120
 
@@ -322,6 +331,10 @@ class _Loaded(QObject):
     emitted on a plain thread is queued to this object's thread, the GUI's."""
 
     ready = Signal(int, object)
+
+
+class _Planned(QObject):
+    ready = Signal(object, object)
 
 
 class ImagePreview(QLabel):
@@ -484,10 +497,20 @@ class MainWindow(QMainWindow):
         self.model_manager = ModelManager(self.runtime_dirs.models_dir, self)
         self._active_models_dialog: ManagedModelsDialog | None = None
         self._pending_model_work: list[PendingModelWork] = []
+        # Planning is serial: each request sees output names accepted by all
+        # earlier plans. Logical cancellation never releases a physical read.
+        self._pending_job_plans: list[_JobPlanning] = []
+        self._active_job_plan: _JobPlanning | None = None
+        self._job_plan_abandoned = False
+        self._removed_plan_inputs: set[Path] = set()
+        self._plan_results = _Planned(self)
+        self._plan_results.ready.connect(self._apply_job_plan)
+        self._planning_reads = ReadThreads(self)
+        self._planning_reads.idle.connect(self._close_when_workers_stop)
         self._show_pending_models_after_scan = False
         self.jobs: list[Job] = []
         # Jobs are only ever appended, never removed, so these two indexes only need
-        # updating where jobs are created (_materialize_jobs); every other job-state
+        # updating where jobs are adopted (_adopt_new_jobs); every other job-state
         # change mutates an existing Job in place. They turn _find_job and an image
         # row's status summary from an O(jobs) scan into an O(1) lookup, which matters
         # because both run on every per-tile progress tick and job completion (PU-5).
@@ -773,6 +796,9 @@ class MainWindow(QMainWindow):
             return
         self._quit_bounded = True
         self._open_reads.closing = True
+        self._planning_reads.closing = True
+        self._pending_job_plans.clear()
+        self._job_plan_abandoned = True
         self.preview.reads.closing = True
         _start_quit_watchdog(QUIT_BUDGET_S, self._force_exit)
 
@@ -814,6 +840,7 @@ class MainWindow(QMainWindow):
         return (
             self._config_save is None
             and self._open_reads.settled
+            and self._planning_reads.settled
             and self.preview.reads.settled
             and output_cleanup.settled
             and self.runner.cleanup_for_quit()
@@ -1407,7 +1434,7 @@ class MainWindow(QMainWindow):
         self._refresh_layout_metrics()
         log.info(
             "settings.saved",
-            path=str(config_path()),
+            path=str(self._settings_file.path),
             previous=config_log_payload(previous),
             current=config_log_payload(current),
         )
@@ -1521,19 +1548,119 @@ class MainWindow(QMainWindow):
         if not ready:
             self._present_pending_models_after_scan()
             return
-        # Retire the snapshots before any job or dialog callback can re-enter.
-        self._pending_model_work = [
-            pending for pending in self._pending_model_work if pending not in ready
-        ]
-        self._refresh_pending_models_dialog(accepted=True)
         for pending in ready:
+            # Each request transfers to its planning owner before retirement;
+            # one failed plan cannot discard other accepted requests.
             if isinstance(pending, PendingEnqueue):
-                input_paths = [path for path in pending.input_paths if path in self._images_by_path]
-                if input_paths:
-                    self._materialize_jobs(input_paths, list(pending.models), pending.settings)
+                paths = pending.input_paths
             else:
-                self._retry_failed_snapshot(pending.job_ids)
+                paths = tuple(self._find_job(job_id).input_path for job_id in pending.job_ids)
+            self._pending_job_plans.append(_JobPlanning(
+                work=pending,
+                images=tuple((path, self._images_by_path.get(path)) for path in paths),
+                runtime_dirs=RuntimeDirs(self.runtime_dirs.models_dir, self.runtime_dirs.temp_dir),
+            ))
+            self._pending_model_work.remove(pending)
+        self._refresh_pending_models_dialog(accepted=True)
+        self._start_next_job_plan()
         self._present_pending_models_after_scan()
+
+    def _retained_plan_paths(self, request: _JobPlanning) -> set[Path]:
+        # Retry can explicitly include historical rows with no open image. A
+        # captured live image must retain its object identity after removal/reopen.
+        return {
+            path for path, image in request.images
+            if (
+                (image is None and isinstance(request.work, PendingRetry))
+                or (image is not None and self._images_by_path.get(path) is image)
+            )
+            and (request is not self._active_job_plan or path not in self._removed_plan_inputs)
+        }
+
+    def _start_next_job_plan(self) -> None:
+        while self._active_job_plan is None and self._pending_job_plans and not self._quit_bounded:
+            request = self._pending_job_plans.pop(0)
+            retained = self._retained_plan_paths(request)
+            work = request.work
+            if isinstance(work, PendingEnqueue):
+                input_paths = [path for path in work.input_paths if path in retained]
+                retry_ids = frozenset()
+                if not input_paths:
+                    continue
+            else:
+                input_paths = []
+                retry_ids = frozenset(
+                    job_id for job_id in work.job_ids
+                    if self._find_job(job_id).status == "failed"
+                    and self._find_job(job_id).input_path in retained
+                )
+                if not retry_ids:
+                    continue
+            # The worker may mutate these copies for retry, never the GUI's jobs.
+            existing = [replace(job, warnings=list(job.warnings)) for job in self.jobs]
+            results, job_ids = self._plan_results, self._job_ids
+            self._active_job_plan = request
+            self._job_plan_abandoned = False
+            self._removed_plan_inputs.clear()
+
+            def read(
+                request=request, work=work, input_paths=input_paths,
+                retry_ids=retry_ids, existing=existing, retained=retained,
+                results=results, job_ids=job_ids,
+            ) -> None:
+                try:
+                    if isinstance(work, PendingEnqueue):
+                        planned: list[Job] | Message = create_jobs(
+                            input_paths=input_paths, models=list(work.models),
+                            settings=work.settings,
+                            existing_jobs=existing, job_ids=job_ids,
+                        )
+                    else:
+                        retried = set(retry_failed_jobs(existing, only_job_ids=retry_ids))
+                        planned = [job for job in existing if job.id in retried]
+                except Exception as exc:
+                    log.exception(
+                        "enqueue.planning_failed", inputs=[str(path) for path in retained],
+                    )
+                    planned = (
+                        user_text(exc, internal_fallback=Message("actions.queueFailed"))
+                        if isinstance(exc, PixelupError) else Message("actions.queueFailed")
+                    )
+                try:
+                    results.ready.emit(request, planned)
+                except RuntimeError:
+                    pass  # An explicitly disposed window has abandoned this plan.
+
+            try:
+                self._planning_reads.start("pixelup-plan", read)
+            except Exception:
+                log.exception("enqueue.planning_failed", inputs=[str(path) for path in retained])
+                self._active_job_plan = None
+                self.queue_action_result.show_result(
+                    Message("actions.queueFailed"), severity="error",
+                )
+                continue
+        self._update_action_buttons()
+
+    @Slot(object, object)
+    def _apply_job_plan(self, request: _JobPlanning, planned: list[Job] | Message) -> None:
+        if self._active_job_plan is not request:
+            return
+        retained = self._retained_plan_paths(request)
+        self._active_job_plan = None
+        self._removed_plan_inputs.clear()
+        if self._quit_bounded:
+            return
+        if not self._job_plan_abandoned and retained:
+            if isinstance(planned, Message):
+                self.queue_action_result.show_result(planned, severity="error")
+            else:
+                planned = [job for job in planned if job.input_path in retained]
+                if isinstance(request.work, PendingEnqueue):
+                    self._adopt_new_jobs(planned, request.runtime_dirs)
+                else:
+                    self._adopt_retried_jobs(planned, request.runtime_dirs)
+        self._start_next_job_plan()
 
     def _present_pending_models_after_scan(self) -> None:
         if self._show_pending_models_after_scan:
@@ -1703,6 +1830,15 @@ class MainWindow(QMainWindow):
         row = self._image_rows.pop(path)
         self.image_table.removeRow(row)
         self._images_by_path.pop(path, None)
+        # Removal also ends accepted planning intent, including a historical
+        # retry captured while this image was absent before an open/remove cycle.
+        if self._active_job_plan is not None:
+            self._removed_plan_inputs.add(path)
+        self._pending_job_plans = [
+            replace(request, images=tuple(item for item in request.images if item[0] != path))
+            for request in self._pending_job_plans
+            if any(item[0] != path for item in request.images)
+        ]
         # Removal ends captured intent even if the same file is reopened later.
         retained: list[PendingModelWork] = []
         for pending in self._pending_model_work:
@@ -1830,7 +1966,7 @@ class MainWindow(QMainWindow):
             else:
                 log.info(
                     "parameters.saved",
-                    path=str(config_path()),
+                    path=str(self._settings_file.path),
                     values=job_settings_log_payload(parameters),
                 )
                 self.parameters_result.clear_result()
@@ -1925,7 +2061,7 @@ class MainWindow(QMainWindow):
             exc = outcome.error
             log.warning(
                 "config.save_failed",
-                path=str(config_path()),
+                path=str(self._settings_file.path),
                 reason=str(exc),
                 exc_info=(type(exc), exc, exc.__traceback__),
             )
@@ -2022,24 +2158,14 @@ class MainWindow(QMainWindow):
         self.model_manager.refresh_readiness()
 
 
-    def _materialize_jobs(
-        self,
-        input_paths: list[Path],
-        models: list[str],
-        settings: JobSettings,
-    ) -> None:
-        new_jobs = create_jobs(
-            input_paths=input_paths,
-            models=models,
-            settings=settings,
-            existing_jobs=self.jobs,
-            job_ids=self._job_ids,
-        )
+    def _adopt_new_jobs(self, new_jobs: list[Job], runtime_dirs: RuntimeDirs) -> None:
+        if not new_jobs:
+            return
         log.info(
             "enqueue.requested",
-            inputs=[str(path) for path in input_paths],
-            models=models,
-            settings=job_settings_log_payload(settings),
+            inputs=list(dict.fromkeys(str(job.input_path) for job in new_jobs)),
+            models=list(dict.fromkeys(job.model for job in new_jobs)),
+            settings=job_settings_log_payload(new_jobs[0].settings),
         )
         for job in new_jobs:
             log.debug("job.queued", job_id=job.id, details=job_log_payload(job))
@@ -2050,6 +2176,7 @@ class MainWindow(QMainWindow):
         self._add_queue_rows(new_jobs)
         self._refresh_image_job_summaries_for(job.input_path for job in new_jobs)
         self._update_action_buttons()
+        self.runner.retain_runtime_dirs((job.id for job in new_jobs), runtime_dirs)
         self.runner.schedule(self.config.max_concurrent_jobs)
 
     def _add_queue_rows(self, jobs: list[Job]) -> None:
@@ -2072,6 +2199,8 @@ class MainWindow(QMainWindow):
             self.queue_table.setItem(row, 4, _item(localizer.of(_status_text(job.status))))
 
     def _cancel_queue(self) -> None:
+        self._pending_job_plans.clear()
+        self._job_plan_abandoned = True
         cancelled_pending: list[int] = []
         signalled_running: list[int] = []
         touched_paths: list[Path] = []
@@ -2114,18 +2243,25 @@ class MainWindow(QMainWindow):
                 job_ids=failed_job_ids, required_artifacts=required,
             ))
 
-    def _retry_failed_snapshot(self, failed_job_ids: frozenset[int]) -> None:
-        retried_jobs = retry_failed_jobs(self.jobs, only_job_ids=failed_job_ids)
-        retried = set(retried_jobs)
+    def _adopt_retried_jobs(self, planned: list[Job], runtime_dirs: RuntimeDirs) -> None:
+        retried_jobs: list[int] = []
         touched_paths: list[Path] = []
-        for job in self.jobs:
-            if job.id in retried:
-                self._update_job(job)
-                touched_paths.append(job.input_path)
+        for result in planned:
+            job = self._find_job(result.id)
+            if job.status != "failed":
+                continue
+            job.output_path = result.output_path
+            job.status = "pending"
+            job.message = None
+            job.warnings = []
+            retried_jobs.append(job.id)
+            self._update_job(job)
+            touched_paths.append(job.input_path)
         if retried_jobs:
             log.info("jobs.retried", job_ids=retried_jobs)
             self._refresh_image_job_summaries_for(touched_paths)
             self._update_action_buttons()
+            self.runner.retain_runtime_dirs(retried_jobs, runtime_dirs)
             self.runner.schedule(self.config.max_concurrent_jobs)
 
     @Slot(int, object)
@@ -2223,7 +2359,11 @@ class MainWindow(QMainWindow):
             self._queue_action_issue = None
             self.queue_action_result.clear_result()
         has_failed = any(job.status == "failed" for job in self.jobs)
-        has_cancellable = any(job.status in {"pending", "running"} for job in self.jobs)
+        has_cancellable = (
+            bool(self._pending_job_plans)
+            or (self._active_job_plan is not None and not self._job_plan_abandoned)
+            or any(job.status in {"pending", "running"} for job in self.jobs)
+        )
         self.queue_selected_button.setEnabled(has_selected_image and has_selected_models)
         self.queue_selected_all_models_button.setEnabled(
             has_selected_image and bool(UPSCALE_MODELS)

@@ -18,6 +18,7 @@
   "actions.cancelQueue": "Annuler la file d’attente",
   "actions.needImages": "Ouvrez ou sélectionnez au moins une image avant de mettre en file d’attente.",
   "actions.needModels": "Sélectionnez au moins un modèle avant de mettre en file d’attente.",
+  "actions.queueFailed": "Ces images n’ont pas pu être ajoutées à la file. Consultez le Journal pour plus de détails, puis réessayez.",
   "actions.queueAllAllModels": "Mettre toutes les images en file avec tous les modèles",
   "actions.queueAllSelectedModels": "Mettre toutes les images en file avec les modèles sélectionnés",
   "actions.queueSelected": "Mettre l’image sélectionnée en file",

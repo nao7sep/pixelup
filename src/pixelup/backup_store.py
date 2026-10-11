@@ -228,29 +228,39 @@ class _Recorder:
                 self._connection = _open_store()
                 self._session = current_session() or utc_now_iso_ms()
             except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable.
-                log.warning(
-                    "backup_store.open_failed",
-                    file=str(_store_file()),
-                    reason=str(exc),
-                    exc_info=True,
-                )
                 self._disable()
+                # The failed resolver is part of this exception. Reuse the saved
+                # file's accepted identity rather than resolving the root again.
+                try:
+                    log.warning(
+                        "backup_store.open_failed",
+                        file=path,
+                        store=STORE_FILE_NAME,
+                        reason=str(exc),
+                        exc_info=True,
+                    )
+                except Exception:  # noqa: BLE001 - the diagnostic was attempted; recording is off.
+                    pass
                 return
         try:
             _write(self._connection, self._session, path, data)
         except Exception as exc:  # noqa: BLE001 - best-effort: log once and disable.
-            log.warning("backup_store.record_failed", file=path, reason=str(exc), exc_info=True)
+            self._disable()
             connection, self._connection = self._connection, None
             try:
                 connection.close()
             except Exception:  # noqa: BLE001 - closing a failed store is best-effort.
                 pass
-            self._disable()
+            try:
+                log.warning("backup_store.record_failed", file=path, reason=str(exc), exc_info=True)
+            except Exception:  # noqa: BLE001 - the diagnostic was attempted; recording is off.
+                pass
 
     def _disable(self) -> None:
         with self._condition:
             self._disabled = True
             self._pending.clear()
+            self._condition.notify_all()
 
 
 _recorder = _Recorder()

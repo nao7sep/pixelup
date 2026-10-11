@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image, PngImagePlugin
-from PySide6.QtCore import QEvent, QMargins, QRect, QSettings, QSize, Qt, QUrl
+from PySide6.QtCore import QEvent, QMargins, QRect, QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QImageReader, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
 
@@ -29,7 +29,7 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
-from pixelup.jobs import JobSettings
+from pixelup.jobs import Job, JobSettings
 from pixelup.model_registry import ALL_MODELS
 from pixelup.models import model_file
 from pixelup.parameters import DEFAULT_SCALE, TILE_VALUES
@@ -54,9 +54,15 @@ DISK_WARNING = Message.of("warning.extensionMismatch", extension="png", format="
 
 
 def _settle_models(window) -> None:
+    planning_reads = getattr(window, "_planning_reads", None)
     deadline = time.monotonic() + 10
-    while not window.model_manager.readiness_known or window.model_manager._scan_in_flight:
-        assert time.monotonic() < deadline, "models scan did not settle"
+    while (
+        not window.model_manager.readiness_known or window.model_manager._scan_in_flight
+        or getattr(window, "_active_job_plan", None) is not None
+        or getattr(window, "_pending_job_plans", ())
+        or (planning_reads is not None and not planning_reads.settled)
+    ):
+        assert time.monotonic() < deadline, "model readiness and planning did not settle"
         QApplication.processEvents()
         time.sleep(0.001)
 
@@ -109,13 +115,55 @@ def _flush(window: MainWindow) -> bool:
     return result[0]
 
 
+class _UnavailableSettingsRoot:
+    """A deterministic unavailable volume, reversible before fixture teardown."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.displaced = root.with_name(root.name + "-displaced")
+
+    def replace(self) -> None:
+        self.root.rename(self.displaced)
+        self.root.write_text("no longer a directory", encoding="utf-8")
+
+    def restore(self) -> None:
+        if self.displaced.exists():
+            self.root.unlink()
+            self.displaced.rename(self.root)
+
+
+def _isolate_settings_root(
+    window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> _UnavailableSettingsRoot:
+    # Records and window geometry keep their already-open owners on the startup
+    # root. Disconnect a separate accepted settings volume with no live handles,
+    # so this failure is reproducible on Windows as well as POSIX.
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "settings-volume"))
+    accepted_path = config_path()
+    window._settings_file = replace(window._settings_file, path=accepted_path)
+    return _UnavailableSettingsRoot(accepted_path.parent)
+
+
+def _track_runtime_config_resolution(monkeypatch: pytest.MonkeyPatch) -> list[None]:
+    calls: list[None] = []
+    resolve = gui.config_path
+
+    def resolving() -> Path:
+        calls.append(None)
+        return resolve()
+
+    monkeypatch.setattr(gui, "config_path", resolving)
+    return calls
+
+
 @pytest.fixture
 def make_window(
     qapp: QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    process_until,
 ):
-    # No real scheduling (no threads / inference), and a clean in-memory config
+    # No real job scheduling or inference, and a clean in-memory config
     # rather than the developer's real ~/.pixelup/config.json. PIXELUP_DATA_DIR is
     # redirected as well as the load stubbed, because the Parameters panel's save
     # resolves config.json through the storage root and must not land in the real one.
@@ -139,8 +187,8 @@ def make_window(
             temp_dir=tmp_path / "home" / "temp",
         )
         window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs if injected else None)
-        _settle_models(window)
         created.append(window)
+        _settle_models(window)
         return window
 
     yield _make
@@ -150,7 +198,9 @@ def make_window(
         # quit-confirmation QMessageBox, whose exec() would block headlessly.
         window._is_session_shutdown = lambda: True
         window.close()
-        _settle_config(window)
+        process_until(
+            window._workers_clean_for_quit, timeout_s=5, what="Window background settlement",
+        )
         window.deleteLater()
     qapp.processEvents()
 
@@ -1026,6 +1076,7 @@ def test_install_and_queue_survives_closing_its_presentation(
     qapp.processEvents()
 
     assert window.model_manager.cleanup_for_quit()
+    _settle_models(window)
     assert not window._pending_model_work
     assert len(window.jobs) == 1
 
@@ -1300,6 +1351,155 @@ def test_delivered_config_failure_keeps_original_diagnostics_and_safe_presentati
     assert "in _run" in error["traceback"]
 
 
+@pytest.mark.parametrize("setting", ["parameters", "settings"])
+def test_landed_config_completion_uses_its_accepted_path_after_root_becomes_unavailable(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str
+) -> None:
+    window = make_window()
+    unavailable = _isolate_settings_root(window, tmp_path, monkeypatch)
+    accepted_path = window._settings_file.path
+    calls = _track_runtime_config_resolution(monkeypatch)
+    real_save = gui.save_app_config
+    outcomes = []
+    # Backup behavior has its own real-boundary tests; keep this save's primary
+    # settlement independent from the timing of optional store opening.
+    monkeypatch.setattr("pixelup.backup_store.record", lambda *_: None)
+    assert flush_records(5)
+
+    def land_then_disconnect(*args):
+        result = real_save(*args)
+        unavailable.replace()
+        return result
+
+    monkeypatch.setattr(gui, "save_app_config", land_then_disconnect)
+    try:
+        if setting == "parameters":
+            window.quality.setValue(73)
+            window._flush_parameters_save(finished=outcomes.append)
+        else:
+            window._save_config_candidate(
+                replace(window.config, max_concurrent_jobs=3),
+                Message("settings.saveFailed"), outcomes.append,
+            )
+        _settle_config(window)
+
+        assert unavailable.root.is_file()
+        assert outcomes == ([True] if setting == "parameters" else [None])
+        assert calls == []
+        assert window._settings_file.path == accepted_path
+        assert not window._unsaved_config_changes
+        landed = load_app_config(unavailable.displaced / accepted_path.name)
+        assert window.config == landed
+        if setting == "parameters":
+            assert window.config.parameters.quality == 73
+            assert window.parameters_result.isHidden()
+        else:
+            assert window.config.max_concurrent_jobs == 3
+    finally:
+        unavailable.restore()
+
+
+def test_failed_folder_completion_releases_and_retries_after_root_becomes_unavailable(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window(injected=False)
+    original = window.config
+    unavailable = _isolate_settings_root(window, tmp_path, monkeypatch)
+    accepted_path = window._settings_file.path
+    calls = _track_runtime_config_resolution(monkeypatch)
+    target = tmp_path / "chosen models"
+    real_save = gui.save_app_config
+    attempts = []
+    outcomes = []
+    monkeypatch.setattr("pixelup.backup_store.record", lambda *_: None)
+    assert flush_records(5)
+
+    def disconnect_once(*args):
+        attempts.append(args[0])
+        if len(attempts) == 1:
+            unavailable.replace()
+        return real_save(*args)
+
+    monkeypatch.setattr(gui, "save_app_config", disconnect_once)
+    try:
+        window._save_models_folder(str(target), outcomes.append)
+        _settle_config(window)
+
+        assert outcomes == [Message("settings.saveFailed")]
+        assert calls == []
+        assert window.config is original
+        assert window._unsaved_config_changes == {"models_folder": str(target)}
+        assert not window.model_manager.folder_change_pending
+        assert not window.model_manager.operations
+        unavailable.restore()
+
+        window._save_models_folder(str(target), outcomes.append)
+        _settle_config(window)
+        _settle_models(window)
+
+        assert outcomes == [Message("settings.saveFailed"), None]
+        assert calls == []
+        assert len(attempts) >= 2
+        assert all(candidate.models_folder == str(target) for candidate in attempts)
+        assert window.config.models_folder == str(target)
+        assert window.model_manager.models_dir == target
+        assert not window.model_manager.folder_change_pending
+        assert not window._unsaved_config_changes
+        assert load_app_config(accepted_path).models_folder == str(target)
+    finally:
+        unavailable.restore()
+
+
+@pytest.mark.parametrize("os_ending", [False, True])
+def test_failed_quit_save_settles_without_resolving_the_unavailable_root(
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quit_bound, os_ending: bool
+) -> None:
+    window = make_window()
+    unavailable = _isolate_settings_root(window, tmp_path, monkeypatch)
+    calls = _track_runtime_config_resolution(monkeypatch)
+    original = window.config
+    real_save = gui.save_app_config
+    dialog = _ChoicesDialog(["cancel"])
+    monkeypatch.setattr(gui, "QuitSaveFailedDialog", _never if os_ending else dialog)
+    monkeypatch.setattr("pixelup.backup_store.record", lambda *_: None)
+    window._is_session_shutdown = lambda: os_ending
+    assert flush_records(5)
+
+    def disconnect_before_save(*args):
+        unavailable.replace()
+        return real_save(*args)
+
+    monkeypatch.setattr(gui, "save_app_config", disconnect_before_save)
+    window.quality.setValue(73)
+    try:
+        event = QCloseEvent()
+        window.closeEvent(event)
+        _settle_config(window)
+
+        assert calls == []
+        assert window.config is original
+        assert window.current_job_settings().quality == 73
+        assert window._unsaved_config_changes["parameters"].quality == 73
+        assert quit_bound.exits == 0
+        if os_ending:
+            assert event.isAccepted()
+            assert window._os_close_accepted
+            assert quit_bound.started == [gui.QUIT_BUDGET_S]
+            assert dialog.shown == 0
+        else:
+            assert not event.isAccepted()
+            assert dialog.shown == 1
+            assert not window._closing
+            assert not window.runner._shutting_down
+            assert quit_bound.started == []
+            assert window.parameters_result.message_label.text() == english().of(
+                Message("parameters.saveFailed")
+            )
+    finally:
+        unavailable.restore()
+        monkeypatch.setattr(gui, "save_app_config", real_save)
+
+
 def test_close_waits_for_worker_ownership_to_end(
     make_window,
     monkeypatch: pytest.MonkeyPatch,
@@ -1457,45 +1657,47 @@ def test_a_user_quit_waits_for_running_work_only_until_the_bound(
         "QuitConfirmDialog",
         lambda *_: SimpleNamespace(exec=lambda: QDialog.DialogCode.Accepted),
     )
-    monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: False)
     notices: list[object] = []
     monkeypatch.setattr(gui, "warn_jobs_stopping", notices.append)
 
-    event = QCloseEvent()
-    window.closeEvent(event)
-    _settle_config(window)
+    with monkeypatch.context() as running_work:
+        running_work.setattr(window.runner, "cleanup_for_quit", lambda: False)
+        event = QCloseEvent()
+        window.closeEvent(event)
+        _settle_config(window)
 
-    # The quit is under way and bounded; the window waits for the worker.
-    assert event.isAccepted() is False
-    assert window._quit_when_workers_idle is True
-    assert notices == [window]
-    assert quit_bound.started == [gui.QUIT_BUDGET_S]
-    assert quit_bound.exits == 0
+        # The quit is under way and bounded; the window waits for the worker.
+        assert event.isAccepted() is False
+        assert window._quit_when_workers_idle is True
+        assert notices == [window]
+        assert quit_bound.started == [gui.QUIT_BUDGET_S]
+        assert quit_bound.exits == 0
 
-    quit_bound.expire()
+        quit_bound.expire()
 
-    assert quit_bound.exits == 1
-    deadline = time.monotonic() + 5
-    while not _fields(caplog, "quit.forced_exit"):
-        assert time.monotonic() < deadline
-        threading.Event().wait(0.001)
-    [forced] = _fields(caplog, "quit.forced_exit")
-    assert forced["running_jobs"] == [
-        {"job_id": window.jobs[0].id, "output": str(window.jobs[0].output_path)}
-    ]
+        assert quit_bound.exits == 1
+        deadline = time.monotonic() + 5
+        while not _fields(caplog, "quit.forced_exit"):
+            assert time.monotonic() < deadline
+            threading.Event().wait(0.001)
+        [forced] = _fields(caplog, "quit.forced_exit")
+        assert forced["running_jobs"] == [
+            {"job_id": window.jobs[0].id, "output": str(window.jobs[0].output_path)}
+        ]
 
 
 def test_the_bound_starts_once_however_often_the_quit_is_asked(
     make_window, monkeypatch: pytest.MonkeyPatch, quit_bound
 ) -> None:
     window = make_window()
-    monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: False)
     monkeypatch.setattr(gui, "warn_jobs_stopping", lambda _parent: None)
 
-    window.closeEvent(QCloseEvent())
-    window.closeEvent(QCloseEvent())
+    with monkeypatch.context() as running_work:
+        running_work.setattr(window.runner, "cleanup_for_quit", lambda: False)
+        window.closeEvent(QCloseEvent())
+        window.closeEvent(QCloseEvent())
 
-    assert quit_bound.started == [gui.QUIT_BUDGET_S]
+        assert quit_bound.started == [gui.QUIT_BUDGET_S]
 
 
 def test_an_os_session_end_never_asks_and_logs_the_failed_save(
@@ -1535,20 +1737,21 @@ def test_an_os_session_end_with_work_still_running_exits_rather_than_refusing(
     # Refusing the close would cancel a macOS logout, and waiting on would outlast
     # what the OS allows, so the worker is left to the exit.
     window = make_window()
-    monkeypatch.setattr(window.runner, "cleanup_for_quit", lambda: False)
     monkeypatch.setattr(gui, "warn_jobs_stopping", _never)
     window._is_session_shutdown = lambda: True
 
-    event = QCloseEvent()
-    window.closeEvent(event)
-    _settle_config(window)
+    with monkeypatch.context() as running_work:
+        running_work.setattr(window.runner, "cleanup_for_quit", lambda: False)
+        event = QCloseEvent()
+        window.closeEvent(event)
+        _settle_config(window)
 
-    assert event.isAccepted() is True
-    assert window._os_close_accepted is True
-    assert quit_bound.exits == 0
-    quit_bound.expire()
-    assert quit_bound.exits == 1
-    assert window._quit_when_workers_idle is False
+        assert event.isAccepted() is True
+        assert window._os_close_accepted is True
+        assert quit_bound.exits == 0
+        quit_bound.expire()
+        assert quit_bound.exits == 1
+        assert window._quit_when_workers_idle is False
 
 
 def test_a_quit_that_settles_in_time_never_forces_the_exit(make_window, quit_bound) -> None:
@@ -2900,3 +3103,395 @@ print('reads physically settled', flush=True)
     assert result.returncode == 0, result.stderr
     assert "read owned during quit" in result.stdout
     assert ("reads physically settled" in result.stdout) is settles
+
+
+@pytest.mark.parametrize("read_kind", ["listing", "historical_resolve", "retry_listing"])
+def test_output_planning_keeps_the_window_live_while_storage_is_held(
+    make_window, tmp_path, monkeypatch, process_until, read_kind
+):
+    window = make_window()
+    directory = tmp_path / "inputs"
+    directory.mkdir()
+    image = _png(directory, "image.png")
+    _open(window, [image])
+    model = "RealESRGAN_x4plus"
+    if read_kind == "retry_listing":
+        window._enqueue_jobs([image], [model])
+        _settle_models(window)
+        window.jobs[0].status = "failed"
+    historical = Job(
+        id=9000, input_path=tmp_path / "old-volume" / "old.png", model=model,
+        output_path=tmp_path / "old-volume" / "old-output.png", settings=JobSettings(),
+        status="succeeded",
+    )
+    if read_kind == "historical_resolve":
+        window.jobs.append(historical)
+    entered, release = threading.Event(), threading.Event()
+    readers = []
+    main_thread = threading.current_thread()
+    real_iterdir, real_resolve = Path.iterdir, Path.resolve
+
+    def hold():
+        readers.append(threading.current_thread())
+        entered.set()
+        # Preserve a deterministic baseline failure without deadlocking the test
+        # when the actual filesystem read incorrectly runs on the window thread.
+        if threading.current_thread() is not main_thread:
+            assert release.wait(5)
+
+    def iterdir(path):
+        if path == directory:
+            hold()
+        return real_iterdir(path)
+
+    def resolve(path, *args, **kwargs):
+        if path == historical.output_path:
+            hold()
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve" if read_kind == "historical_resolve" else "iterdir",
+                        resolve if read_kind == "historical_resolve" else iterdir)
+    try:
+        if read_kind == "retry_listing":
+            window._retry_failed()
+        else:
+            window._enqueue_jobs([image], [model])
+        process_until(entered.is_set, timeout_s=5, what="Held planning filesystem read")
+        assert readers[0] is not main_thread, "Output planning read storage on the window thread"
+        tick = threading.Event()
+        QTimer.singleShot(0, tick.set)
+        process_until(tick.is_set, timeout_s=5, what="Window callback during held planning")
+        if read_kind == "retry_listing":
+            assert window.jobs[0].status == "failed"
+        else:
+            assert all(job.input_path != image for job in window.jobs)
+    finally:
+        release.set()
+    process_until(
+        lambda: any(job.input_path == image and job.status == "pending" for job in window.jobs),
+        timeout_s=5, what="Adopted output plan",
+    )
+
+
+def test_failed_ready_request_does_not_drop_an_unrelated_ready_request(
+    make_window, tmp_path, monkeypatch, process_until, caplog
+):
+    window = make_window()
+    first, second = _png(tmp_path, "first.png"), _png(tmp_path, "second.png")
+    _open(window, [first, second])
+    monkeypatch.setattr(window.model_manager, "refresh_readiness", lambda: None)
+    real_create = gui.create_jobs
+
+    def create(**kwargs):
+        if kwargs["input_paths"] == [first]:
+            raise OSError("EACCES /private/PLANNING-SENTINEL")
+        return real_create(**kwargs)
+
+    monkeypatch.setattr(gui, "create_jobs", create)
+    window._enqueue_jobs([first], ["RealESRGAN_x4plus"])
+    window._enqueue_jobs([second], ["RealESRGAN_x4plus"])
+    window._model_manager_changed()
+    process_until(lambda: len(window.jobs) == 1, timeout_s=5, what="Unrelated ready request")
+    assert window.jobs[0].input_path == second
+    assert "PLANNING-SENTINEL" not in window.queue_action_result.message_label.text()
+    assert "could not be queued" in window.queue_action_result.message_label.text()
+    failures = [
+        record for record in caplog.records if record.getMessage() == "enqueue.planning_failed"
+    ]
+    assert len(failures) == 1
+    assert failures[0].exc_info is not None
+    assert "PLANNING-SENTINEL" in str(failures[0].exc_info[1])
+
+
+@pytest.fixture
+def held_output_listing(monkeypatch):
+    holds = []
+    real_iterdir = Path.iterdir
+
+    def hold(directory):
+        entered, release = threading.Event(), threading.Event()
+        holds.append((directory, entered, release))
+        return entered, release
+
+    def iterdir(path):
+        for directory, entered, release in holds:
+            if path == directory:
+                entered.set()
+                assert release.wait(5)
+        return real_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    yield hold
+    for _directory, _entered, release in holds:
+        release.set()
+
+
+def test_serial_planning_retains_settings_folder_and_bundle_reservations(
+    make_window, tmp_path, monkeypatch, process_until, held_output_listing
+):
+    window = make_window(injected=False)
+    image = _png(tmp_path, "image.png")
+    _open(window, [image])
+    accepted_dirs = window.runtime_dirs
+    settings = JobSettings(scale=2, quality=70)
+    monkeypatch.setattr(window, "current_job_settings", lambda: settings)
+    monkeypatch.setattr(window.model_manager, "refresh_readiness", lambda: None)
+    entered, release = held_output_listing(tmp_path)
+    model = "RealESRGAN_x4plus"
+    window._enqueue_jobs([image], [model])
+    window._enqueue_jobs([image], [model])
+    window._model_manager_changed()
+    process_until(entered.is_set, timeout_s=5, what="First serialized plan")
+    assert len(window._pending_job_plans) == 1
+    settings = JobSettings(scale=4, quality=95)
+    window._apply_saved_settings(
+        window.config, replace(window.config, models_folder=str(tmp_path / "new-models")),
+    )
+    assert window.runtime_dirs.models_dir != accepted_dirs.models_dir
+    release.set()
+    process_until(lambda: len(window.jobs) == 2, timeout_s=5, what="Both serialized plans")
+    assert [job.output_path.name for job in window.jobs] == [
+        "image-realesrgan-x4plus-2x.png", "image-realesrgan-x4plus-2x-2.png",
+    ]
+    assert all(job.settings == JobSettings(scale=2, quality=70, denoise_strength=1.0)
+               for job in window.jobs)
+    assert all(window.runner._queued_runtime_dirs[job.id] == accepted_dirs for job in window.jobs)
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_held_plan_cannot_revive_a_removed_and_reopened_image(
+    make_window, tmp_path, monkeypatch, process_until, held_output_listing, retry
+):
+    window = make_window()
+    first, second = _png(tmp_path, "first.png"), _png(tmp_path, "second.png")
+    _open(window, [first, second])
+    model = "RealESRGAN_x4plus"
+    if retry:
+        window._enqueue_jobs([first, second], [model])
+        _settle_models(window)
+        for job in window.jobs:
+            job.status = "failed"
+    old_entry = window._images_by_path[first]
+    entered, release = held_output_listing(tmp_path)
+    if retry:
+        window._retry_failed()
+    else:
+        window._enqueue_jobs([first, second], [model])
+    process_until(entered.is_set, timeout_s=5, what="Plan before image removal")
+    monkeypatch.setattr(window, "_selected_path", lambda: first)
+    window._remove_selected_image()
+    _open(window, [first])
+    assert window._images_by_path[first] is not old_entry
+    release.set()
+    _settle_models(window)
+    if retry:
+        assert [(job.input_path, job.status) for job in window.jobs] == [
+            (first, "failed"), (second, "pending"),
+        ]
+    else:
+        assert [job.input_path for job in window.jobs] == [second]
+
+
+def test_queue_cancel_abandons_plans_and_retains_the_physical_read(
+    make_window, tmp_path, monkeypatch, process_until, held_output_listing
+):
+    window = make_window()
+    image = _png(tmp_path, "image.png")
+    _open(window, [image])
+    monkeypatch.setattr(window.model_manager, "refresh_readiness", lambda: None)
+    entered, release = held_output_listing(tmp_path)
+    window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
+    window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
+    window._model_manager_changed()
+    process_until(entered.is_set, timeout_s=5, what="Plan before queue cancellation")
+    assert window.cancel_button.isEnabled()
+    window.cancel_button.click()
+    assert not window.cancel_button.isEnabled()
+    assert not window._planning_reads.settled
+    assert not window._pending_job_plans
+    release.set()
+    process_until(
+        lambda: window._planning_reads.settled, timeout_s=5, what="Cancelled physical read",
+    )
+    QApplication.processEvents()
+    assert window.jobs == []
+
+
+def test_quit_abandons_unstarted_plans_and_owns_the_held_read(
+    make_window, tmp_path, monkeypatch, process_until, held_output_listing, quit_bound
+):
+    window = make_window()
+    image = _png(tmp_path, "image.png")
+    _open(window, [image])
+    monkeypatch.setattr(window.model_manager, "refresh_readiness", lambda: None)
+    entered, release = held_output_listing(tmp_path)
+    window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
+    window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
+    window._model_manager_changed()
+    process_until(entered.is_set, timeout_s=5, what="Plan before quit")
+    window._is_session_shutdown = lambda: True
+    window.closeEvent(QCloseEvent())
+    assert not window._pending_job_plans
+    assert not window._workers_clean_for_quit()
+    assert quit_bound.started == [gui.QUIT_BUDGET_S]
+    release.set()
+    process_until(window._workers_clean_for_quit, timeout_s=5, what="Planning quit settlement")
+    assert window.jobs == []
+    assert quit_bound.exits == 0
+
+
+def test_planning_thread_start_failure_settles_one_request_and_continues(
+    make_window, tmp_path, monkeypatch, process_until, caplog
+):
+    window = make_window()
+    first, second = _png(tmp_path, "first.png"), _png(tmp_path, "second.png")
+    _open(window, [first, second])
+    monkeypatch.setattr(window.model_manager, "refresh_readiness", lambda: None)
+    real_start = threading.Thread.start
+    rejected = []
+
+    def start(thread):
+        if thread.name == "pixelup-plan" and not rejected:
+            rejected.append(thread)
+            raise RuntimeError("THREAD-START-SENTINEL")
+        return real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", start)
+    window._enqueue_jobs([first], ["RealESRGAN_x4plus"])
+    window._enqueue_jobs([second], ["RealESRGAN_x4plus"])
+    window._model_manager_changed()
+    process_until(
+        lambda: len(window.jobs) == 1, timeout_s=5, what="Plan after thread start failure",
+    )
+    assert window.jobs[0].input_path == second
+    assert "THREAD-START-SENTINEL" not in window.queue_action_result.message_label.text()
+    assert "See Records" in window.queue_action_result.message_label.text()
+    failures = [
+        record for record in caplog.records if record.getMessage() == "enqueue.planning_failed"
+    ]
+    assert len(failures) == 1
+    assert failures[0].exc_info[0] is RuntimeError
+    assert "THREAD-START-SENTINEL" in str(failures[0].exc_info[1])
+
+
+def test_historical_retry_is_not_revived_by_opening_and_removing_its_image(
+    make_window, tmp_path, monkeypatch, process_until, held_output_listing
+):
+    window = make_window()
+    image = _png(tmp_path, "historical.png")
+    _open(window, [image])
+    window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
+    _settle_models(window)
+    [job] = window.jobs
+    job.status = "failed"
+    monkeypatch.setattr(window, "_selected_path", lambda: image)
+    window._remove_selected_image()
+    assert image not in window._images_by_path
+    entered, release = held_output_listing(tmp_path)
+    window._retry_failed()
+    process_until(entered.is_set, timeout_s=5, what="Historical retry planning")
+    _open(window, [image])
+    window._remove_selected_image()
+    release.set()
+    _settle_models(window)
+    assert job.status == "failed"
+
+
+def test_historical_retry_survives_opening_its_image_during_planning(
+    make_window, tmp_path, monkeypatch, process_until, held_output_listing
+):
+    window = make_window()
+    image = _png(tmp_path, "historical.png")
+    _open(window, [image])
+    window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
+    _settle_models(window)
+    [job] = window.jobs
+    job.status = "failed"
+    monkeypatch.setattr(window, "_selected_path", lambda: image)
+    window._remove_selected_image()
+    entered, release = held_output_listing(tmp_path)
+    window._retry_failed()
+    process_until(entered.is_set, timeout_s=5, what="Historical retry before image opening")
+    _open(window, [image])
+    release.set()
+    _settle_models(window)
+    assert job.status == "pending"
+
+
+def test_queued_historical_retry_is_cancelled_by_opening_and_removing_its_image(
+    make_window, tmp_path, monkeypatch, process_until, held_output_listing
+):
+    window = make_window()
+    first_dir, historical_dir = tmp_path / "first", tmp_path / "historical"
+    first_dir.mkdir()
+    historical_dir.mkdir()
+    first = _png(first_dir, "first.png")
+    historical = _png(historical_dir, "historical.png")
+    _open(window, [first, historical])
+    model = "RealESRGAN_x4plus"
+    window._enqueue_jobs([historical], [model])
+    _settle_models(window)
+    [job] = window.jobs
+    job.status = "failed"
+    monkeypatch.setattr(window, "_selected_path", lambda: historical)
+    window._remove_selected_image()
+    monkeypatch.setattr(window.model_manager, "refresh_readiness", lambda: None)
+    entered, release = held_output_listing(first_dir)
+    window._enqueue_jobs([first], [model])
+    window._retry_failed()
+    window._model_manager_changed()
+    process_until(entered.is_set, timeout_s=5, what="Plan ahead of historical retry")
+    assert window._pending_job_plans[0].images == ((historical, None),)
+    _open(window, [historical])
+    window._remove_selected_image()
+    release.set()
+    _settle_models(window)
+    assert job.status == "failed"
+    assert [(item.input_path, item.status) for item in window.jobs] == [
+        (historical, "failed"), (first, "pending"),
+    ]
+
+
+def test_held_retry_limits_adoption_to_the_disclosed_failed_jobs(
+    make_window, tmp_path, process_until, held_output_listing
+):
+    window = make_window()
+    first, second = _png(tmp_path, "first.png"), _png(tmp_path, "second.png")
+    _open(window, [first, second])
+    window._enqueue_jobs([first, second], ["RealESRGAN_x4plus"])
+    _settle_models(window)
+    window.jobs[0].status = "failed"
+    entered, release = held_output_listing(tmp_path)
+    window._retry_failed()
+    process_until(entered.is_set, timeout_s=5, what="Disclosed retry planning")
+    window.jobs[1].status = "failed"
+    release.set()
+    _settle_models(window)
+    assert [job.status for job in window.jobs] == ["pending", "failed"]
+
+
+@pytest.mark.parametrize("retain_other_image", [False, True])
+def test_planning_failure_is_presented_only_for_retained_input_intent(
+    make_window, tmp_path, monkeypatch, process_until, held_output_listing, retain_other_image
+):
+    window = make_window()
+    first, second = _png(tmp_path, "first.png"), _png(tmp_path, "second.png")
+    _open(window, [first, second])
+    entered, release = held_output_listing(tmp_path)
+    real_create = gui.create_jobs
+
+    def create(**kwargs):
+        real_create(**kwargs)
+        raise OSError("STALE-PLAN-SENTINEL")
+
+    monkeypatch.setattr(gui, "create_jobs", create)
+    window._enqueue_jobs([first, second] if retain_other_image else [first],
+                         ["RealESRGAN_x4plus"])
+    process_until(entered.is_set, timeout_s=5, what="Plan before failure and removal")
+    monkeypatch.setattr(window, "_selected_path", lambda: first)
+    window._remove_selected_image()
+    release.set()
+    _settle_models(window)
+    assert window.jobs == []
+    assert window.queue_action_result.isHidden() is not retain_other_image
+    assert not window._removed_plan_inputs

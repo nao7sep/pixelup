@@ -18,6 +18,7 @@
   "actions.cancelQueue": "Annulla coda",
   "actions.needImages": "Apri o seleziona almeno un'immagine prima di accodare.",
   "actions.needModels": "Seleziona almeno un modello prima di accodare.",
+  "actions.queueFailed": "Non è stato possibile aggiungere queste immagini alla coda. Consulta il Registro per i dettagli, poi riprova.",
   "actions.queueAllAllModels": "Accoda tutte le immagini con tutti i modelli",
   "actions.queueAllSelectedModels": "Accoda tutte le immagini con i modelli selezionati",
   "actions.queueSelected": "Accoda l'immagine selezionata",

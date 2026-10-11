@@ -24,7 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Preserve photo orientation when stripping metadata, grayscale tonal range and indexed-image transparency; show oriented previews and dimensions.
 - Honour cancellation during image and sidecar writing, remove only the job's owned files and preserve committed results.
 - Accept literal braces in image paths and keep large-batch output planning proportional to the number of jobs.
+- Prepare queues in the background, preserve unrelated requests after a planning failure, and discard removed or cancelled requests before adoption.
+- Keep retry cancellation and quit ownership until each worker has stopped.
 - Keep landed settings saves successful when optional backups cannot start, and retain full save and backup diagnostics.
+- Complete save outcomes and failed-save choices when settings storage becomes unavailable, even if optional backup diagnostics fail.
 - Retain failed submitted settings for retry after their dialog closes, and apply landed settings when quitting is cancelled.
 - Preserve multiple queue requests while their models download, including each request's parameters; removing an image also removes its waiting requests.
 - Choose unused output names across image formats, including when an older image has no sidecar.

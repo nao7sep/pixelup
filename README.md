@@ -26,7 +26,9 @@ Managed models shows which pinned model files are ready and installs or repairs 
 
 Parameter edits save automatically. Settings changes save when you press OK; cancelling asks before discarding edits. If a saved setting cannot be used, PixelUp names it at startup and uses its default while preserving the saved value until you change that setting. Close PixelUp before editing its settings file by hand.
 
-Outputs never replace existing files. Each completed image has a JSON sidecar describing its processing settings and the source bytes used for that result. Cancelling before completion removes the job's image and sidecar; a forced quit can leave an image without its sidecar. Use Records to inspect warnings and errors from the session.
+Preparing a queue runs in the background, so a slow drive does not block the window. Cancel queue also cancels requests still being prepared. If images cannot be queued, the message points to Records for details before you retry.
+
+Outputs never replace existing files. Each completed image has a JSON sidecar describing its processing settings and the source bytes used for that result. Cancelling a job removes its unfinished image and sidecar; a completed result stays. A forced quit can leave an image without its sidecar. Use Records to inspect warnings and errors from the session.
 
 Photo orientation is applied to the pixels, including when metadata is removed. Transparent inputs keep their alpha in PNG and WebP; JPEG uses a white background. Unsigned 16-bit grayscale inputs are mapped across the model's 8-bit working range.
 
@@ -50,7 +52,7 @@ You can also pass image paths directly: `uv run pixelup image.png another.jpg`.
 
 ## Tests
 
-`uv run ruff check .` and `uv run pytest` are what to run after a change; the suite takes a few seconds. `uv run pytest -m "heavy or not heavy"` is the full gate: it also runs the heavy tests, which install every managed Real-ESRGAN model through PixelUp's own model manager, about 230 MB on the first run and kept in `.pytest_cache` afterwards, and upscale a photo from the shared test-fixture corpus with each model. The corpus lives in the company repository, which must be checked out beside this one.
+`uv run ruff check .` and `uv run pytest` are what to run after a change; the ordinary suite does not download models or run real inference. `uv run pytest -m "heavy or not heavy"` is the full gate: it also runs the heavy tests, which install every managed Real-ESRGAN model through PixelUp's own model manager, about 230 MB on the first run and kept in `.pytest_cache` afterwards, and upscale a photo from the shared test-fixture corpus with each model. The corpus lives in the company repository, which must be checked out beside this one.
 
 ## License
 

@@ -12,13 +12,14 @@ from __future__ import annotations
 import gc
 import json
 import re
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -127,7 +128,7 @@ def _png(directory: Path, name: str) -> Path:
 
 @pytest.fixture
 def window(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
 ) -> Iterator[MainWindow]:
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
@@ -145,18 +146,31 @@ def window(
             (models_dir / info.filename).write_bytes(b"ready")
     runtime_dirs = SimpleNamespace(models_dir=models_dir, temp_dir=tmp_path / "home" / "temp")
     main = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
-    _populate(main, tmp_path)
-    yield main
-    main._is_session_shutdown = lambda: True
-    main.close()
-    main.deleteLater()
+    try:
+        _populate(main, tmp_path)
+        yield main
+    finally:
+        # Setup can fail before yield. Retain the window and its test patches
+        # until every background owner has returned, including abandoned plans.
+        main._is_session_shutdown = lambda: True
+        main.close()
+        process_until(
+            main._workers_clean_for_quit, timeout_s=10, what="Interface fixture workers",
+        )
+        main.deleteLater()
+        qapp.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def _settle_models(window):
     import time
     deadline = time.monotonic() + 10
-    while not window.model_manager.readiness_known or window.model_manager._scan_in_flight:
-        assert time.monotonic() < deadline
+    while (
+        not window.model_manager.readiness_known or window.model_manager._scan_in_flight
+        or window._active_job_plan is not None or window._pending_job_plans
+        or not window._planning_reads.settled
+    ):
+        assert time.monotonic() < deadline, "model scan and job planning did not settle"
         QApplication.processEvents()
         time.sleep(0.001)
 
@@ -188,6 +202,64 @@ def _populate(main: MainWindow, directory: Path) -> None:
     main._remove_selected_image()
     main.queue_action_result.show_result(Message("actions.needModels"), severity="warning")
     main.parameters_result.show_result(Message("parameters.saveFailed"), severity="error")
+
+
+def test_population_failure_closes_window_after_planning_returns(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    from shiboken6 import isValid
+
+    from pixelup import gui
+
+    entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+    created: list[MainWindow] = []
+    disposed: list[tuple[bool, bool]] = []
+    real_create_jobs = gui.create_jobs
+
+    def held_plan(*args, **kwargs):
+        entered.set()
+        assert release.wait(5), "held interface plan was not released"
+        try:
+            return real_create_jobs(*args, **kwargs)
+        finally:
+            returned.set()
+
+    def failed_population(main: MainWindow, directory: Path) -> None:
+        created.append(main)
+        main.destroyed.connect(lambda *_: disposed.append(
+            (main._planning_reads.settled, not main.runner._threads)
+        ))
+        _settle_models(main)
+        _open(main, [_png(directory, "setup.png")])
+        main.model_checks[UPSCALE_MODELS[1]].setChecked(True)
+        main._queue_all_images_selected_models()
+        process_until(entered.is_set, timeout_s=5, what="Held interface plan")
+        QTimer.singleShot(0, release.set)
+        raise RuntimeError("injected interface population failure")
+
+    monkeypatch.setattr(gui, "create_jobs", held_plan)
+    monkeypatch.setitem(globals(), "_populate", failed_population)
+    setup = window.__wrapped__(qapp, tmp_path, monkeypatch, process_until)
+    try:
+        with pytest.raises(RuntimeError, match="injected interface population failure"):
+            next(setup)
+        assert returned.is_set()
+        assert disposed == [(True, True)]
+    finally:
+        # Keep a failing regression safe too: release and close any owner that
+        # the fixture under test failed to retire before its patches disappear.
+        release.set()
+        for main in created:
+            if isValid(main):
+                main._is_session_shutdown = lambda: True
+                main.close()
+                process_until(
+                    main._workers_clean_for_quit, timeout_s=10,
+                    what="Failed interface regression workers",
+                )
+                main.deleteLater()
+                qapp.processEvents()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def _dialogs(manager: ModelManager) -> list[QDialog]:

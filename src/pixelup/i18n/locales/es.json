@@ -18,6 +18,7 @@
   "actions.cancelQueue": "Cancelar cola",
   "actions.needImages": "Abre o selecciona al menos una imagen antes de poner trabajos en cola.",
   "actions.needModels": "Selecciona al menos un modelo antes de poner trabajos en cola.",
+  "actions.queueFailed": "No se pudieron añadir estas imágenes a la cola. Consulta Registros para ver los detalles y vuelve a intentarlo.",
   "actions.queueAllAllModels": "Poner en cola todas las imágenes con todos los modelos",
   "actions.queueAllSelectedModels": "Poner en cola todas las imágenes con los modelos seleccionados",
   "actions.queueSelected": "Poner en cola la imagen seleccionada",

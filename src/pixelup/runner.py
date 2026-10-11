@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
@@ -179,11 +180,17 @@ class JobRunner(QObject):
         super().__init__(parent)
         self._jobs = jobs
         self._threads: dict[int, tuple[QThread, JobWorker]] = {}
+        self._job_results: dict[int, tuple[bool, object, object, object]] = {}
         self._active_jobs = 0
         self._max_concurrent_jobs = 1
         self._shutting_down = False
         self._runtime_dirs = runtime_dirs
         self._queued_runtime_dirs: dict[int, RuntimeDirs | None] = {}
+
+    def retain_runtime_dirs(self, job_ids: Iterable[int], runtime_dirs: RuntimeDirs) -> None:
+        """Keep the folder accepted for newly enqueued or retried jobs."""
+        for job_id in job_ids:
+            self._queued_runtime_dirs[job_id] = runtime_dirs
 
     def set_runtime_dirs(self, runtime_dirs: RuntimeDirs) -> None:
         # Workers already running hold their own snapshot. Preserve the same
@@ -249,20 +256,9 @@ class JobRunner(QObject):
             log.info("quit.workers_still_stopping", count=len(entries))
             return False
 
-        # Only detach the window-facing routes after every worker has actually
-        # stopped. If one misses the deadline, the runner retains full ownership
-        # and its normal finished/thread-finished wiring until the final worker
-        # exits; the window can then retry closing through ``idle``.
-        for _thread, worker in entries:
-            for signal, slot in (
-                (worker.signals.progress, self.progress.emit),
-                (worker.signals.finished, self._job_finished),
-            ):
-                try:
-                    signal.disconnect(slot)
-                except (RuntimeError, TypeError):
-                    pass
-        self._threads.clear()
+        # wait() can finish while the main loop still holds queued result and
+        # thread-finished callbacks. Keep their routes and ownership intact so
+        # normal delivery publishes each outcome once if the window stays open.
         log.info("quit.workers_cleaned", count=len(entries))
         return True
 
@@ -284,15 +280,26 @@ class JobRunner(QObject):
         thread.started.connect(worker.run)
         worker.signals.progress.connect(self.progress.emit)
         worker.signals.finished.connect(self._job_finished)
-        worker.signals.finished.connect(thread.quit)
         worker.signals.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda job_id=job.id: self._thread_finished(job_id))
+        thread.setProperty("job_id", job.id)
+        thread.finished.connect(self._thread_finished)
         self._threads[job.id] = (thread, worker)
         thread.start()
 
-    def _thread_finished(self, job_id: int) -> None:
+    @Slot()
+    def _thread_finished(self) -> None:
+        thread = self.sender()
+        if not isinstance(thread, QThread):
+            return
+        job_id = int(thread.property("job_id"))
         self._threads.pop(job_id, None)
+        outcome = self._job_results.pop(job_id, None)
+        self._active_jobs = max(0, self._active_jobs - 1)
+        thread.deleteLater()
+        if outcome is not None:
+            self.finished.emit(job_id, *outcome)
+        if not self._shutting_down:
+            QTimer.singleShot(0, lambda: self.schedule(self._max_concurrent_jobs))
         if not self._threads:
             self.idle.emit()
 
@@ -305,10 +312,14 @@ class JobRunner(QObject):
         result: object,
         warnings: object,
     ) -> None:
-        self._active_jobs = max(0, self._active_jobs - 1)
-        self.finished.emit(job_id, ok, message, result, warnings)
-        if not self._shutting_down:
-            QTimer.singleShot(0, lambda: self.schedule(self._max_concurrent_jobs))
+        # A result emission precedes run() returning. Until the native thread
+        # ends it still owns this Job and a capacity slot; publishing a retryable
+        # failure earlier can let the same Job.id replace its live owner.
+        self._job_results[job_id] = (ok, message, result, warnings)
+        entry = self._threads.get(job_id)
+        if entry is not None:
+            thread, _worker = entry
+            thread.quit()
 
 
 _PHASE_KEYS = {

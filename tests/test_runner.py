@@ -4,21 +4,24 @@ import errno
 import os
 from itertools import count
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageChops, ImageStat
+from PySide6.QtCore import QObject, QThread, Slot
 from PySide6.QtWidgets import QApplication
 
 from pixelup.config import RuntimeDirs
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
-from pixelup.jobs import Job, JobSettings, create_jobs
+from pixelup.jobs import Job, JobSettings, create_jobs, retry_failed_jobs
 from pixelup.model_management import UPSCALE_MODELS
 from pixelup.output_reservation import PublishedFile
 from pixelup.runner import (
     JobRunner,
+    JobSignals,
     JobWorker,
     _progress_text,
     _tile_progress_text,
@@ -40,14 +43,10 @@ def test_tile_progress_text() -> None:
 
 # --- JobRunner scheduling -------------------------------------------------
 #
-# The scheduling decisions (concurrency cap, pending selection, reschedule on
-# finish) are tested without spinning real QThreads: _start_job is stubbed to do
-# only the bookkeeping a started job would, and finishes are simulated by calling
-# the real _job_finished. The reschedule it posts via QTimer.singleShot fires on
-# the main thread under qapp.processEvents — no worker thread, no real inference.
-# (Real-thread end-to-end runs are intentionally not driven here: rapid QThread
-# create/destroy under a pumped event loop is crash-prone, so the suite stays on
-# the deterministic main-thread path, the same choice the rest of the suite makes.)
+# Scheduling decisions use bookkeeping-only spawns and unstarted QThreads whose
+# finished signals can be driven directly. The lifecycle regressions below run
+# real QObject slots on native QThreads, with explicit gates holding result
+# emission and physical return. Neither path needs inference or model downloads.
 
 
 def _make_job(job_id: int, tmp_path: Path) -> Job:
@@ -60,12 +59,246 @@ def _make_job(job_id: int, tmp_path: Path) -> Job:
     )
 
 
+class _HeldResultWorker(QObject):
+    """A real Qt worker whose result can precede its native thread's return."""
+
+    def __init__(self, job: Job, runtime_dirs: RuntimeDirs | None = None) -> None:
+        super().__init__()
+        self.job = job
+        self.signals = JobSignals()
+        self.started = Event()
+        self.emit_result = Event()
+        self.allow_return = Event()
+        self.cancel_requested = False
+        self._runtime_dirs = runtime_dirs
+        self.native_thread: QThread | None = None
+
+    def request_cancel(self) -> None:
+        self.cancel_requested = True
+
+    @Slot()
+    def run(self) -> None:
+        self.native_thread = QThread.currentThread()
+        self.signals.progress.emit(self.job.id, Message("progress.upscaling"))
+        self.started.set()
+        self.emit_result.wait()
+        message = Message(
+            "queue.statusCancelled" if self.cancel_requested else "jobs.failedFallback",
+        )
+        result = {"cancelled": True} if self.cancel_requested else {"failed": True}
+        self.signals.finished.emit(
+            self.job.id, False, message, result, [],
+        )
+        self.allow_return.wait()
+
+
+class _ResultReceipt(QObject):
+    """Proves the worker result reached the main event loop before assertions."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.count = 0
+
+    @Slot(int, bool, object, object, object)
+    def receive(self, *args: object) -> None:
+        self.count += 1
+
+
+def _stop_held_workers(runner: JobRunner, workers: list[_HeldResultWorker], process_until) -> None:
+    # Keep native ownership even if an assertion exposed the old registry bug.
+    for worker in workers:
+        worker.emit_result.set()
+        worker.allow_return.set()
+    runner.cleanup_for_quit()
+    for worker in workers:
+        if worker.native_thread is not None:
+            try:
+                worker.native_thread.quit()
+                assert worker.native_thread.wait(5000)
+            except RuntimeError:
+                pass  # Qt already deleted a thread whose finish was delivered.
+    process_until(lambda: not runner._threads, timeout_s=5, what="Held workers teardown")
+
+
+def test_worker_result_keeps_terminal_state_and_capacity_until_thread_returns(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    jobs = [_make_job(i, tmp_path) for i in (1, 2)]
+    workers: list[_HeldResultWorker] = []
+    receipt = _ResultReceipt()
+
+    def make_worker(job: Job, runtime_dirs: RuntimeDirs | None = None) -> _HeldResultWorker:
+        worker = _HeldResultWorker(job, runtime_dirs)
+        worker.emit_result.set()
+        worker.signals.finished.connect(receipt.receive)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr("pixelup.runner.JobWorker", make_worker)
+    runner = JobRunner(jobs)
+    outcomes: list[tuple[object, ...]] = []
+    runner.finished.connect(lambda *args: outcomes.append(args))
+    runner.schedule(1)
+    try:
+        process_until(lambda: receipt.count == 1, timeout_s=5, what="Worker result receipt")
+
+        assert outcomes == []
+        assert jobs[0].status == "running"
+        assert jobs[1].status == "pending"
+        assert runner._active_jobs == 1
+        assert len(workers) == 1
+        assert runner._threads[1][1] is workers[0]
+        assert runner._threads[1][0].isRunning()
+
+        workers[0].allow_return.set()
+        process_until(lambda: len(workers) == 2, timeout_s=5, what="Freed job capacity")
+        assert len(outcomes) == 1
+        assert outcomes[0][0:2] == (1, False)
+        assert runner._active_jobs == 1
+        assert set(runner._threads) == {2}
+    finally:
+        _stop_held_workers(runner, workers, process_until)
+
+
+def test_retry_with_same_job_id_keeps_cancel_and_quit_owner(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    job = _make_job(1, tmp_path)
+    workers: list[_HeldResultWorker] = []
+    receipt = _ResultReceipt()
+
+    def make_worker(job: Job, runtime_dirs: RuntimeDirs | None = None) -> _HeldResultWorker:
+        worker = _HeldResultWorker(job, runtime_dirs)
+        if not workers:
+            worker.emit_result.set()
+        worker.signals.finished.connect(receipt.receive)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr("pixelup.runner.JobWorker", make_worker)
+    runner = JobRunner([job])
+    outcomes: list[tuple[object, ...]] = []
+    progress: list[tuple[object, ...]] = []
+    settled_before_retry: list[bool] = []
+    retry_ids: list[list[int]] = []
+    runner.progress.connect(lambda *args: progress.append(args))
+
+    def retry_after_failure(*outcome: object) -> None:
+        outcomes.append(outcome)
+        if len(outcomes) == 1:
+            settled_before_retry.append(not first_thread.isRunning())
+            job.status = "failed"
+            retry_ids.append(retry_failed_jobs([job]))
+            runner.schedule(1)
+
+    runner.finished.connect(retry_after_failure)
+    runner.schedule(1)
+    first_thread = runner._threads[job.id][0]
+    try:
+        process_until(lambda: receipt.count == 1, timeout_s=5, what="Failed worker result")
+        assert outcomes == []
+        workers[0].allow_return.set()
+        process_until(
+            lambda: len(workers) == 2 and workers[1].started.is_set()
+            and progress.count((job.id, Message("progress.upscaling"))) == 2,
+            timeout_s=5, what="Same-ID retry start",
+        )
+        assert len(outcomes) == 1
+        assert settled_before_retry == [True]
+        assert retry_ids == [[job.id]]
+        assert runner._threads[job.id][1] is workers[1]
+        assert runner._active_jobs == 1
+        assert progress.count((job.id, Message("progress.upscaling"))) == 2
+
+        runner.request_cancel(job.id)
+        assert workers[1].cancel_requested is True
+        workers[1].emit_result.set()
+        process_until(lambda: receipt.count == 2, timeout_s=5, what="Cancelled retry result")
+
+        assert runner.cleanup_for_quit() is False
+        assert runner._threads[job.id][1] is workers[1]
+        assert runner._threads[job.id][0].isRunning()
+        assert runner._active_jobs == 1
+        assert len(outcomes) == 1
+
+        workers[1].allow_return.set()
+        process_until(lambda: not runner._threads, timeout_s=5, what="Cancelled retry return")
+        assert outcomes[1] == (job.id, False, Message("queue.statusCancelled"),
+                               {"cancelled": True}, [])
+        assert len(outcomes) == 2
+        assert runner._job_results == {}
+        assert runner._active_jobs == 0
+        assert runner.cleanup_for_quit() is True
+    finally:
+        _stop_held_workers(runner, workers, process_until)
+
+
+def test_successful_quit_wait_preserves_queued_completion_once(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    workers: list[_HeldResultWorker] = []
+
+    def make_worker(job: Job, runtime_dirs: RuntimeDirs | None = None) -> _HeldResultWorker:
+        worker = _HeldResultWorker(job, runtime_dirs)
+        worker.emit_result.set()
+        worker.allow_return.set()
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr("pixelup.runner.JobWorker", make_worker)
+    runner = JobRunner([_make_job(1, tmp_path)])
+    outcomes: list[tuple[object, ...]] = []
+    runner.finished.connect(lambda *args: outcomes.append(args))
+    runner.schedule(1)
+    try:
+        # No main-loop pumping between start and wait: both Qt completions are
+        # queued while cleanup proves the native worker has already stopped.
+        assert runner.cleanup_for_quit() is True
+        assert outcomes == []
+        assert set(runner._threads) == {1}
+        assert runner._active_jobs == 1
+        process_until(lambda: not runner._threads, timeout_s=5, what="Queued quit completion")
+        assert len(outcomes) == 1
+        assert runner._job_results == {}
+        assert runner._active_jobs == 0
+        assert runner.cleanup_for_quit() is True
+        qapp.processEvents()
+        assert len(outcomes) == 1
+    finally:
+        _stop_held_workers(runner, workers, process_until)
+
+
+def test_admitted_jobs_replace_old_models_folder_capture(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    jobs = [_make_job(i, tmp_path) for i in (1, 2)]
+    workers: list[_HeldResultWorker] = []
+    original = RuntimeDirs(tmp_path / "original", tmp_path / "temp")
+    accepted = RuntimeDirs(tmp_path / "accepted", tmp_path / "temp")
+    replacement = RuntimeDirs(tmp_path / "replacement", tmp_path / "temp")
+
+    def make_worker(job: Job, runtime_dirs: RuntimeDirs | None = None) -> _HeldResultWorker:
+        worker = _HeldResultWorker(job, runtime_dirs)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr("pixelup.runner.JobWorker", make_worker)
+    runner = JobRunner(jobs, runtime_dirs=original)
+    runner.set_runtime_dirs(replacement)  # Captures original for existing pending jobs.
+    runner.retain_runtime_dirs((job.id for job in jobs), accepted)
+    runner.schedule(2)
+    try:
+        assert [worker._runtime_dirs for worker in workers] == [accepted, accepted]
+        assert runner._queued_runtime_dirs == {}
+    finally:
+        _stop_held_workers(runner, workers, process_until)
+
+
 class _RecordingRunner(JobRunner):
     """JobRunner whose thread spawn is replaced by bookkeeping only.
 
     Records the order jobs were started so the scheduling logic can be asserted
-    directly, while leaving schedule()/_next_pending_job()/_job_finished() — the
-    parts under test — completely real.
+    directly, while leaving scheduling and terminal delivery completely real.
     """
 
     def __init__(self, jobs: list[Job]) -> None:
@@ -77,6 +310,14 @@ class _RecordingRunner(JobRunner):
         job.message = "Starting"
         self._active_jobs += 1
         self.started_ids.append(job.id)
+        thread = QThread(self)
+        thread.setProperty("job_id", job.id)
+        thread.finished.connect(self._thread_finished)
+        self._threads[job.id] = (thread, _FakeWorker(job.id))  # type: ignore[assignment]
+
+    def finish(self, job_id: int, *outcome: object) -> None:
+        self._job_finished(job_id, *outcome)
+        self._threads[job_id][0].finished.emit()
 
 
 def test_schedule_caps_active_jobs(qapp: QApplication, tmp_path: Path) -> None:
@@ -100,7 +341,7 @@ def test_finishing_a_job_starts_the_next(qapp: QApplication, tmp_path: Path) -> 
     assert runner.started_ids == [1]
 
     for job_id in (1, 2, 3):
-        runner._job_finished(job_id, True, "Done", {"ok": True}, [])
+        runner.finish(job_id, True, "Done", {"ok": True}, [])
         qapp.processEvents()  # let the QTimer-posted reschedule run
 
     # Each finish pulled exactly the next pending job, one at a time.
@@ -112,7 +353,7 @@ def test_finishing_a_job_starts_the_next(qapp: QApplication, tmp_path: Path) -> 
 def test_reschedule_after_finish_refills_one_freed_slot(
     qapp: QApplication, tmp_path: Path
 ) -> None:
-    # The QTimer.singleShot(0, schedule) that _job_finished posts (runner.py) reads the *current*
+    # The QTimer.singleShot(0, schedule) that _thread_finished posts reads the *current*
     # _active_jobs and cap when it fires. With four jobs and a cap of two, finishing one frees
     # exactly one slot, so the reschedule must start exactly one more — not drain the whole queue.
     jobs = [_make_job(i, tmp_path) for i in range(1, 5)]
@@ -121,7 +362,7 @@ def test_reschedule_after_finish_refills_one_freed_slot(
     runner.schedule(2)
     assert runner.started_ids == [1, 2]
 
-    runner._job_finished(1, True, "Done", {"ok": True}, [])
+    runner.finish(1, True, "Done", {"ok": True}, [])
     qapp.processEvents()  # let the posted reschedule run
 
     assert runner.started_ids == [1, 2, 3]
@@ -135,6 +376,9 @@ def test_finished_emits_outcome_to_listeners(qapp: QApplication, tmp_path: Path)
 
     runner.schedule(1)
     runner._job_finished(1, False, "Cancelled", {"cancelled": True}, ["w"])
+    assert finished == []
+    assert runner._active_jobs == 1
+    runner._threads[1][0].finished.emit()
     qapp.processEvents()
 
     assert finished == [(1, False, "Cancelled", {"cancelled": True}, ["w"])]
@@ -152,7 +396,7 @@ def test_shutdown_cancels_pending_jobs_and_never_reschedules_them(
     assert runner.started_ids == [1]
 
     runner.begin_shutdown()
-    runner._job_finished(1, False, Message("queue.statusCancelled"), {"cancelled": True}, [])
+    runner.finish(1, False, Message("queue.statusCancelled"), {"cancelled": True}, [])
     qapp.processEvents()
     runner.schedule(3)
 
@@ -203,8 +447,7 @@ def test_request_cancel_for_unknown_job_is_a_noop(tmp_path: Path) -> None:
 
 
 def test_request_cancel_signals_the_running_worker(tmp_path: Path) -> None:
-    # When a job is live, request_cancel reaches its worker. Driven through a fake registry entry
-    # so the cancel routing is asserted without a real QThread (see the no-real-threads note above).
+    # The pure routing case is complemented by the real retry lifecycle below.
     runner = JobRunner([_make_job(1, tmp_path)])
     worker = _FakeWorker(1)
     runner._threads = {1: (SimpleNamespace(), worker)}  # type: ignore[dict-item]
@@ -216,26 +459,13 @@ def test_request_cancel_signals_the_running_worker(tmp_path: Path) -> None:
 
 # --- cleanup_for_quit teardown sequence -----------------------------------
 #
-# cleanup_for_quit coordinates the shutdown of live worker threads. Real threads
-# are not used (see note above); instead fakes stand in for the (thread, worker)
-# registry so the exact teardown contract can be asserted deterministically:
-# every worker is cancelled, the two UI-facing slots are disconnected (while the
-# finished -> quit -> deleteLater wiring is left intact), and each thread is quit
-# *before* it is waited on.
-
-
-class _FakeSignal:
-    def __init__(self) -> None:
-        self.disconnected: list[object] = []
-
-    def disconnect(self, slot: object) -> None:
-        self.disconnected.append(slot)
+# Fake native threads isolate the shared wait-budget ordering. Real gated workers
+# also prove that ownership and queued completion delivery survive these waits.
 
 
 class _FakeWorker:
     def __init__(self, job_id: int) -> None:
         self.job = SimpleNamespace(id=job_id)
-        self.signals = SimpleNamespace(progress=_FakeSignal(), finished=_FakeSignal())
         self.cancel_requested = False
 
     def request_cancel(self) -> None:
@@ -283,18 +513,14 @@ def test_cleanup_for_quit_teardown_sequence(_session_log: None) -> None:
 
     for worker in workers:
         assert worker.cancel_requested is True
-        # The finished slot disconnected is exactly _job_finished — the
-        # finished -> quit/deleteLater wiring is deliberately left connected.
-        assert worker.signals.finished.disconnected == [runner._job_finished]
-        # Progress is disconnected once (from runner.progress.emit).
-        assert len(worker.signals.progress.disconnected) == 1
 
     # Each thread is quit before it is waited on, within one shared 2s budget.
     for name in ("a", "b"):
         thread_calls = [call for call in calls if call[0] == name]
         assert [call[1].split(":")[0] for call in thread_calls] == ["quit", "wait"]
         assert 0 <= int(thread_calls[1][1].split(":")[1]) <= 2000
-    assert runner._threads == {}
+    # Native completion does not discard callbacks still queued on the main loop.
+    assert runner._threads == {1: (threads[0], workers[0]), 2: (threads[1], workers[1])}
 
 
 def test_cleanup_for_quit_retains_ownership_when_a_thread_is_still_running(
@@ -310,8 +536,6 @@ def test_cleanup_for_quit_retains_ownership_when_a_thread_is_still_running(
 
     assert runner._threads == {1: (thread, worker)}
     assert worker.cancel_requested is True
-    assert worker.signals.progress.disconnected == []
-    assert worker.signals.finished.disconnected == []
 
 
 def test_cleanup_for_quit_is_a_noop_without_threads(
@@ -325,15 +549,20 @@ def test_cleanup_for_quit_is_a_noop_without_threads(
     assert jobs[0].status == "cancelled"
 
 
-def test_thread_finished_releases_registry_and_emits_idle(tmp_path: Path) -> None:
+def test_thread_finished_releases_registry_and_emits_idle(qapp: QApplication) -> None:
     runner = JobRunner([])
-    runner._threads = {1: (SimpleNamespace(), _FakeWorker(1))}  # type: ignore[dict-item]
+    thread = QThread(runner)
+    thread.setProperty("job_id", 1)
+    thread.finished.connect(runner._thread_finished)
+    runner._threads = {1: (thread, _FakeWorker(1))}  # type: ignore[dict-item]
+    runner._active_jobs = 1
     idle: list[bool] = []
     runner.idle.connect(lambda: idle.append(True))
 
-    runner._thread_finished(1)
+    thread.finished.emit()
 
     assert runner._threads == {}
+    assert runner._active_jobs == 0
     assert idle == [True]
 
 
@@ -342,8 +571,7 @@ def test_thread_finished_releases_registry_and_emits_idle(tmp_path: Path) -> Non
 # Run the worker body directly on the main thread (no moveToThread / QThread) with
 # run_upscale + write_sidecar mocked, capturing the emitted signals. This covers
 # the success / cancelled / failed / unexpected-error branches and the progress
-# and cancel callback wiring — the part the real-thread harness can't reach
-# without segfaulting.
+# and cancel callback wiring independently of native thread dispatch.
 
 
 def _capture_worker(worker: JobWorker) -> tuple[list, list]:

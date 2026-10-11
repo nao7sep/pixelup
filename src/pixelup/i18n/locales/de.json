@@ -18,6 +18,7 @@
   "actions.cancelQueue": "Warteschlange abbrechen",
   "actions.needImages": "Öffnen oder wählen Sie mindestens ein Bild aus, bevor Sie Aufträge einreihen.",
   "actions.needModels": "Wählen Sie mindestens ein Modell aus, bevor Sie Aufträge einreihen.",
+  "actions.queueFailed": "Diese Bilder konnten nicht in die Warteschlange aufgenommen werden. Weitere Informationen finden Sie im Protokoll. Versuchen Sie es dann erneut.",
   "actions.queueAllAllModels": "Alle Bilder mit allen Modellen einreihen",
   "actions.queueAllSelectedModels": "Alle Bilder mit ausgewählten Modellen einreihen",
   "actions.queueSelected": "Ausgewähltes Bild einreihen",

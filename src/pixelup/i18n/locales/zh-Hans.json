@@ -18,6 +18,7 @@
   "actions.cancelQueue": "取消队列",
   "actions.needImages": "加入队列前，请至少打开或选择一张图像。",
   "actions.needModels": "加入队列前，请至少选择一个模型。",
+  "actions.queueFailed": "无法将这些图像加入队列。请查看日志了解详情，然后重试。",
   "actions.queueAllAllModels": "用所有模型将所有图像加入队列",
   "actions.queueAllSelectedModels": "用所选模型将所有图像加入队列",
   "actions.queueSelected": "将所选图像加入队列",

@@ -18,6 +18,7 @@
   "actions.cancelQueue": "Cancelar fila",
   "actions.needImages": "Abra ou selecione pelo menos uma imagem antes de adicionar à fila.",
   "actions.needModels": "Selecione pelo menos um modelo antes de adicionar à fila.",
+  "actions.queueFailed": "Não foi possível adicionar estas imagens à fila. Consulte os Registros para ver os detalhes e tente novamente.",
   "actions.queueAllAllModels": "Adicionar todas as imagens à fila com todos os modelos",
   "actions.queueAllSelectedModels": "Adicionar todas as imagens à fila com os modelos selecionados",
   "actions.queueSelected": "Adicionar a imagem selecionada à fila",

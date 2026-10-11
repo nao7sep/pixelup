@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ import pytest
 
 from pixelup.backup_store import STORE_FILE_NAME, close_backup_store, drain_backups, record
 from pixelup.config import write_managed_text
-from pixelup.session_log import configure_session_logging, flush_records
+from pixelup.session_log import _error_object, configure_session_logging, flush_records
 
 # How long a test waits on its own threads before it fails instead of hanging.
 _THREAD_WAIT_S = 10
@@ -391,6 +392,93 @@ def test_backup_failure_keeps_full_diagnostics_without_failing_the_primary_save(
     assert error["message"] == "backup storage failed"
     assert "ValueError: EIO /internal/backups ORIGINAL-BACKUP-SENTINEL" in error["traceback"]
     assert "in fail" in error["traceback"]
+
+
+@pytest.mark.parametrize("stage", ["open", "record"])
+@pytest.mark.parametrize("warning_fails", [False, True])
+def test_backup_failure_disables_and_drains_with_unavailable_root_or_failed_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, warning_fails: bool
+) -> None:
+    from pixelup import backup_store
+
+    home = _home(tmp_path, monkeypatch)
+    displaced = home.with_name(home.name + "-displaced")
+    target = home / "config.json"
+    entered, release = threading.Event(), threading.Event()
+    real_open = backup_store._open_store
+    warnings = []
+    recorder = backup_store._recorder
+
+    if stage == "record":
+        # The failed insert has an open real SQLite owner. Keep it off the volume
+        # being disconnected: Windows cannot rename a directory with open files.
+        store_owner = tmp_path / "open-backup-owner"
+        store_owner.mkdir()
+        monkeypatch.setattr(backup_store, "_store_file", lambda: store_owner / STORE_FILE_NAME)
+
+    def held_failure(*args):
+        entered.set()
+        assert release.wait(_THREAD_WAIT_S)
+        if stage == "open":
+            return real_open()
+        try:
+            raise OSError("EIO /internal/backups ORIGINAL-BACKUP-FAILURE-SENTINEL")
+        except OSError as cause:
+            raise RuntimeError("backup write failed") from cause
+
+    def warning(message, **fields):
+        exc_info = fields.get("exc_info")
+        error = _error_object(exc_info if isinstance(exc_info, tuple) else sys.exc_info())
+        warnings.append((message, fields, error))
+        assert not recorder._condition._is_owned()
+        if warning_fails:
+            raise RuntimeError("optional warning failed too")
+
+    monkeypatch.setattr(backup_store, "_open_store" if stage == "open" else "_write", held_failure)
+    monkeypatch.setattr(backup_store.log, "warning", warning)
+    try:
+        write_managed_text(target, "landed primary save\n")
+        assert entered.wait(_THREAD_WAIT_S)
+        record(target, b"newest pending version")
+        home.rename(displaced)
+        home.write_text("no longer a directory", encoding="utf-8")
+        release.set()
+        assert recorder._thread is not None
+        recorder._thread.join(_THREAD_WAIT_S)
+
+        assert not recorder._thread.is_alive()
+        assert recorder._disabled
+        assert not recorder._pending
+        assert not recorder._writing
+        assert drain_backups(0)
+        record(target, b"abandoned after failure")
+        assert not recorder._pending
+        assert (displaced / target.name).read_bytes() == b"landed primary save\n"
+        assert len(warnings) == 1
+        message, fields, error = warnings[0]
+        assert message == f"backup_store.{stage}_failed"
+        assert fields["file"] == str(target)
+        if stage == "open":
+            assert error["type"] == "PixelupError"
+            assert "FileExistsError" in error["traceback"]
+            assert str(home) in error["traceback"]
+        else:
+            assert error["type"] == "RuntimeError"
+            assert error["message"] == "backup write failed"
+            assert "OSError: EIO /internal/backups ORIGINAL-BACKUP-FAILURE-SENTINEL" in error[
+                "traceback"
+            ]
+    finally:
+        release.set()
+        if recorder._thread is not None:
+            recorder._thread.join(_THREAD_WAIT_S)
+        with recorder._condition:
+            recorder._disabled = True
+            recorder._pending.clear()
+            recorder._condition.notify_all()
+        if displaced.exists():
+            home.unlink()
+            displaced.rename(home)
 
 
 def test_store_sidecars_are_the_stores_own_wal_artifacts(

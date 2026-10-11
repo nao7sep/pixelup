@@ -18,6 +18,7 @@
   "actions.cancelQueue": "キューをキャンセル",
   "actions.needImages": "キューに追加する前に、画像を 1 枚以上開くか選択してください。",
   "actions.needModels": "キューに追加する前に、モデルを 1 つ以上選択してください。",
+  "actions.queueFailed": "これらの画像をキューに追加できませんでした。ログで詳細を確認してから、もう一度お試しください。",
   "actions.queueAllAllModels": "すべての画像をすべてのモデルでキューに追加",
   "actions.queueAllSelectedModels": "すべての画像を選択したモデルでキューに追加",
   "actions.queueSelected": "選択した画像をキューに追加",

@@ -18,6 +18,7 @@
   "actions.cancelQueue": "대기열 취소",
   "actions.needImages": "대기열에 추가하기 전에 이미지를 하나 이상 열거나 선택하십시오.",
   "actions.needModels": "대기열에 추가하기 전에 모델을 하나 이상 선택하십시오.",
+  "actions.queueFailed": "이 이미지들을 대기열에 추가하지 못했습니다. 로그에서 자세한 내용을 확인한 후 다시 시도하세요.",
   "actions.queueAllAllModels": "모든 이미지를 모든 모델로 대기열에 추가",
   "actions.queueAllSelectedModels": "모든 이미지를 선택한 모델로 대기열에 추가",
   "actions.queueSelected": "선택한 이미지를 대기열에 추가",
