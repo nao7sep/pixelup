@@ -20,8 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- Apply saved settings even when their dialog closes before the save finishes.
+- Retain failed submitted settings for retry after their dialog closes, and apply landed settings when quitting is cancelled.
 - Preserve multiple queue requests while their models download, including each request's parameters; removing an image also removes its waiting requests.
+- Choose unused output names across image formats, including when an older image has no sidecar.
+- Keep background reads owned through bounded quit and save newer parameter edits during OS shutdown when time permits.
 - Attempt cleanup of partial sidecars during forced quit and use exclusive output creation when hard links are unsupported, including Windows exFAT.
 
 ## [0.1.0] - 2026-07-08

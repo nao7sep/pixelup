@@ -21,6 +21,7 @@ from pixelup.jobs import (
     retry_failed_jobs,
     settings_for_model,
 )
+from pixelup.output_reservation import assert_output_bundle_available
 from pixelup.parameters import (
     DEFAULT_SCALE,
     DEFAULT_TILE,
@@ -30,6 +31,29 @@ from pixelup.parameters import (
     TILE_VALUES,
 )
 from pixelup.paths import OutputFormat
+
+
+@pytest.mark.parametrize("extension", ["png", "JPG", "jpeg", "webp", "json"])
+def test_create_and_retry_avoid_every_normalized_output_bundle_member(tmp_path, extension):
+    # An image may legitimately survive without its sidecar. Canonically
+    # equivalent Unicode names must agree with publication on Windows and Mac.
+    source = tmp_path / "cafe\u0301.png"
+    occupied = tmp_path / f"caf\u00e9-realesr-general-x4v3-4x.{extension}"
+    occupied.write_bytes(b"keep")
+    jobs = create_jobs(
+        input_paths=[source], models=["realesr-general-x4v3"],
+        settings=JobSettings(output_format=OutputFormat.WEBP),
+        existing_jobs=[], job_ids=count(1),
+    )
+    job = jobs[0]
+    assert job.output_path.stem.endswith("-2")
+    assert_output_bundle_available(job.output_path)
+    job.output_path.with_suffix(".PNG").write_bytes(b"partial bundle")
+    job.status = "failed"
+    assert retry_failed_jobs(jobs) == [job.id]
+    assert job.output_path.stem.endswith("-3")
+    assert_output_bundle_available(job.output_path)
+    assert occupied.read_bytes() == b"keep"
 
 
 def test_coerce_output_format_accepts_string_values() -> None:

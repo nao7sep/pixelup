@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass, replace
 from itertools import count
 from pathlib import Path
@@ -13,6 +12,7 @@ from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
 from pixelup.model_management import MANAGED_ARTIFACT_NAMES, artifact_size_bytes
 from pixelup.models import download_model, model_is_ready
+from pixelup.read_threads import ReadThreads
 from pixelup.session_log import log
 
 _DOWNLOAD_TIMEOUT_SECONDS = 600
@@ -139,6 +139,8 @@ class ModelManager(QObject):
     def __init__(self, models_dir: Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.models_dir = models_dir
+        self._reads = ReadThreads(self)
+        self._reads.idle.connect(self.idle)
         self._ready_names: frozenset[str] = frozenset()
         self.readiness_known = False
         self.folder_change_pending = False
@@ -260,12 +262,8 @@ class ModelManager(QObject):
         version = self._readiness_version
         if not self.readiness_known:
             self.changed.emit()
-        threading.Thread(
-            target=self._scan,
-            args=(self.models_dir, version),
-            name="pixelup-model-scan",
-            daemon=True,
-        ).start()
+        folder = self.models_dir
+        self._reads.start("pixelup-model-scan", lambda: self._scan(folder, version))
 
     def _scan(self, models_dir: Path, version: int) -> None:
         try:
@@ -312,7 +310,7 @@ class ModelManager(QObject):
             except RuntimeError:
                 pass  # The app exited while storage was unavailable.
 
-        threading.Thread(target=prepare, name="pixelup-model-folder", daemon=True).start()
+        self._reads.start("pixelup-model-folder", prepare)
 
     def install(self, artifact_names: tuple[str, ...], *, force: bool) -> int | None:
         if self._shutting_down or self.folder_change_pending:
@@ -432,10 +430,11 @@ class ModelManager(QObject):
 
     def begin_shutdown(self) -> None:
         self._shutting_down = True
+        self._reads.closing = True
         self.cancel_all()
 
     def cleanup_for_quit(self) -> bool:
-        return not self._threads and not self._pending
+        return not self._threads and not self._pending and self._reads.settled
 
     @Slot(int, str, int, int)
     def _show_progress(self, operation_id: int, name: str, done: int, total: int) -> None:

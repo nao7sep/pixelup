@@ -14,7 +14,11 @@ from PIL import Image
 from pixelup import imaging
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import SourceMetadata, save_output_image
-from pixelup.output_cleanup import _open_windows_output_handle, output_cleanup
+from pixelup.output_cleanup import (
+    _open_windows_output_handle,
+    open_output_handle,
+    output_cleanup,
+)
 from pixelup.paths import OutputFormat
 
 
@@ -69,6 +73,98 @@ def test_windows_owned_handles_use_delete_sharing_and_transfer_once(
     assert opened == [(native_path, access, 0x7, None, disposition, 0x80, None)]
     assert transferred == [(123, 0x8080)]
     assert closed == []  # descriptor owns the transferred handle
+
+
+@pytest.mark.parametrize("failure", ["create", "transfer", "transfer_and_close"])
+def test_windows_handle_failures_preserve_the_error_and_release_owned_claims(
+    tmp_path, monkeypatch, failure
+):
+    path = tmp_path / "output.tmp"
+    closed = []
+    primary = OSError("descriptor transfer failed")
+
+    class NativeCall:
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    def create(*args):
+        if failure == "create":
+            return ctypes.c_void_p(-1).value
+        path.write_bytes(b"owned claim")
+        return 123
+
+    def transfer(*args):
+        raise primary
+
+    kernel = SimpleNamespace(
+        CreateFileW=NativeCall(create),
+        CloseHandle=NativeCall(
+            lambda handle: closed.append(handle) or int(failure != "transfer_and_close")
+        ),
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_a, **_k: kernel, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(code, "native failure"),
+                        raising=False)
+    monkeypatch.setattr(os, "O_BINARY", 0x8000, raising=False)
+    monkeypatch.setattr(os, "O_NOINHERIT", 0x80, raising=False)
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(open_osfhandle=transfer))
+    if failure == "create":
+        path.write_bytes(b"existing output")
+    with pytest.raises(OSError) as caught:
+        _open_windows_output_handle(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    if failure == "create":
+        assert caught.value.errno == 5
+        assert closed == []
+        assert path.read_bytes() == b"existing output"
+    else:
+        assert caught.value is primary
+        assert closed == [123]
+        assert not path.exists()
+        if failure == "transfer_and_close":
+            assert any("Output handle close failed" in note for note in primary.__notes__)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows shared-delete handles")
+def test_native_windows_output_handle_is_exclusive_and_deletable_while_open(tmp_path):
+    path = tmp_path / "output.tmp"
+    descriptor = open_output_handle(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        os.write(descriptor, b"owned bytes")
+        assert not os.get_inheritable(descriptor)
+        with pytest.raises(FileExistsError):
+            open_output_handle(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        assert path.read_bytes() == b"owned bytes"
+        path.unlink()  # Must succeed before the live writer closes its handle.
+        os.write(descriptor, b"still owned")
+    finally:
+        os.close(descriptor)
+    assert not path.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows descriptor-transfer cleanup")
+def test_native_windows_transfer_failure_closes_handle_and_removes_only_new_claim(
+    tmp_path, monkeypatch
+):
+    import msvcrt
+
+    def fail(*args):
+        raise OSError("descriptor table full")
+
+    monkeypatch.setattr(msvcrt, "open_osfhandle", fail)
+    created = tmp_path / "new.tmp"
+    with pytest.raises(OSError, match="descriptor table full"):
+        open_output_handle(created, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    assert not created.exists()
+    existing = tmp_path / "existing.tmp"
+    existing.write_bytes(b"keep")
+    with pytest.raises(OSError, match="descriptor table full"):
+        open_output_handle(existing, os.O_RDONLY)
+    assert existing.read_bytes() == b"keep"
+    existing.unlink()  # No leaked native handle may prevent deletion.
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary output mode contract")

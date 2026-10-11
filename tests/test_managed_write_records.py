@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -148,3 +150,35 @@ def test_a_failed_write_leaves_the_original_and_no_temp_file(
 
     assert target.read_text(encoding="utf-8") == "original\n"
     assert list(home.glob("*.tmp")) == []
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS replacement permission contract")
+def test_macos_replaces_readonly_file_and_records_the_landed_bytes(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    target.write_text("original", encoding="utf-8")
+    target.chmod(0o400)
+    write_managed_text(target, "replacement")
+    assert target.read_text(encoding="utf-8") == "replacement"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o400
+    assert list(home.glob("*.tmp")) == []
+    assert [bytes(row[0]) for row in _store_rows(home, target)] == [b"replacement"]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS replacement permission contract")
+def test_failed_macos_mode_preservation_leaves_original_and_backup_history(
+    tmp_path, monkeypatch
+):
+    home = _home(tmp_path, monkeypatch)
+    target = home / "config.json"
+    write_managed_text(target, "original")
+
+    def fail(*args):
+        raise PermissionError("mode change denied")
+
+    monkeypatch.setattr("pixelup.config.os.chmod", fail)
+    with pytest.raises(PermissionError, match="mode change denied"):
+        write_managed_text(target, "replacement")
+    assert target.read_text(encoding="utf-8") == "original"
+    assert list(home.glob("*.tmp")) == []
+    assert [bytes(row[0]) for row in _store_rows(home, target)] == [b"original"]

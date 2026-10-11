@@ -208,3 +208,53 @@ def test_completed_install_readiness_does_not_wait_for_unrelated_install(
         process_until(lambda: manager.cleanup_for_quit() and manager.readiness_known,
                       timeout_s=5, what="The remaining installation")
         manager.deleteLater()
+
+
+def test_quit_tracks_a_stale_folder_scan_until_its_thread_returns(
+    qapp, tmp_path, monkeypatch, process_until
+):
+    entered, release = threading.Event(), threading.Event()
+    old, new = tmp_path / "old", tmp_path / "new"
+
+    def read(folder):
+        if folder == old:
+            entered.set()
+            assert release.wait(5)
+        return frozenset()
+
+    monkeypatch.setattr(model_manager, "read_ready_names", read)
+    manager = ModelManager(old)
+    try:
+        assert entered.wait(3)
+        manager.set_models_dir(new)
+        _settle(manager, process_until)
+        manager.begin_shutdown()
+        assert not manager.cleanup_for_quit()
+    finally:
+        release.set()
+    process_until(manager.cleanup_for_quit, timeout_s=5, what="Stale scan physical settlement")
+    manager.deleteLater()
+
+
+def test_quit_tracks_folder_reveal_preparation(qapp, tmp_path, monkeypatch, process_until):
+    manager = ModelManager(tmp_path)
+    _settle(manager, process_until)
+    entered, release = threading.Event(), threading.Event()
+    mkdir = Path.mkdir
+
+    def held_mkdir(path, *args, **kwargs):
+        if path == tmp_path:
+            entered.set()
+            assert release.wait(5)
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", held_mkdir)
+    try:
+        manager.prepare_folder_reveal()
+        assert entered.wait(3)
+        manager.begin_shutdown()
+        assert not manager.cleanup_for_quit()
+    finally:
+        release.set()
+    process_until(manager.cleanup_for_quit, timeout_s=5, what="Folder reveal settlement")
+    manager.deleteLater()

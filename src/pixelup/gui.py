@@ -7,7 +7,7 @@ import sys
 import threading
 from collections import defaultdict
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from itertools import count
 from pathlib import Path
 from typing import Literal
@@ -124,6 +124,7 @@ from pixelup.parameters import (
 from pixelup.parameters_help_dialog import ParametersHelpDialog
 from pixelup.paths import absolute_user_path
 from pixelup.quit_dialog import QuitConfirmDialog, QuitSaveFailedDialog
+from pixelup.read_threads import ReadThreads
 from pixelup.records_window import RecordsReads, RecordsWindow, records_reads, stored_signal
 from pixelup.runner import JobRunner
 from pixelup.session_end import os_session_ending
@@ -337,6 +338,7 @@ class ImagePreview(QLabel):
         self._request = 0
         self._loaded = _Loaded(self)
         self._loaded.ready.connect(self._show_loaded)
+        self.reads = ReadThreads(self)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # A 320x240 (4:3 QVGA) floor keeps the preview genuinely useful: a
         # scaled-down image is still large enough to judge upscale quality,
@@ -348,7 +350,7 @@ class ImagePreview(QLabel):
         return self._request != 0
 
     def set_image(self, path: Path | None) -> None:
-        if path == self._path:
+        if path == self._path or self.reads.closing:
             return
         self._path = path
         self._pixmap = None
@@ -359,15 +361,18 @@ class ImagePreview(QLabel):
             return
         self._request = next(_preview_requests)
         request = self._request
-        threading.Thread(
-            target=lambda: self._loaded.ready.emit(request, QImage(str(path))),
-            name="pixelup-preview",
-            daemon=True,
-        ).start()
+        def read() -> None:
+            image = QImage(str(path))
+            try:
+                self._loaded.ready.emit(request, image)
+            except RuntimeError:
+                pass  # A disposed preview cannot receive the obsolete result.
+
+        self.reads.start("pixelup-preview", read)
 
     @Slot(int, object)
     def _show_loaded(self, request: int, image: QImage) -> None:
-        if request != self._request:
+        if request != self._request or self.reads.closing:
             return
         self._request = 0
         self._pixmap = None if image.isNull() else QPixmap.fromImage(image)
@@ -414,6 +419,9 @@ class MainWindow(QMainWindow):
         self._config_save_callback: Callable[[Message | None], None] | None = None
         self._config_save_failure: Message | None = None
         self._config_save_pending: Callable[[], None] | None = None
+        # Submitted edits belong to the app until saved, even if their editor
+        # closes after a timeout or failure. Each editor replaces only its sets.
+        self._unsaved_config_changes: dict[str, object] = {}
         self._parameter_edit_generation = 0
         self._saving_parameter_generation = 0
         self._config_quarantined_to = load_result.quarantined_to
@@ -422,6 +430,8 @@ class MainWindow(QMainWindow):
         self._opens_pending = 0
         self._open_results = _Loaded(self)
         self._open_results.ready.connect(self._apply_opened)
+        self._open_reads = ReadThreads(self)
+        self._open_reads.idle.connect(self._close_when_workers_stop)
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. The blank
         # built-in resolves to the system UI font. setFont propagates app-wide, so
@@ -644,6 +654,7 @@ class MainWindow(QMainWindow):
         if self._is_session_shutdown():
             self._closing = True
             self._quit_ready = True
+            self._os_close_accepted = True
             self._bound_quit()
             self._dismiss_session_question()
             log.info("quit.session_shutdown")
@@ -738,6 +749,8 @@ class MainWindow(QMainWindow):
         if self._quit_bounded:
             return
         self._quit_bounded = True
+        self._open_reads.closing = True
+        self.preview.reads.closing = True
         _start_quit_watchdog(QUIT_BUDGET_S, self._force_exit)
 
     def _force_exit(self) -> None:
@@ -777,6 +790,8 @@ class MainWindow(QMainWindow):
     def _workers_clean_for_quit(self) -> bool:
         return (
             self._config_save is None
+            and self._open_reads.settled
+            and self.preview.reads.settled
             and output_cleanup.settled
             and self.runner.cleanup_for_quit()
             and self.model_manager.cleanup_for_quit()
@@ -788,15 +803,18 @@ class MainWindow(QMainWindow):
         a background thread, so a slow or stalled volume never freezes the window;
         the results are applied here, in the order the offer listed them."""
         log.info("open.requested", paths=[str(path) for path in paths])
-        if not paths:
+        if not paths or self._quit_bounded:
             return
         request = next(_open_requests)
         self._opens_pending += 1
-        threading.Thread(
-            target=lambda: self._open_results.ready.emit(request, _probe_open_paths(paths)),
-            name="pixelup-open",
-            daemon=True,
-        ).start()
+        def read() -> None:
+            probes = _probe_open_paths(paths)
+            try:
+                self._open_results.ready.emit(request, probes)
+            except RuntimeError:
+                pass  # An explicitly disposed window has abandoned this offer.
+
+        self._open_reads.start("pixelup-open", read)
 
     @property
     def opening(self) -> bool:
@@ -1025,6 +1043,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
         self.preview = ImagePreview()
+        self.preview.reads.idle.connect(self._close_when_workers_stop)
         layout.addWidget(self.preview, 1)
         return group
 
@@ -1327,7 +1346,8 @@ class MainWindow(QMainWindow):
             self.config,
             self,
             try_save=lambda candidate, finished, waiting: self._save_config_candidate(
-                candidate, Message("settings.saveFailed"), finished, waiting
+                candidate, Message("settings.saveFailed"), finished, waiting,
+                edited_sets=("font_family", "language", "max_concurrent_jobs"),
             ),
             session_shutdown=self._is_session_shutdown,
         )
@@ -1421,7 +1441,10 @@ class MainWindow(QMainWindow):
         if "\x00" in value:
             finished(Message("error.modelsDirCreateFailed"))
             return
-        if self._models_folder_locked or value == self.config.models_folder:
+        if self._models_folder_locked or (
+            value == self.config.models_folder
+            and "models_folder" not in self._unsaved_config_changes
+        ):
             finished(None)
             return
         if manager.in_progress_operations or manager.folder_change_pending:
@@ -1442,6 +1465,7 @@ class MainWindow(QMainWindow):
             self._save_config_candidate(
                 replace(self.config, models_folder=value),
                 Message("settings.saveFailed"), saved,
+                edited_sets=("models_folder",),
             )
 
         self._flush_parameters_save(finished=flushed)
@@ -1665,6 +1689,21 @@ class MainWindow(QMainWindow):
                 )
                 if not pending.input_paths:
                     continue
+            else:
+                ids = frozenset(
+                    job_id for job_id in pending.job_ids
+                    if self._find_job(job_id).input_path != path
+                )
+                if not ids:
+                    continue
+                required = tuple(dict.fromkeys(
+                    artifact for job_id in ids
+                    for artifact in required_artifact_names(
+                        (self._find_job(job_id).model,),
+                        denoise_strength=self._find_job(job_id).settings.denoise_strength,
+                    )
+                ))
+                pending = PendingRetry(job_ids=ids, required_artifacts=required)
             retained.append(pending)
         had_pending = bool(self._pending_model_work)
         self._pending_model_work = retained
@@ -1754,7 +1793,8 @@ class MainWindow(QMainWindow):
         waiting: Callable[[], None] | None = None,
     ) -> None:
         parameters = self.current_job_settings()
-        if parameters == self.config.parameters and self._config_save is None:
+        if (parameters == self.config.parameters and self._config_save is None
+                and not self._unsaved_config_changes):
             self.parameters_result.clear_result()
             if finished is not None:
                 finished(True)
@@ -1794,6 +1834,7 @@ class MainWindow(QMainWindow):
             Message("parameters.saveFailed"),
             saved,
             pending,
+            edited_sets=("parameters",),
         )
 
     def _save_config_candidate(
@@ -1802,10 +1843,28 @@ class MainWindow(QMainWindow):
         failed: Message,
         finished: Callable[[Message | None], None],
         waiting: Callable[[], None] | None = None,
+        *,
+        edited_sets: tuple[str, ...] | None = None,
     ) -> None:
         if self._config_save is not None:
             finished(Message("notice.configSaving"))
             return
+        if edited_sets is None:
+            edited_sets = tuple(
+                item.name for item in fields(AppConfig)
+                if getattr(candidate, item.name) != getattr(self.config, item.name)
+            )
+        changes = {
+            **self._unsaved_config_changes,
+            **{name: getattr(candidate, name) for name in edited_sets},
+        }
+        candidate = replace(self.config, **changes)
+        if candidate.models_folder != self.config.models_folder:
+            if self.model_manager.in_progress_operations:
+                finished(Message("managedModels.folderBusy"))
+                return
+            self.model_manager.folder_change_pending = True
+        self._unsaved_config_changes = changes
         file = self._settings_file
         operation = ConfigSave(
             candidate,
@@ -1854,14 +1913,24 @@ class MainWindow(QMainWindow):
             previous = self.config
             self._settings_file = outcome.result.file
             self.config = outcome.result.config
-            if not self._closing:
+            self._unsaved_config_changes.clear()
+            if not self._quit_bounded:
                 self._apply_saved_settings(previous, self.config)
+        if operation.candidate.models_folder != operation.previous.models_folder:
+            self.model_manager.folder_change_pending = False
         if self._parameter_edit_generation != self._saving_parameter_generation:
-            self._parameters_save_timer.start()
+            if self._os_close_accepted:
+                # Capture the latest visible edit before the idle check can end
+                # the event loop. A debounce cannot own work during OS takeover.
+                self._flush_parameters_save(surface_failure=False)
+            else:
+                self._parameters_save_timer.start()
         elif callback is None and failure is None:
             self.parameters_result.clear_result()
         if callback is not None:
             callback(failure)
+        if operation.candidate.models_folder != operation.previous.models_folder:
+            self.model_manager.changed.emit()
         operation.deleteLater()
         self._close_when_workers_stop()
 

@@ -19,8 +19,7 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.session_log import log
 
-_OUTPUT_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
-_BUNDLE_SUFFIXES = frozenset((*_OUTPUT_SUFFIXES, ".json"))
+BUNDLE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".json")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,14 +91,14 @@ def close_published_file(path: Path, descriptor: int) -> PublishedFile:
 
 
 def _bundle_entries(output_path: Path) -> list[Path]:
-    stem_identity = _text_identity(output_path.stem)
+    stem_identity = normalized_name(output_path.stem)
     try:
         with os.scandir(output_path.parent) as entries:
             return [
                 output_path.parent / entry.name
                 for entry in entries
-                if _text_identity(Path(entry.name).stem) == stem_identity
-                and _text_identity(Path(entry.name).suffix) in _BUNDLE_SUFFIXES
+                if normalized_name(Path(entry.name).stem) == stem_identity
+                and normalized_name(Path(entry.name).suffix) in BUNDLE_SUFFIXES
             ]
     except OSError as exc:
         raise PixelupError(
@@ -109,7 +108,8 @@ def _bundle_entries(output_path: Path) -> list[Path]:
         ) from exc
 
 
-def _text_identity(value: str) -> str:
+def normalized_name(value: str) -> str:
+    """The same filename identity for planning and publication on every volume."""
     return unicodedata.normalize("NFC", value).casefold()
 
 

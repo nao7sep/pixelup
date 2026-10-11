@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
+from pixelup.output_reservation import BUNDLE_SUFFIXES, normalized_name
 
 
 class OutputFormat(StrEnum):
@@ -97,11 +98,11 @@ class NamePlanCache:
         names = self.names.get(parent)
         if names is None:
             try:
-                names = frozenset(entry.name.casefold() for entry in parent.iterdir())
+                names = frozenset(normalized_name(entry.name) for entry in parent.iterdir())
             except (FileNotFoundError, NotADirectoryError):
                 names = frozenset()
             self.names[parent] = names
-        return path.name.casefold() in names
+        return normalized_name(path.name) in names
 
 
 def default_output_path(
@@ -120,7 +121,7 @@ def default_output_path(
     return collision_safe_path(
         directory / f"{stem}{suffix}",
         reserved=reserved,
-        companion_suffixes=(".json",),
+        companion_suffixes=BUNDLE_SUFFIXES,
         cache=cache,
     )
 
@@ -151,7 +152,7 @@ def collision_safe_path(
 
 
 def _collision_key(path: Path) -> str:
-    return str(path.expanduser().resolve()).casefold()
+    return normalized_name(str(path.expanduser().resolve()))
 
 
 def _bundle_is_free(

@@ -2459,3 +2459,267 @@ def test_first_download_uses_saved_choice_and_releases_captured_request(
     assert window.jobs[0].settings.scale == 3
     assert window.config.models_folder == str(target)
     assert not window._pending_model_work
+
+
+@pytest.mark.parametrize("setting", ["models_folder", "max_concurrent_jobs"])
+def test_landed_save_applies_while_quit_question_is_cancelled(
+    make_window, tmp_path, monkeypatch, setting
+):
+    window = make_window(injected=False)
+    entered, release = threading.Event(), threading.Event()
+    real_save = gui.save_app_config
+    value = str(tmp_path / "new") if setting == "models_folder" else 3
+
+    def delayed(*args):
+        entered.set()
+        assert release.wait(5)
+        return real_save(*args)
+
+    monkeypatch.setattr(gui, "save_app_config", delayed)
+    effects = []
+    real_apply = window._apply_saved_settings
+
+    def apply(previous, current):
+        effects.append(current)
+        real_apply(previous, current)
+
+    monkeypatch.setattr(window, "_apply_saved_settings", apply)
+    window._save_config_candidate(
+        replace(window.config, **{setting: value}), Message("settings.saveFailed"), lambda _: None
+    )
+    assert entered.wait(3)
+
+    class Question:
+        def __init__(self, parent):
+            pass
+
+        def choose(self):
+            assert window._closing and not window._quit_bounded
+            release.set()
+            _settle_config(window)
+            return "cancel"
+
+    monkeypatch.setattr(gui, "QuitSaveFailedDialog", Question)
+    try:
+        window.closeEvent(QCloseEvent())
+    finally:
+        release.set()
+    assert not window._closing
+    assert getattr(window.config, setting) == value
+    assert len(effects) == 1
+    if setting == "models_folder":
+        assert window.runtime_dirs.models_dir == Path(value)
+        assert window.model_manager.models_dir == Path(value)
+    assert not window._unsaved_config_changes
+
+
+@pytest.mark.parametrize("failure_during_quit", [False, True])
+def test_dismissed_folder_failure_is_retried_with_latest_parameters(
+    make_window, tmp_path, monkeypatch, failure_during_quit
+):
+    window = make_window(injected=False)
+    target = tmp_path / "chosen"
+    entered, release = threading.Event(), threading.Event()
+    real_save = gui.save_app_config
+    allow_save = False
+    attempts = []
+
+    def save(candidate, previous, file):
+        attempts.append(candidate)
+        if len(attempts) == 1:
+            entered.set()
+            assert release.wait(5)
+        if not allow_save:
+            raise OSError("save denied")
+        return real_save(candidate, previous, file)
+
+    monkeypatch.setattr(gui, "save_app_config", save)
+    window._managed_models_dialog()
+    _settle_models(window)
+    dialog = window._active_models_dialog
+    dialog.folder_edit.setText(str(target))
+    dialog.apply_folder_button.click()
+    assert entered.wait(3)
+    dialog.reject()
+    QApplication.processEvents()
+    if not failure_during_quit:
+        release.set()
+        _settle_config(window)
+    window.quality.setValue(73)
+    questions = []
+
+    class Question:
+        def __init__(self, parent):
+            pass
+
+        def choose(self):
+            nonlocal allow_save
+            questions.append(True)
+            release.set()
+            _settle_config(window)
+            allow_save = True
+            return "retry"
+
+    monkeypatch.setattr(gui, "QuitSaveFailedDialog", Question)
+    try:
+        window.closeEvent(QCloseEvent())
+        _settle_config(window)
+    finally:
+        release.set()
+    assert questions == [True]
+    assert load_app_config().models_folder == str(target)
+    assert load_app_config().parameters.quality == 73
+    assert window.runtime_dirs.models_dir == target
+    assert not window._unsaved_config_changes
+    assert attempts[-1].models_folder == str(target)
+
+
+def test_os_takeover_saves_newer_parameters_before_declaring_workers_clean(
+    make_window, monkeypatch, quit_bound
+):
+    window = make_window()
+    entered, release = threading.Event(), threading.Event()
+    real_save = gui.save_app_config
+    qualities = []
+
+    def save(candidate, previous, file):
+        qualities.append(candidate.parameters.quality)
+        if len(qualities) == 1:
+            entered.set()
+            assert release.wait(5)
+        return real_save(candidate, previous, file)
+
+    monkeypatch.setattr(gui, "save_app_config", save)
+    window.quality.setValue(61)
+    window._flush_parameters_save()
+    assert entered.wait(3)
+    window.quality.setValue(72)
+    window._is_session_shutdown = lambda: True
+    try:
+        window.closeEvent(QCloseEvent())
+        assert not window._workers_clean_for_quit()
+    finally:
+        release.set()
+    _settle_config(window)
+    assert qualities == [61, 72]
+    assert load_app_config().parameters.quality == 72
+    assert quit_bound.started == [gui.QUIT_BUDGET_S]
+
+
+def test_clean_os_close_skips_optional_backup_drain(make_window, monkeypatch, quit_bound):
+    window = make_window()
+    window._is_session_shutdown = lambda: True
+    window.closeEvent(QCloseEvent())
+    assert window._os_close_accepted
+    monkeypatch.setattr(gui, "build_app", lambda _: (SimpleNamespace(exec=lambda: 0), window))
+    monkeypatch.setattr(gui, "drain_backups", lambda _: pytest.fail("OS quit drained backups"))
+    monkeypatch.setattr(gui.logging, "shutdown", lambda: None)
+    assert gui.main() == 0
+
+
+def test_removed_image_drops_only_its_pending_retry_even_after_reopening(
+    make_window, tmp_path, monkeypatch
+):
+    window = make_window()
+    first, second = _png(tmp_path, "first.png"), _png(tmp_path, "second.png")
+    _open(window, [first, second])
+    model = "RealESRGAN_x4plus"
+    window._enqueue_jobs([first, second], [model])
+    _settle_models(window)
+    for job in window.jobs:
+        job.status = "failed"
+    model_file(window.runtime_dirs.models_dir, model).unlink()
+    window._retry_failed()
+    _settle_models(window)
+    monkeypatch.setattr(window, "_selected_path", lambda: first)
+    window._remove_selected_image()
+    _open(window, [first])
+    model_file(window.runtime_dirs.models_dir, model).write_bytes(b"ready")
+    window.model_manager.refresh_readiness()
+    _settle_models(window)
+    assert [job.status for job in window.jobs] == ["failed", "pending"]
+    assert not window._pending_model_work
+
+
+@pytest.mark.parametrize("kind", ["image_offer", "preview", "superseded_preview"])
+def test_quit_retains_background_reads_until_physical_return(
+    make_window, tmp_path, monkeypatch, process_until, quit_bound, kind
+):
+    window = make_window()
+    entered, release = threading.Event(), threading.Event()
+    if kind == "image_offer":
+        real_probe = gui._probe_open_paths
+
+        def probe(paths):
+            entered.set()
+            assert release.wait(5)
+            return real_probe(paths)
+
+        monkeypatch.setattr(gui, "_probe_open_paths", probe)
+        window.open_paths([tmp_path / "missing.png"])
+    else:
+        image = _png(tmp_path, "held.png")
+        real_image = gui.QImage
+
+        def decode(path):
+            if Path(path) == image:
+                entered.set()
+                assert release.wait(5)
+            return real_image(path)
+
+        monkeypatch.setattr(gui, "QImage", decode)
+        window.preview.set_image(image)
+        if kind == "superseded_preview":
+            window.preview.set_image(None)
+            assert not window.preview.loading
+    assert entered.wait(3)
+    window._is_session_shutdown = lambda: True
+    try:
+        window.closeEvent(QCloseEvent())
+        assert not window._workers_clean_for_quit()
+        assert quit_bound.started == [gui.QUIT_BUDGET_S]
+        assert window._os_close_accepted
+    finally:
+        release.set()
+    process_until(window._workers_clean_for_quit, timeout_s=5, what="Background read settlement")
+    assert quit_bound.exits == 0
+
+
+@pytest.mark.parametrize("settles", [True, False])
+def test_native_process_quit_owns_background_reads_until_settlement_or_bound(settles):
+    # Real Qt event loop and real Python thread in a disposable process. This
+    # exercises process teardown without sending a logout to the user's OS.
+    script = r'''
+import os
+import threading
+from pathlib import Path
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+from pixelup import gui
+app = QApplication([])
+window = gui.MainWindow(log_file=Path(os.environ['PIXELUP_DATA_DIR']) / 'test.log')
+entered, release = threading.Event(), threading.Event()
+def held_probe(paths):
+    entered.set()
+    release.wait()
+    return []
+gui._probe_open_paths = held_probe
+gui.QUIT_BUDGET_S = 0.25
+window.open_paths([Path('held.png')])
+assert entered.wait(3)
+window._is_session_shutdown = lambda: True
+window.close()
+assert not window._workers_clean_for_quit()
+print('read owned during quit', flush=True)
+if SETTLES:
+    QTimer.singleShot(20, release.set)
+app.exec()
+assert window._workers_clean_for_quit()
+print('reads physically settled', flush=True)
+'''.replace('SETTLES', repr(settles))
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "read owned during quit" in result.stdout
+    assert ("reads physically settled" in result.stdout) is settles
