@@ -57,8 +57,8 @@ class AppConfig:
     """Effective settings; ``config.json`` holds only the sets that differ from their
     built-ins, each whole (config-sets-conventions).
 
-    Two kinds of thing, one home each. The scalars are the Settings modal's whole
-    content — what the main window does not show. ``parameters`` is the main
+    Each set has one editor: general preferences in Settings, the models folder
+    in Managed models, and ``parameters`` in the main
     window's Parameters panel, persisted whole: the panel is the only place those
     values are edited, and ``JobSettings()`` is the only place their built-in
     defaults are written, so there is no second defaults layer to drift against.
@@ -70,6 +70,7 @@ class AppConfig:
     # (localization-conventions).
     language: str = SYSTEM
     parameters: JobSettings = field(default_factory=JobSettings)
+    models_folder: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +245,12 @@ def _decode_font_family(value: Any) -> str:
     return single_line(value)
 
 
+def _decode_models_folder(value: Any) -> str:
+    if not isinstance(value, str) or "\x00" in value:
+        raise ValueError("models_folder is not a path string")
+    return value
+
+
 def _decode_language(value: Any) -> str:
     if not is_preference(value):
         raise ValueError("language is not a recognized preference")
@@ -284,6 +291,7 @@ _SET_DECODERS: dict[str, Callable[[Any], Any]] = {
     "language": _decode_language,
     "max_concurrent_jobs": _decode_max_concurrent_jobs,
     "parameters": _decode_parameters,
+    "models_folder": _decode_models_folder,
 }
 
 
@@ -329,6 +337,7 @@ def _to_json(config: AppConfig) -> dict[str, Any]:
         "language": config.language,
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "parameters": _parameters_to_json(config.parameters),
+        "models_folder": config.models_folder,
     }
 
 
@@ -352,4 +361,5 @@ def config_log_payload(config: AppConfig) -> dict[str, object]:
         "font_family": config.font_family,
         "language": config.language,
         "parameters": job_settings_log_payload(config.parameters),
+        "models_folder": config.models_folder,
     }

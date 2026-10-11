@@ -134,13 +134,16 @@ class ModelManager(QObject):
     idle = Signal()
     cancelled = Signal(object)
     _scanned = Signal(int, object)
+    folder_available = Signal(object, bool)
 
     def __init__(self, models_dir: Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.models_dir = models_dir
-        self._ready_names = read_ready_names(models_dir)
-        # Bumped whenever the ready names are set, so a background scan that
-        # started before a newer read applies nothing.
+        self._ready_names: frozenset[str] = frozenset()
+        self.readiness_known = False
+        self.folder_change_pending = False
+        # Each new scan or folder replaces the generation; an older answer
+        # can never overwrite the current folder or action-boundary check.
         self._readiness_version = 0
         self._scan_in_flight = False
         self._scan_again = False
@@ -154,6 +157,7 @@ class ModelManager(QObject):
         # each has an already-visible "queued" operation in self._operations.
         self._pending: dict[int, tuple[tuple[str, ...], bool]] = {}
         self._shutting_down = False
+        self.rescan()
 
     @property
     def operations(self) -> tuple[ModelOperation, ...]:
@@ -227,25 +231,35 @@ class ModelManager(QObject):
         )
 
     def refresh_readiness(self) -> None:
-        if self._set_ready_names(read_ready_names(self.models_dir)):
-            self.changed.emit()
+        self.readiness_known = False
+        self.rescan(force=True)
 
-    def rescan(self) -> None:
-        """Re-check the models folder off the UI thread, for files placed there by hand.
+    def set_models_dir(self, models_dir: Path) -> None:
+        """Switch only between installations; existing files are never moved."""
+        if self.in_progress_operations:
+            raise RuntimeError("cannot change folder during model installation")
+        self.models_dir = models_dir
+        self._ready_names = frozenset()
+        self.readiness_known = False
+        self._operations.clear()
+        # A stalled old volume must not prevent scanning its replacement.
+        self._readiness_version += 1
+        self._scan_in_flight = False
+        self._scan_again = False
+        self.rescan()
 
-        A request while a scan runs is answered by one more scan after it. None
-        starts while an install is under way, since an install re-reads the folder
-        as each operation ends, nor once quitting has begun.
-        """
-        if self._shutting_down or self.in_progress_operations:
+    def rescan(self, *, force: bool = False) -> None:
+        """Read readiness off-thread; coalesce repeated requests for this folder."""
+        if self._shutting_down or (self.in_progress_operations and not force):
             return
-        if self._scan_in_flight:
+        if self._scan_in_flight and not force:
             self._scan_again = True
             return
         self._scan_in_flight = True
+        self._readiness_version += 1
         version = self._readiness_version
-        # A daemon thread, so quitting never waits on a folder that stalls; the
-        # answer arrives on the GUI thread through the queued signal.
+        if not self.readiness_known:
+            self.changed.emit()
         threading.Thread(
             target=self._scan,
             args=(self.models_dir, version),
@@ -254,36 +268,54 @@ class ModelManager(QObject):
         ).start()
 
     def _scan(self, models_dir: Path, version: int) -> None:
-        ready_names = read_ready_names(models_dir)
+        try:
+            ready_names = read_ready_names(models_dir)
+        except OSError:
+            log.exception("models.scan_failed", models_dir=str(models_dir))
+            ready_names = frozenset()
         try:
             self._scanned.emit(version, ready_names)
         except RuntimeError:
-            pass  # The manager was deleted while the scan ran; nothing waits for it.
+            pass  # The manager was deleted while the scan ran.
 
     @Slot(int, object)
     def _scan_finished(self, version: int, ready_names: frozenset[str]) -> None:
+        if version != self._readiness_version:
+            return
         self._scan_in_flight = False
-        current = (
-            version == self._readiness_version
-            and not self._shutting_down
-            and not self.in_progress_operations
-        )
-        if current and self._set_ready_names(ready_names):
-            self.changed.emit()
+        if not self._shutting_down:
+            changed = self._set_ready_names(ready_names) or not self.readiness_known
+            self.readiness_known = True
+            if changed:
+                self.changed.emit()
         if self._scan_again:
             self._scan_again = False
             self.rescan()
 
     def _set_ready_names(self, ready_names: frozenset[str]) -> bool:
-        """Record a read of the folder; whether the ready names changed."""
-        self._readiness_version += 1
-        if ready_names == self._ready_names:
-            return False
+        changed = ready_names != self._ready_names
         self._ready_names = ready_names
-        return True
+        return changed
+
+    def prepare_folder_reveal(self) -> None:
+        folder = self.models_dir
+
+        def prepare() -> None:
+            ok = True
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                log.exception("models.reveal_failed", models_dir=str(folder))
+                ok = False
+            try:
+                self.folder_available.emit(folder, ok)
+            except RuntimeError:
+                pass  # The app exited while storage was unavailable.
+
+        threading.Thread(target=prepare, name="pixelup-model-folder", daemon=True).start()
 
     def install(self, artifact_names: tuple[str, ...], *, force: bool) -> int | None:
-        if self._shutting_down:
+        if self._shutting_down or self.folder_change_pending:
             return None
         names = tuple(dict.fromkeys(artifact_names))
         if not names or self.in_progress_for(names):
@@ -340,7 +372,10 @@ class ModelManager(QObject):
         worker.progress.connect(self._show_progress)
         worker.finished.connect(self._worker_finished)
         thread.setProperty("operation_id", operation_id)
-        thread.finished.connect(worker.deleteLater)
+        # Queue destruction on the worker thread before asking that thread to
+        # quit. Keeping deletion until thread.finished races its native teardown
+        # against the manager releasing the last Python reference.
+        worker.finished.connect(worker.deleteLater)
         thread.finished.connect(self._thread_finished)
         self._threads[operation_id] = thread
         self._workers[operation_id] = worker
@@ -452,7 +487,7 @@ class ModelManager(QObject):
 
         # Concurrent operations publish disjoint artifacts atomically. Re-read the
         # shared cache at each operation boundary so every view sees partial success.
-        self._set_ready_names(read_ready_names(self.models_dir))
+        self.readiness_known = False
         operation = self._operations.get(operation_id)
         if operation is not None:
             if result is None:
@@ -502,5 +537,6 @@ class ModelManager(QObject):
             if operation.kind != "cancelled"
         }
         self.changed.emit()
+        self.refresh_readiness()
         if not self._threads:
             self.idle.emit()

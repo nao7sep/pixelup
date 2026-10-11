@@ -74,7 +74,7 @@ from pixelup.app_config import (
     save_app_config,
 )
 from pixelup.backup_store import drain_backups
-from pixelup.config import RuntimeDirs, resolve_runtime_dirs
+from pixelup.config import MODELS_ENV, RuntimeDirs, resolve_runtime_dirs, saved_models_dir
 from pixelup.config_save import ConfigSave, ConfigSaveOutcome
 from pixelup.devices import DEVICE_CHOICES
 from pixelup.errors import PixelupError, user_text
@@ -435,7 +435,13 @@ class MainWindow(QMainWindow):
         # window is first opened; the thread lasts until PixelUp quits.
         self._records_window: RecordsWindow | None = None
         self._records_reads: RecordsReads | None = None
-        self.runtime_dirs = runtime_dirs or resolve_runtime_dirs()
+        base_dirs = runtime_dirs or resolve_runtime_dirs()
+        self._models_folder_locked = runtime_dirs is not None or bool(os.environ.get(MODELS_ENV))
+        self._default_models_dir = base_dirs.models_dir
+        self.runtime_dirs = base_dirs if self._models_folder_locked else RuntimeDirs(
+            saved_models_dir(self.config.models_folder, base_dirs.models_dir),
+            base_dirs.temp_dir,
+        )
         self._job_ids = count(1)
         self._images_by_path: dict[Path, ImageEntry] = {}
         self._image_order: list[Path] = []
@@ -445,6 +451,7 @@ class MainWindow(QMainWindow):
         self.model_manager = ModelManager(self.runtime_dirs.models_dir, self)
         self._active_models_dialog: ManagedModelsDialog | None = None
         self._pending_model_work: list[PendingModelWork] = []
+        self._show_pending_models_after_scan = False
         self.jobs: list[Job] = []
         # Jobs are only ever appended, never removed, so these two indexes only need
         # updating where jobs are created (_materialize_jobs); every other job-state
@@ -1331,6 +1338,13 @@ class MainWindow(QMainWindow):
 
     def _apply_saved_settings(self, previous: AppConfig, current: AppConfig) -> None:
         """Make the settings a landed save changed take effect, whoever submitted it."""
+        if previous.models_folder != current.models_folder and not self._models_folder_locked:
+            self.runtime_dirs = RuntimeDirs(
+                saved_models_dir(current.models_folder, self._default_models_dir),
+                self.runtime_dirs.temp_dir,
+            )
+            self.runner.set_runtime_dirs(self.runtime_dirs)
+            self.model_manager.set_models_dir(self.runtime_dirs.models_dir)
         if (
             previous.font_family,
             previous.language,
@@ -1388,12 +1402,49 @@ class MainWindow(QMainWindow):
             self,
             required_artifacts=required_artifacts,
             pending_job_count=pending_job_count,
+            models_folder=self.config.models_folder,
+            session_shutdown=self._is_session_shutdown,
+            default_models_dir=self._default_models_dir,
+            folder_locked=self._models_folder_locked,
+            save_folder=self._save_models_folder,
         )
         self._active_models_dialog = dialog
         dialog.finished.connect(lambda _result: self._models_dialog_finished(dialog))
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _save_models_folder(
+        self, value: str, finished: Callable[[Message | None], None]
+    ) -> None:
+        manager = self.model_manager
+        if "\x00" in value:
+            finished(Message("error.modelsDirCreateFailed"))
+            return
+        if self._models_folder_locked or value == self.config.models_folder:
+            finished(None)
+            return
+        if manager.in_progress_operations or manager.folder_change_pending:
+            finished(Message("managedModels.folderBusy"))
+            return
+        manager.folder_change_pending = True
+        manager.changed.emit()
+
+        def saved(error: Message | None) -> None:
+            manager.folder_change_pending = False
+            finished(error)
+            manager.changed.emit()
+
+        def flushed(ok: bool) -> None:
+            if not ok or self._closing:
+                saved(Message("settings.saveFailed"))
+                return
+            self._save_config_candidate(
+                replace(self.config, models_folder=value),
+                Message("settings.saveFailed"), saved,
+            )
+
+        self._flush_parameters_save(finished=flushed)
 
     def _models_dialog_finished(self, dialog: ManagedModelsDialog) -> None:
         if self._active_models_dialog is dialog:
@@ -1410,13 +1461,18 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
     def _model_manager_changed(self) -> None:
+        if self._quit_bounded:
+            return
         self._refresh_model_rollup()
+        if not self.model_manager.readiness_known or self.model_manager.folder_change_pending:
+            return
         ready = [
             pending for pending in self._pending_model_work
             if not self.model_manager.in_progress_for(pending.required_artifacts)
             and not self.model_manager.missing(pending.required_artifacts)
         ]
         if not ready:
+            self._present_pending_models_after_scan()
             return
         # Retire the snapshots before any job or dialog callback can re-enter.
         self._pending_model_work = [
@@ -1430,6 +1486,13 @@ class MainWindow(QMainWindow):
                     self._materialize_jobs(input_paths, list(pending.models), pending.settings)
             else:
                 self._retry_failed_snapshot(pending.job_ids)
+        self._present_pending_models_after_scan()
+
+    def _present_pending_models_after_scan(self) -> None:
+        if self._show_pending_models_after_scan:
+            self._show_pending_models_after_scan = False
+            if self._pending_model_work:
+                self._open_pending_models_dialog()
 
     def _refresh_pending_models_dialog(self, *, accepted: bool) -> None:
         dialog = self._active_models_dialog
@@ -1851,19 +1914,16 @@ class MainWindow(QMainWindow):
             models,
             denoise_strength=settings.denoise_strength,
         )
+        self._preflight_models(PendingEnqueue(
+            input_paths=tuple(input_paths), models=tuple(models),
+            settings=settings, required_artifacts=required,
+        ))
+
+    def _preflight_models(self, pending: PendingModelWork) -> None:
+        self._pending_model_work.append(pending)
+        self._show_pending_models_after_scan = True
         self.model_manager.refresh_readiness()
-        missing = self.model_manager.missing(required)
-        if missing:
-            pending = PendingEnqueue(
-                input_paths=tuple(input_paths),
-                models=tuple(models),
-                settings=settings,
-                required_artifacts=required,
-            )
-            self._pending_model_work.append(pending)
-            self._open_pending_models_dialog()
-            return
-        self._materialize_jobs(input_paths, models, settings)
+
 
     def _materialize_jobs(
         self,
@@ -1952,17 +2012,10 @@ class MainWindow(QMainWindow):
                 )
             )
         )
-        self.model_manager.refresh_readiness()
-        missing = self.model_manager.missing(required)
-        if missing:
-            pending = PendingRetry(
-                job_ids=failed_job_ids,
-                required_artifacts=required,
-            )
-            self._pending_model_work.append(pending)
-            self._open_pending_models_dialog()
-            return
-        self._retry_failed_snapshot(failed_job_ids)
+        if failed_job_ids:
+            self._preflight_models(PendingRetry(
+                job_ids=failed_job_ids, required_artifacts=required,
+            ))
 
     def _retry_failed_snapshot(self, failed_job_ids: frozenset[int]) -> None:
         retried_jobs = retry_failed_jobs(self.jobs, only_job_ids=failed_job_ids)
@@ -2126,6 +2179,7 @@ _SET_LABELS = {
     "language": Message("settings.language"),
     "max_concurrent_jobs": Message("settings.concurrentJobs"),
     "parameters": Message("parameters.title"),
+    "models_folder": Message("managedModels.folder"),
 }
 _IMAGE_COLUMNS = ("images.columnImage", "images.columnSize", "images.columnJobs")
 _QUEUE_COLUMNS = (
@@ -2239,7 +2293,6 @@ def build_app(
     # first frame are both already in the reader's language.
     settle_language()
     log_file = configure_session_logging()
-    resolved_runtime_dirs = runtime_dirs if runtime_dirs is not None else resolve_runtime_dirs()
     app = QApplication.instance() or QApplication(argv)
     localizer.sync_qt_translation()
     if "Fusion" in QStyleFactory.keys():
@@ -2272,7 +2325,7 @@ def build_app(
     app.setApplicationDisplayName("PixelUp")
     # No custom macOS menu bar: PixelUp keeps Qt's default, which has no Edit menu, so the
     # Edit menu's Emoji & Symbols and Start Dictation items are absent. Its one free-text
-    # field, the font family in Settings, does not justify what a working Edit menu costs
+    # fields in Settings and Managed models do not justify what a working Edit menu costs
     # under Qt: Qt disables the shared bar while a modal dialog is open, so every dialog
     # would need its own copy. A developer-approved exception to the fleet menu bar
     # contract; do not propose adding one.
@@ -2282,6 +2335,7 @@ def build_app(
         icon_path = Path(__file__).parent / "resources" / "icon-win.png"
         if icon_path.is_file():
             app.setWindowIcon(QIcon(str(icon_path)))
+    window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
     log.info(
         "app.started",
         version=__version__,
@@ -2289,13 +2343,12 @@ def build_app(
         platform=sys.platform,
         log_file=str(log_file),
         runtime_dirs={
-            "models_dir": str(resolved_runtime_dirs.models_dir),
-            "temp_dir": str(resolved_runtime_dirs.temp_dir),
+            "models_dir": str(window.runtime_dirs.models_dir),
+            "temp_dir": str(window.runtime_dirs.temp_dir),
         },
         argv=argv[1:],
     )
 
-    window = MainWindow(log_file=log_file, runtime_dirs=resolved_runtime_dirs)
     window.show_prepared()
     paths = [Path(arg) for arg in argv[1:] if not arg.startswith("-")]
     if paths:

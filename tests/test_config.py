@@ -305,3 +305,19 @@ def test_a_failed_quarantine_move_releases_its_claimed_name(
         quarantine_corrupt_file(corrupt)
 
     assert [item.name for item in tmp_path.iterdir()] == ["config.json"]
+
+
+def test_saved_model_folder_is_literal_home_relative_and_never_resolves_disk(
+    tmp_path, monkeypatch
+):
+    from pixelup.config import saved_models_dir
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(Path, "resolve", lambda *a, **kw: pytest.fail("filesystem resolution"))
+    default = tmp_path / "default"
+    assert saved_models_dir("", default) == default
+    assert saved_models_dir("~/models", default) == tmp_path / "models"
+    assert saved_models_dir("relative/models", default) == tmp_path / "relative/models"
+    assert saved_models_dir("~literal/models", default) == tmp_path / "~literal/models"
+    literal = tmp_path / "$literal%PATH%"
+    assert saved_models_dir(str(literal), default) == literal

@@ -52,6 +52,14 @@ DISK_WARNING = Message.of("warning.extensionMismatch", extension="png", format="
 
 
 
+def _settle_models(window) -> None:
+    deadline = time.monotonic() + 10
+    while not window.model_manager.readiness_known or window.model_manager._scan_in_flight:
+        assert time.monotonic() < deadline, "models scan did not settle"
+        QApplication.processEvents()
+        time.sleep(0.001)
+
+
 def _settle_opens(window) -> None:
     import time as _time
 
@@ -120,7 +128,7 @@ def make_window(
 
     created: list[MainWindow] = []
 
-    def _make() -> MainWindow:
+    def _make(*, injected: bool = True) -> MainWindow:
         models_dir = tmp_path / "home" / "models"
         models_dir.mkdir(parents=True, exist_ok=True)
         for info in ALL_MODELS:
@@ -129,7 +137,8 @@ def make_window(
             models_dir=models_dir,
             temp_dir=tmp_path / "home" / "temp",
         )
-        window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
+        window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs if injected else None)
+        _settle_models(window)
         created.append(window)
         return window
 
@@ -300,6 +309,7 @@ def test_open_paths_preserves_literal_symlink_for_display_and_default_output(
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
 
+    _settle_models(window)
     assert window.jobs[0].input_path == chosen
     assert window.jobs[0].output_path.parent == chosen_dir
 
@@ -438,6 +448,7 @@ def test_queue_preconditions_stay_with_the_queue_actions_and_clear_on_correction
 
     window._enqueue_jobs([], ["realesr-general-x4v3"])
 
+    _settle_models(window)
     assert window.queue_action_result.isVisibleTo(window)
     assert "image" in window.queue_action_result.message_label.text()
     assert (
@@ -449,6 +460,7 @@ def test_queue_preconditions_stay_with_the_queue_actions_and_clear_on_correction
     assert window.queue_action_result.isHidden()
 
     window._enqueue_jobs([image], [])
+    _settle_models(window)
     assert window.queue_action_result.isVisibleTo(window)
     assert "model" in window.queue_action_result.message_label.text()
 
@@ -465,6 +477,7 @@ def test_image_in_use_failure_stays_with_remove_and_clears_when_work_finishes(
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
 
+    _settle_models(window)
     window._remove_selected_image()
 
     assert window.image_table.rowCount() == 1
@@ -528,6 +541,7 @@ def test_queue_selected_image_creates_rows_and_summary(make_window, tmp_path: Pa
 
     window._queue_selected_image()
 
+    _settle_models(window)
     assert len(window.jobs) == 2
     assert window.queue_table.rowCount() == 2
     assert window.queue_table.empty_state_visible is False
@@ -541,6 +555,7 @@ def test_job_finished_maps_outcomes_and_updates_summary(make_window, tmp_path: P
     _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
+    _settle_models(window)
     job = window.jobs[0]
 
     window._job_finished(job.id, True, DONE, {"ok": True}, [])
@@ -569,6 +584,7 @@ def test_job_finished_recomputes_only_its_own_images_summary(
     _open(window, [image_a, image_b])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_all_images_selected_models()
+    _settle_models(window)
     assert len(window.jobs) == 2
     job_a = next(job for job in window.jobs if job.input_path == image_a)
 
@@ -595,6 +611,7 @@ def test_find_job_uses_the_id_index_and_rejects_an_unknown_id(make_window, tmp_p
     _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
+    _settle_models(window)
     job = window.jobs[0]
 
     assert window._find_job(job.id) is job
@@ -614,6 +631,7 @@ def test_failed_jobs_keep_a_queue_local_accessible_summary_until_retry(
     window.model_checks["RealESRGAN_x4plus"].setChecked(True)
     window._queue_selected_image()
 
+    _settle_models(window)
     first, second = window.jobs
     window._job_finished(first.id, False, FAILED, {}, [])
 
@@ -631,6 +649,7 @@ def test_failed_jobs_keep_a_queue_local_accessible_summary_until_retry(
     assert announced == [window.queue_failure_result]
 
     window._retry_failed()
+    _settle_models(window)
     assert window.queue_failure_result.isHidden() is True
     assert window.queue_failure_result.accessibleName() == ""
 
@@ -747,6 +766,7 @@ def test_remove_is_blocked_while_jobs_active_then_allowed(make_window, tmp_path:
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
 
+    _settle_models(window)
     # A pending job still uses this image, so Remove is disabled.
     assert window.remove_image_button.isEnabled() is False
 
@@ -765,12 +785,14 @@ def test_retry_failed_requeues_jobs(make_window, tmp_path: Path) -> None:
     _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
+    _settle_models(window)
     job = window.jobs[0]
     window._job_finished(job.id, False, FAILED, {}, [])
     assert window.retry_button.isEnabled() is True
 
     window._retry_failed()
 
+    _settle_models(window)
     assert job.status == "pending"
     assert job.message is None
     assert window.retry_button.isEnabled() is False
@@ -784,6 +806,7 @@ def test_cancel_queue_marks_pending_and_signals_running(make_window, tmp_path: P
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window.model_checks["RealESRGAN_x4plus"].setChecked(True)
     window._queue_selected_image()
+    _settle_models(window)
     window.jobs[0].status = "running"
     window.jobs[1].status = "pending"
 
@@ -847,6 +870,7 @@ def test_missing_models_show_as_a_warning_line_under_the_button(make_window) -> 
 
     model_file(window.runtime_dirs.models_dir, "realesr-general-x4v3").unlink()
     window.model_manager.refresh_readiness()
+    _settle_models(window)
 
     assert window.manage_models_button.text() == "Managed models"
     assert window.manage_models_button.styleSheet() == ""
@@ -872,6 +896,7 @@ def test_coming_to_the_front_finds_a_model_file_placed_by_hand(
     content = path.read_bytes()
     path.unlink()
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     assert not window.model_status.isHidden()
 
     path.write_bytes(content)
@@ -907,6 +932,7 @@ def test_missing_models_cancel_before_queue_materialization(
     for name in ("realesr-general-x4v3", "realesr-general-wdn-x4v3"):
         model_file(window.runtime_dirs.models_dir, name).unlink()
     window._queue_selected_image()
+    _settle_models(window)
     dialog = window._active_models_dialog
     assert dialog is not None
     assert dialog._required_artifacts == (
@@ -936,6 +962,7 @@ def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
         model_file(window.runtime_dirs.models_dir, name).unlink()
 
     window._queue_selected_image()
+    _settle_models(window)
     assert window._pending_model_work
     assert window.jobs == []
     for name in required:
@@ -943,6 +970,7 @@ def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"ready")
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     qapp.processEvents()
 
     assert not window._pending_model_work
@@ -965,6 +993,7 @@ def test_install_and_queue_survives_closing_its_presentation(
     for name in required:
         model_file(window.runtime_dirs.models_dir, name).unlink()
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     started = threading.Event()
     release = threading.Event()
 
@@ -976,6 +1005,7 @@ def test_install_and_queue_survives_closing_its_presentation(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     window._queue_selected_image()
+    _settle_models(window)
     dialog = window._active_models_dialog
     assert dialog is not None
     dialog._install_all_or_cancel()
@@ -1013,6 +1043,7 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
     for name in required:
         model_file(window.runtime_dirs.models_dir, name).unlink()
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     started: set[str] = set()
     started_lock = threading.Lock()
     both_started = threading.Event()
@@ -1032,6 +1063,7 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", wait_for_cancel)
     window._queue_selected_image()
+    _settle_models(window)
     dialog = window._active_models_dialog
     assert dialog is not None
     dialog._install_all_or_cancel()
@@ -1060,6 +1092,7 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
     _open(window, [image])
     window.model_checks["RealESRGAN_x4plus"].setChecked(True)
     window._queue_selected_image()
+    _settle_models(window)
     job = window.jobs[0]
     job.status = "failed"
     job.message = Message("error.modelFileMissing")
@@ -1067,6 +1100,7 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
     model_file(window.runtime_dirs.models_dir, job.model).unlink()
 
     window._retry_failed()
+    _settle_models(window)
     dialog = window._active_models_dialog
     assert dialog is not None
     dialog.reject()
@@ -1371,6 +1405,7 @@ def test_a_user_quit_waits_for_running_work_only_until_the_bound(
     _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
+    _settle_models(window)
     window.jobs[0].status = "running"
     monkeypatch.setattr(
         gui,
@@ -1781,6 +1816,7 @@ def test_queued_jobs_keep_their_snapshot_when_the_panel_changes(
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window.tile.setCurrentIndex(window.tile.findData(128))
     window._queue_selected_image()
+    _settle_models(window)
     queued = window.jobs[0]
     assert queued.settings.tile == 128
 
@@ -1790,6 +1826,7 @@ def test_queued_jobs_keep_their_snapshot_when_the_panel_changes(
     assert queued.settings.tile == 128
     assert window.config.parameters.tile == 1024
     window._queue_selected_image()
+    _settle_models(window)
     assert window.jobs[1].settings.tile == 1024
 
 
@@ -1804,6 +1841,7 @@ def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_pat
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window.scale_buttons[2].click()
     window._queue_selected_image()
+    _settle_models(window)
     queued = window.jobs[0]
 
     assert queued.settings.scale == 2
@@ -1821,6 +1859,7 @@ def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_pat
 
     # The next job takes the panel as it now stands.
     window._queue_selected_image()
+    _settle_models(window)
     assert window.jobs[1].settings.scale == DEFAULT_SCALE
     assert window.queue_table.item(1, 2).text() == "4x"
 
@@ -2142,6 +2181,7 @@ def test_install_and_queue_skips_an_image_removed_while_models_downloaded(
         model_file(window.runtime_dirs.models_dir, name).unlink()
 
     window._queue_selected_image()
+    _settle_models(window)
     assert window._pending_model_work
     window._remove_selected_image()
     assert window.image_table.rowCount() == 0
@@ -2152,6 +2192,7 @@ def test_install_and_queue_skips_an_image_removed_while_models_downloaded(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"ready")
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     qapp.processEvents()
 
     assert not window._pending_model_work
@@ -2167,9 +2208,11 @@ def test_pending_requests_preserve_each_settings_snapshot(make_window, tmp_path,
     settings = JobSettings(scale=2)
     monkeypatch.setattr(window, "current_job_settings", lambda: settings)
     window._enqueue_jobs([first], [model])
+    _settle_models(window)
     dialog = window._active_models_dialog
     settings = JobSettings(scale=3)
     window._enqueue_jobs([second], [model])
+    _settle_models(window)
     settings = JobSettings(scale=4)
     assert window._active_models_dialog is dialog
     assert dialog._pending_job_count == 2
@@ -2177,6 +2220,7 @@ def test_pending_requests_preserve_each_settings_snapshot(make_window, tmp_path,
 
     model_file(window.runtime_dirs.models_dir, model).write_bytes(b"ready")
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     window._model_manager_changed()
     assert [(job.input_path, job.settings.scale) for job in window.jobs] == [
         (first, 2), (second, 3),
@@ -2191,18 +2235,22 @@ def test_ready_request_does_not_abandon_unrelated_pending_retry(make_window, tmp
     _open(window, [image])
     first, second = "RealESRGAN_x4plus", "RealESRGAN_x4plus_anime_6B"
     window._enqueue_jobs([image], [second])
+    _settle_models(window)
     retry = window.jobs[0]
     retry.status = "failed"
     for model in (first, second):
         model_file(window.runtime_dirs.models_dir, model).unlink()
     window._enqueue_jobs([image], [first])
+    _settle_models(window)
     window._retry_failed()
+    _settle_models(window)
     dialog = window._active_models_dialog
     assert dialog._pending_job_count == 2
     assert set(dialog._required_artifacts) == {first, second}
 
     model_file(window.runtime_dirs.models_dir, first).write_bytes(b"ready")
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     assert len(window.jobs) == 2
     assert retry.status == "failed"
     assert len(window._pending_model_work) == 1
@@ -2212,6 +2260,7 @@ def test_ready_request_does_not_abandon_unrelated_pending_retry(make_window, tmp
 
     model_file(window.runtime_dirs.models_dir, second).write_bytes(b"ready")
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     assert retry.status == "pending"
     assert len(window.jobs) == 2
     assert not window._pending_model_work
@@ -2226,6 +2275,7 @@ def test_cancelled_model_preserves_requests_for_other_models(make_window, tmp_pa
         model_file(window.runtime_dirs.models_dir, model).unlink()
     for model in (first, first, second):
         window._enqueue_jobs([image], [model])
+        _settle_models(window)
     dialog = window._active_models_dialog
     window._model_install_cancelled((first,))
     assert len(window._pending_model_work) == 1
@@ -2234,6 +2284,7 @@ def test_cancelled_model_preserves_requests_for_other_models(make_window, tmp_pa
     assert dialog._pending_job_count == 1
     model_file(window.runtime_dirs.models_dir, second).write_bytes(b"ready")
     window.model_manager.refresh_readiness()
+    _settle_models(window)
     assert [job.model for job in window.jobs] == [second]
 
 
@@ -2245,6 +2296,7 @@ def test_dismissal_keeps_only_requests_with_active_downloads(make_window, tmp_pa
     for model in (first, second):
         model_file(window.runtime_dirs.models_dir, model).unlink()
         window._enqueue_jobs([image], [model])
+        _settle_models(window)
     monkeypatch.setattr(
         window.model_manager, "in_progress_for", lambda names: (object(),) if first in names else ()
     )
@@ -2280,3 +2332,130 @@ raise RuntimeError('wait unexpectedly returned')
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["native wait entered", "watchdog expired"]
+
+
+def test_models_folder_save_applies_and_preserves_old_files(make_window, tmp_path):
+    window = make_window(injected=False)
+    old = window.runtime_dirs.models_dir
+    old_files = set(old.iterdir())
+    target = tmp_path / "new models"
+    outcomes = []
+    window._save_models_folder(str(target), outcomes.append)
+    _settle_config(window)
+    _settle_models(window)
+    assert outcomes == [None]
+    assert window.runtime_dirs.models_dir == target
+    assert window.model_manager.models_dir == target
+    assert window.runner._runtime_dirs.models_dir == target
+    assert load_app_config().models_folder == str(target)
+    assert set(old.iterdir()) == old_files
+    assert not target.exists()  # choosing a location is not a download
+    window._save_models_folder("", outcomes.append)
+    _settle_config(window)
+    _settle_models(window)
+    assert window.model_manager.models_dir == old
+    assert "models_folder" not in json.loads(config_path().read_text())
+
+
+def test_failed_folder_save_keeps_current_location_and_starts_no_install(
+    make_window, tmp_path, monkeypatch
+):
+    window = make_window(injected=False)
+    old = window.runtime_dirs.models_dir
+    window._managed_models_dialog()
+    _settle_models(window)
+    dialog = window._active_models_dialog
+    dialog.folder_edit.setText(str(tmp_path / "new"))
+    def fail(*args):
+        raise OSError("private failure details")
+    monkeypatch.setattr(gui, "save_app_config", fail)
+    dialog._install_bundle(0)
+    _settle_config(window)
+    assert window.runtime_dirs.models_dir == old
+    assert not window.model_manager.operations
+    assert not window.model_manager.folder_change_pending
+    assert dialog.result_view.isVisibleTo(dialog)
+    assert dialog._folder_error == Message("settings.saveFailed")
+    dialog.folder_edit.setText("")
+
+
+def test_late_folder_save_after_dialog_close_applies_without_starting_download(
+    make_window, tmp_path, monkeypatch
+):
+    window = make_window(injected=False)
+    entered, release = threading.Event(), threading.Event()
+    real_save = gui.save_app_config
+    def delayed(*args):
+        entered.set()
+        assert release.wait(5)
+        return real_save(*args)
+    monkeypatch.setattr(gui, "save_app_config", delayed)
+    window._managed_models_dialog()
+    _settle_models(window)
+    dialog = window._active_models_dialog
+    target = tmp_path / "new"
+    dialog.folder_edit.setText(str(target))
+    try:
+        dialog._install_bundle(0)
+        assert entered.wait(3)
+        assert window.model_manager.folder_change_pending
+        assert window.model_manager.install(("RealESRGAN_x4plus",), force=False) is None
+        dialog.reject()
+        QApplication.processEvents()
+    finally:
+        release.set()
+    _settle_config(window)
+    _settle_models(window)
+    assert window.runtime_dirs.models_dir == target
+    assert not window.model_manager.operations
+    assert not window.model_manager.folder_change_pending
+
+
+def test_saved_folder_load_and_environment_override(make_window, tmp_path, monkeypatch):
+    target = tmp_path / "saved models"
+    monkeypatch.setattr(gui, "load_app_config_result", lambda: ConfigLoadResult(
+        AppConfig(models_folder=str(target)), SettingsFile(config_path())
+    ))
+    window = make_window(injected=False)
+    assert window.runtime_dirs.models_dir == target
+    override = tmp_path / "override"
+    monkeypatch.setenv("PIXELUP_MODELS_DIR", str(override))
+    overridden = make_window(injected=False)
+    assert overridden.runtime_dirs.models_dir == override
+    assert overridden._models_folder_locked
+    results = []
+    overridden._save_models_folder(str(tmp_path / "ignored"), results.append)
+    assert results == [None]
+    assert overridden.config.models_folder == str(target)
+
+
+def test_first_download_uses_saved_choice_and_releases_captured_request(
+    make_window, tmp_path, monkeypatch, process_until
+):
+    window = make_window(injected=False)
+    image = _png(tmp_path, "input.png")
+    _open(window, [image])
+    model = "RealESRGAN_x4plus"
+    model_file(window.runtime_dirs.models_dir, model).unlink()
+    monkeypatch.setattr(window, "current_job_settings", lambda: JobSettings(scale=3))
+    window._enqueue_jobs([image], [model])
+    _settle_models(window)
+    dialog = window._active_models_dialog
+    assert dialog is not None
+    assert dialog.folder_edit.text() == ""
+    assert dialog.folder_edit.placeholderText() == str(window.runtime_dirs.models_dir)
+    target = tmp_path / "chosen"
+    downloads = []
+    def install(folder, name, **kwargs):
+        downloads.append((folder, name))
+        folder.mkdir(parents=True, exist_ok=True)
+        model_file(folder, name).write_bytes(b"model")
+    monkeypatch.setattr("pixelup.model_manager.download_model", install)
+    dialog.folder_edit.setText(str(target))
+    dialog._install_all_or_cancel()
+    process_until(lambda: len(window.jobs) == 1 and window.model_manager.cleanup_for_quit(),
+                  timeout_s=5, what="Saved-folder download and captured job")
+    assert downloads == [(target, model)]
+    assert window.jobs[0].settings.scale == 3
+    assert window.config.models_folder == str(target)
+    assert not window._pending_model_work

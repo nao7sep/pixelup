@@ -22,6 +22,14 @@ CORPUS = Path(__file__).resolve().parents[2] / "company" / "assets" / "test-fixt
 MODEL_INSTALL_TIMEOUT_S = 60 * 60
 
 
+@pytest.fixture(autouse=True)
+def _ordinary_tests_never_download_models(request, monkeypatch):
+    if request.node.get_closest_marker("heavy") is None:
+        def unexpected(*args, **kwargs):
+            raise AssertionError("ordinary tests must replace model acquisition explicitly")
+        monkeypatch.setattr("pixelup.model_manager.download_model", unexpected)
+
+
 @pytest.fixture
 def file_symlink_capability(tmp_path: Path) -> None:
     """Skip only file-symlink contracts when this Windows token cannot create one."""
@@ -189,6 +197,7 @@ def heavy_models_dir(
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("PIXELUP_DATA_DIR", str(tmp_path_factory.mktemp("model-install-home")))
         manager = ModelManager(models_dir)
+        process_until(lambda: manager.readiness_known, timeout_s=10, what="Model readiness")
         missing = manager.missing(MANAGED_ARTIFACT_NAMES)
         if missing:
             failure_log = _InstallFailureLog()
@@ -198,7 +207,8 @@ def heavy_models_dir(
                 operation_id = manager.install(missing, force=False)
                 assert operation_id is not None
                 process_until(
-                    lambda: not manager.active_operations and manager.cleanup_for_quit(),
+                    lambda: (not manager.active_operations and manager.cleanup_for_quit()
+                             and manager.readiness_known),
                     timeout_s=MODEL_INSTALL_TIMEOUT_S,
                     what="Installing the managed models",
                 )

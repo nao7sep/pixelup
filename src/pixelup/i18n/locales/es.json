@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "Carpeta de modelos",
+  "managedModels.chooseFolder": "Elegir carpeta…",
+  "managedModels.useFolder": "Usar carpeta",
+  "managedModels.folderHelp": "Elige dónde guardar los modelos antes de instalarlos. Deja el campo vacío para usar la carpeta predeterminada. Cambiar de carpeta no mueve ni elimina los archivos existentes.",
+  "managedModels.folderBusy": "Espera a que termine la instalación de modelos o se guarde la configuración de la carpeta antes de cambiarla.",
+  "managedModels.folderOverride": "La carpeta de modelos está definida por una opción de inicio.",
+  "managedModels.checking": "Comprobando…",
   "about.close": "Cerrar",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 o posterior",
   "about.description": "Amplía imágenes locales por lotes con Real-ESRGAN, y ejecuta varios modelos sobre las mismas imágenes para compararlos.",

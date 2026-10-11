@@ -9,6 +9,8 @@ Prebuilt builds for **macOS (Apple Silicon)** and **Windows (x64)** are on the [
 - **macOS** — right-click the app and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/PixelUp.app`).
 - **Windows** — on the SmartScreen prompt, click **More info → Run anyway**.
 
+Before your first model download, choose its storage folder in **Managed models**, or leave the field blank to use the suggested default. You can change it later in the same dialog. A change leaves existing files in place; it neither moves nor deletes them. Jobs already in the queue keep using their original folder, and folder changes wait for model installations to finish.
+
 Managed models shows which pinned model files are ready and installs or repairs only what you choose; every download is verified against its pinned SHA-256 before it replaces the cache. A queue action that needs missing files discloses the exact download first and creates no jobs until installation succeeds. You can close the download dialog and queue more images while installation continues; each request keeps the parameters you chose for it. Allow roughly 3–67 MB of network and disk use for an upscaler model, with a small additional denoise companion for the general model. You can also place the `.pth` files in the models directory yourself.
 
 ## Features

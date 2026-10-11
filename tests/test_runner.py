@@ -718,3 +718,27 @@ def test_every_upscale_model_enlarges_a_corpus_photo_faithfully(
         # invent fine texture, while the photo against its own mirror image
         # differs by 92. The bound sits between them.
         assert mean < 25, f"{job.model} drifted from the photo by {mean:.1f} levels on average"
+
+
+def test_folder_switch_keeps_accepted_jobs_on_original_folder(
+    qapp, tmp_path, monkeypatch, process_until
+):
+    first, second, later = (_make_job(i, tmp_path) for i in range(1, 4))
+    jobs = [first, second]
+    original = RuntimeDirs(tmp_path / "old", tmp_path / "temp")
+    replacement = RuntimeDirs(tmp_path / "new", tmp_path / "temp")
+    runner = JobRunner(jobs, runtime_dirs=original)
+    observed = {}
+
+    def run(worker):
+        observed[worker.job.id] = worker._runtime_dirs.models_dir
+        worker.job.status = "completed"
+        worker.signals.finished.emit(worker.job.id, True, Message("queue.statusDone"), {}, [])
+
+    monkeypatch.setattr(JobWorker, "run", run)
+    runner.set_runtime_dirs(replacement)
+    jobs.append(later)
+    runner.schedule(1)
+    process_until(lambda: len(observed) == 3 and not runner._threads,
+                  timeout_s=5, what="Jobs captured before and after the folder switch")
+    assert observed == {1: original.models_dir, 2: original.models_dir, 3: replacement.models_dir}

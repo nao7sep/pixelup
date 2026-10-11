@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "モデルフォルダー",
+  "managedModels.chooseFolder": "フォルダーを選択…",
+  "managedModels.useFolder": "このフォルダーを使用",
+  "managedModels.folderHelp": "インストール前にモデルの保存先を選択してください。空欄の場合は、既定のフォルダーを使用します。保存先を変更しても、既存のファイルは移動・削除されません。",
+  "managedModels.folderBusy": "モデルのインストールまたは保存先設定の保存が完了してから、フォルダーを変更してください。",
+  "managedModels.folderOverride": "モデルフォルダーは起動時の指定により設定されています。",
+  "managedModels.checking": "確認中…",
   "about.close": "閉じる",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 以降",
   "about.description": "ローカルの画像を Real-ESRGAN でまとめてアップスケールし、同じ画像に複数のモデルを実行して比較しましょう。",

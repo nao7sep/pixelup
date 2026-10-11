@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "Pasta de modelos",
+  "managedModels.chooseFolder": "Escolher pasta…",
+  "managedModels.useFolder": "Usar pasta",
+  "managedModels.folderHelp": "Escolha onde salvar os modelos antes de instalar. Deixe em branco para usar a pasta padrão. Alterar a pasta não move nem apaga os arquivos existentes.",
+  "managedModels.folderBusy": "Aguarde a conclusão da instalação dos modelos ou do salvamento da configuração da pasta antes de alterá-la.",
+  "managedModels.folderOverride": "A pasta de modelos é definida por uma opção de inicialização.",
+  "managedModels.checking": "Verificando…",
   "about.close": "Fechar",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 ou posterior",
   "about.description": "Amplie imagens locais em lotes com Real-ESRGAN, e execute vários modelos nas mesmas imagens para compará-los.",

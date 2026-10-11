@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "Dossier des modèles",
+  "managedModels.chooseFolder": "Choisir un dossier…",
+  "managedModels.useFolder": "Utiliser ce dossier",
+  "managedModels.folderHelp": "Choisissez où enregistrer les modèles avant de les installer. Laissez le champ vide pour utiliser le dossier par défaut. Changer de dossier ne déplace ni ne supprime les fichiers existants.",
+  "managedModels.folderBusy": "Attendez la fin de l’installation des modèles ou de l’enregistrement du choix du dossier avant de changer de dossier.",
+  "managedModels.folderOverride": "Le dossier des modèles est défini par une option de démarrage.",
+  "managedModels.checking": "Vérification…",
   "about.close": "Fermer",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 ou ultérieure",
   "about.description": "Agrandissez vos images locales par lots avec Real-ESRGAN, et exécutez plusieurs modèles sur les mêmes images pour les comparer.",

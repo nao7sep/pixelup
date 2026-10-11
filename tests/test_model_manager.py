@@ -24,8 +24,10 @@ class _QuittableThread:
 def test_terminal_result_is_recorded_before_manager_requests_thread_shutdown(
     qapp: QApplication,
     tmp_path: Path,
+    process_until,
 ) -> None:
     manager = ModelManager(tmp_path)
+    _settle(manager, process_until)
     thread = _QuittableThread()
     manager._threads[7] = thread  # type: ignore[assignment]
 
@@ -33,6 +35,7 @@ def test_terminal_result_is_recorded_before_manager_requests_thread_shutdown(
 
     assert manager._install_results[7] == (True, False, None)
     assert thread.quit_calls == 1
+    manager.deleteLater()
 
 
 class _HeldScans:
@@ -70,7 +73,6 @@ def test_rescan_reads_the_folder_off_the_ui_thread_and_reports_a_change(
         scans.answer = frozenset({MANAGED_ARTIFACT_NAMES[0]})
         scans.release.set()
 
-        manager.rescan()
         _settle(manager, process_until)
 
         assert len(scans.threads) == 1
@@ -105,11 +107,13 @@ def test_rescans_requested_while_one_runs_coalesce_into_one_more(
 
 
 def test_no_rescan_starts_while_an_install_runs_or_once_quitting_began(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
 ) -> None:
     scans = _HeldScans(monkeypatch)
     scans.release.set()
     manager = ModelManager(tmp_path)
+    _settle(manager, process_until)
+    scans.threads.clear()
     try:
         manager._operations[1] = ModelOperation(
             id=1, kind="running", artifact_names=(MANAGED_ARTIFACT_NAMES[0],)
@@ -126,29 +130,35 @@ def test_no_rescan_starts_while_an_install_runs_or_once_quitting_began(
         manager.deleteLater()
 
 
-def test_a_scan_overtaken_by_a_newer_read_or_an_install_applies_nothing(
+def test_switching_folder_ignores_a_stalled_old_scan(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
 ) -> None:
-    scans = _HeldScans(monkeypatch)
-    scans.answer = frozenset({MANAGED_ARTIFACT_NAMES[0]})
-    manager = ModelManager(tmp_path)
-    try:
-        manager.rescan()
-        manager.refresh_readiness()  # a newer read of the folder, on the UI thread
-        scans.release.set()
-        _settle(manager, process_until)
-        assert manager.ready_names == frozenset()
+    release = threading.Event()
+    entered = threading.Event()
+    old, new = tmp_path / "old", tmp_path / "new"
+    name = MANAGED_ARTIFACT_NAMES[0]
 
-        scans.release.clear()
-        manager.rescan()
-        manager._operations[1] = ModelOperation(
-            id=1, kind="running", artifact_names=(MANAGED_ARTIFACT_NAMES[0],)
-        )
-        scans.release.set()
+    def read(folder):
+        if folder == old:
+            entered.set()
+            assert release.wait(10)
+            return frozenset({name})
+        return frozenset()
+
+    monkeypatch.setattr(model_manager, "read_ready_names", read)
+    manager = ModelManager(old)
+    try:
+        assert entered.wait(5)
+        manager.set_models_dir(new)
         _settle(manager, process_until)
+        assert manager.readiness_known
+        assert manager.ready_names == frozenset()
+        release.set()
+        # Deliver the stale result explicitly as well: it cannot mutate current facts.
+        manager._scan_finished(1, frozenset({name}))
         assert manager.ready_names == frozenset()
     finally:
-        manager._operations.clear()
+        release.set()
         manager.deleteLater()
 
 
@@ -156,11 +166,45 @@ def test_a_scan_overtaken_by_a_newer_read_or_an_install_applies_nothing(
 def test_every_managed_model_is_installed_and_matches_its_pin(
     qapp: QApplication,
     heavy_models_dir: Path,
+    process_until,
 ) -> None:
     manager = ModelManager(heavy_models_dir)
+    _settle(manager, process_until)
     total = len(MANAGED_ARTIFACT_NAMES)
     assert manager.ready_count() == (total, total)
     for name in MANAGED_ARTIFACT_NAMES:
         # Raises unless the file's size and SHA-256 match the registry's pin.
         verify_model_file(model_file(heavy_models_dir, name), known_model(name))
     manager.deleteLater()
+
+
+def test_completed_install_readiness_does_not_wait_for_unrelated_install(
+    qapp, tmp_path, monkeypatch, process_until
+):
+    first, second = MANAGED_ARTIFACT_NAMES[:2]
+    entered, release = threading.Event(), threading.Event()
+
+    def install(folder, name, **kwargs):
+        if name == second:
+            entered.set()
+            assert release.wait(5)
+        model_file(folder, name).write_bytes(b"model")
+
+    monkeypatch.setattr(model_manager, "download_model", install)
+    manager = ModelManager(tmp_path)
+    _settle(manager, process_until)
+    try:
+        manager.install((second,), force=False)
+        assert entered.wait(3)
+        manager.install((first,), force=False)
+        process_until(lambda: manager.readiness_known and first in manager.ready_names,
+                      timeout_s=3, what="The independent completed installation")
+        assert manager.in_progress_for((second,))
+        assert manager.missing((first,)) == ()
+        with pytest.raises(RuntimeError):
+            manager.set_models_dir(tmp_path / "other")
+    finally:
+        release.set()
+        process_until(lambda: manager.cleanup_for_quit() and manager.readiness_known,
+                      timeout_s=5, what="The remaining installation")
+        manager.deleteLater()

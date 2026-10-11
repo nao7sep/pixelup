@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "Cartella dei modelli",
+  "managedModels.chooseFolder": "Scegli cartella…",
+  "managedModels.useFolder": "Usa cartella",
+  "managedModels.folderHelp": "Scegli dove salvare i modelli prima di installarli. Lascia il campo vuoto per usare la cartella predefinita. Cambiare cartella non sposta né elimina i file esistenti.",
+  "managedModels.folderBusy": "Attendi il completamento dell’installazione dei modelli o del salvataggio dell’impostazione della cartella prima di cambiarla.",
+  "managedModels.folderOverride": "La cartella dei modelli è definita da un’opzione di avvio.",
+  "managedModels.checking": "Verifica in corso…",
   "about.close": "Chiudi",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 o successiva",
   "about.description": "Ingrandisci le immagini locali a gruppi con Real-ESRGAN, ed esegui più modelli sulle stesse immagini per confrontarli.",

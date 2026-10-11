@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "Modellordner",
+  "managedModels.chooseFolder": "Ordner auswählen…",
+  "managedModels.useFolder": "Ordner verwenden",
+  "managedModels.folderHelp": "Wählen Sie vor der Installation den Speicherort für Modelle. Lassen Sie das Feld leer, um den Standardordner zu verwenden. Ein Ordnerwechsel verschiebt oder löscht keine vorhandenen Dateien.",
+  "managedModels.folderBusy": "Warten Sie, bis die Modellinstallation oder das Speichern der Ordnereinstellung abgeschlossen ist, bevor Sie den Ordner ändern.",
+  "managedModels.folderOverride": "Der Modellordner wird durch eine Startoption festgelegt.",
+  "managedModels.checking": "Wird geprüft…",
   "about.close": "Schließen",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 oder neuer",
   "about.description": "Skalieren Sie lokale Bilder mit Real-ESRGAN stapelweise hoch, und lassen Sie mehrere Modelle über dieselben Bilder laufen, um sie zu vergleichen.",

@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QUrl
 from PySide6.QtGui import QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
+    QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QWidget,
 )
+from shiboken6 import isValid
 
 from pixelup.dialog_shell import TABLE_WIDTH, DialogShell
 from pixelup.i18n import localizer
@@ -25,6 +30,7 @@ from pixelup.model_management import (
 )
 from pixelup.model_manager import ModelManager, ModelOperation
 from pixelup.session_log import log
+from pixelup.settings_dialog import DiscardChangesDialog
 from pixelup.theme import COLLECTION_INSET
 from pixelup.ui_common import secondary_label
 from pixelup.widgets import OperationResult, repolish
@@ -50,6 +56,11 @@ class ManagedModelsDialog(DialogShell):
         *,
         required_artifacts: tuple[str, ...] = (),
         pending_job_count: int = 0,
+        models_folder: str = "",
+        session_shutdown: Callable[[], bool] = lambda: False,
+        default_models_dir: Path | None = None,
+        folder_locked: bool = False,
+        save_folder: Callable[[str, Callable[[Message | None], None]], None] | None = None,
     ) -> None:
         # The body holds this dialog's row buttons, so its scroll region takes no
         # focus of its own — the buttons are the keyboard owners.
@@ -57,6 +68,35 @@ class ManagedModelsDialog(DialogShell):
         self._manager = manager
         self._required_artifacts = tuple(dict.fromkeys(required_artifacts))
         self._pending_job_count = pending_job_count
+        self._session_shutdown = session_shutdown
+        self._folder_error: Message | None = None
+        self._saved_folder = models_folder
+        self._folder_locked = folder_locked
+        self._save_folder = save_folder
+        self._saving_folder = False
+        self._dismissed = False
+        self._after_scan: Callable[[], None] | None = None
+        self.finished.connect(self._finished)
+
+        folder_label = localize(QLabel(), text="managedModels.folder")
+        self.folder_edit = QLineEdit(models_folder)
+        self.folder_edit.setPlaceholderText(str(default_models_dir or manager.models_dir))
+        folder_label.setBuddy(self.folder_edit)
+        self.body_layout.addWidget(folder_label)
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(8)
+        folder_row.addWidget(self.folder_edit, 1)
+        self.browse_button = localize(QPushButton(), text="managedModels.chooseFolder")
+        self.browse_button.clicked.connect(self._choose_folder)
+        folder_row.addWidget(self.browse_button)
+        self.apply_folder_button = localize(QPushButton(), text="managedModels.useFolder")
+        self.apply_folder_button.clicked.connect(lambda: self._with_saved_folder(lambda: None))
+        folder_row.addWidget(self.apply_folder_button)
+        self.body_layout.addLayout(folder_row)
+        self.folder_help = localize(secondary_label(""), text="managedModels.folderHelp")
+        self.folder_help.setWordWrap(True)
+        self.body_layout.addWidget(self.folder_help)
+        self.folder_edit.textChanged.connect(self._folder_draft_changed)
 
         self.summary_label = secondary_label("")
         self.summary_label.setWordWrap(True)
@@ -130,6 +170,7 @@ class ManagedModelsDialog(DialogShell):
         self.add_footer_widget(self.reveal_button)
         self.add_footer_widget(self.primary_button)
 
+        self._manager.folder_available.connect(self._open_models_folder)
         self._manager.changed.connect(self._render)
         self._render()
         self.set_initial_focus(self.primary_button)
@@ -161,6 +202,7 @@ class ManagedModelsDialog(DialogShell):
         )
 
     def _render(self) -> None:
+        self._update_folder_controls()
         ready_names = self._manager.ready_names
         required = set(self._required_artifacts)
         localize(self.summary_label, text=self._summary_text())
@@ -181,7 +223,9 @@ class ManagedModelsDialog(DialogShell):
             )
             ready = len(ready_names.intersection(bundle.artifact_names))
             total = len(bundle.artifact_names)
-            status = _bundle_status(in_progress, failed, ready, total)
+            status = (Message("managedModels.checking")
+                      if not self._manager.readiness_known and in_progress is None
+                      else _bundle_status(in_progress, failed, ready, total))
             localize(self.status_labels[row], text=status, tooltip=status)
             missing_required = bool(required.intersection(bundle.artifact_names)) and ready < total
             # Attention styling from the app sheet, without changing the factual
@@ -212,6 +256,11 @@ class ManagedModelsDialog(DialogShell):
                 localize(action, tooltip="managedModels.rowTooltipBatch")
 
         self._render_primary_action()
+        if not self._manager.readiness_known or self._saving_folder:
+            if not self._manager.in_progress_operations:
+                self.primary_button.setEnabled(False)
+                for action in self.row_action_buttons:
+                    action.setEnabled(False)
         errors = tuple(
             dict.fromkeys(
                 operation.error
@@ -219,7 +268,9 @@ class ManagedModelsDialog(DialogShell):
                 if operation.error
             )
         )
-        if errors:
+        if self._folder_error is not None:
+            self._show_error(self._folder_error)
+        elif errors:
             self._show_error(join("common.sentences", errors))
         else:
             self.result_view.clear_result()
@@ -228,6 +279,10 @@ class ManagedModelsDialog(DialogShell):
         # lengths, the result banner comes and goes — and the bound is arithmetic
         # over that height, so it is re-taken here rather than once at build time.
         self.fit()
+        if self._after_scan is not None and self._manager.readiness_known:
+            action, self._after_scan = self._after_scan, None
+            if not self._dismissed and isValid(self):
+                action()
 
     def _render_primary_action(self) -> None:
         if self._required_artifacts:
@@ -263,9 +318,7 @@ class ManagedModelsDialog(DialogShell):
         if in_progress:
             self._manager.cancel(in_progress[0].id)
             return
-        missing = self._manager.missing(bundle.artifact_names)
-        artifact_names = missing or bundle.artifact_names
-        self._manager.install(artifact_names, force=not missing)
+        self._with_saved_folder(lambda: self._install_bundle_in_current_folder(bundle_index))
 
     def _install_all_or_cancel(self) -> None:
         targets = (
@@ -276,8 +329,89 @@ class ManagedModelsDialog(DialogShell):
         if self._required_artifacts and self._manager.in_progress_for(targets):
             self._manager.cancel_for(targets)
             return
-        missing = self._manager.missing(targets)
-        self._install_artifact_groups(self._manager.available_to_install(missing))
+        self._with_saved_folder(
+            lambda: self._install_artifact_groups(
+                self._manager.available_to_install(self._manager.missing(targets))
+            )
+        )
+
+    def _install_bundle_in_current_folder(self, bundle_index: int) -> None:
+        names = MANAGED_MODEL_BUNDLES[bundle_index].artifact_names
+        missing = self._manager.missing(names)
+        self._manager.install(missing or names, force=not missing)
+
+    def _folder_draft_changed(self) -> None:
+        # Editing again cancels an install that has not yet begun. It must never
+        # acquire files into a folder the user has just replaced in the draft.
+        self._after_scan = None
+        self._update_folder_controls()
+
+    def _update_folder_controls(self) -> None:
+        busy = bool(self._manager.in_progress_operations) or self._saving_folder
+        editable = not busy and not self._folder_locked
+        self.folder_edit.setEnabled(editable)
+        self.browse_button.setEnabled(editable)
+        self.apply_folder_button.setEnabled(
+            editable and self.folder_edit.text() != self._saved_folder
+        )
+        localize(self.folder_help, text=(
+            "managedModels.folderOverride" if self._folder_locked else
+            "managedModels.folderBusy" if busy else "managedModels.folderHelp"
+        ))
+        if self._folder_locked and self.folder_edit.text() != str(self._manager.models_dir):
+            self.folder_edit.setText(str(self._manager.models_dir))
+
+    def _choose_folder(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, localizer.t("managedModels.chooseFolder"),
+            self.folder_edit.text() or str(self._manager.models_dir),
+        )
+        if chosen:
+            self.folder_edit.setText(chosen)
+
+    def _with_saved_folder(self, action: Callable[[], None]) -> None:
+        if self._saving_folder or self._manager.folder_change_pending:
+            return
+        value = self.folder_edit.text()
+        if self._folder_locked or value == self._saved_folder or self._save_folder is None:
+            if self._manager.readiness_known:
+                action()
+            return
+        self._folder_error = None
+        self._saving_folder = True
+        self._update_folder_controls()
+
+        def saved(error: Message | None) -> None:
+            if self._dismissed or not isValid(self):
+                return
+            self._saving_folder = False
+            self._folder_error = error
+            if error is not None:
+                self._show_error(error)
+            else:
+                self._saved_folder = value
+                self.result_view.clear_result()
+                if self._manager.readiness_known:
+                    action()
+                else:
+                    self._after_scan = action
+            self._update_folder_controls()
+
+        self._save_folder(value, saved)
+
+    def _finished(self, _result: int) -> None:
+        self._dismissed = True
+        self._after_scan = None
+
+    def reject(self) -> None:
+        if (
+            not self._session_shutdown()
+            and not self._saving_folder and not self._folder_locked
+            and self.folder_edit.text() != self._saved_folder
+            and DiscardChangesDialog(self).exec() != QDialog.DialogCode.Accepted
+        ):
+            return
+        super().reject()
 
     def _install_artifact_groups(self, artifact_names: tuple[str, ...]) -> None:
         requested = set(artifact_names)
@@ -287,17 +421,17 @@ class ManagedModelsDialog(DialogShell):
                 self._manager.install(group, force=False)
 
     def _reveal_models_folder(self) -> None:
-        models_dir = self._manager.models_dir
-        try:
-            models_dir.mkdir(parents=True, exist_ok=True)
-            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(models_dir)))
-        except OSError as exc:
-            log.warning("models.reveal_failed", models_dir=str(models_dir), reason=str(exc))
-            self._show_error(Message("managedModels.revealFailed"))
+        self.reveal_button.setEnabled(False)
+        self._manager.prepare_folder_reveal()
+
+    def _open_models_folder(self, models_dir: Path, available: bool) -> None:
+        if self._dismissed:
             return
-        if not opened:
+        self.reveal_button.setEnabled(True)
+        if not available or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(models_dir))):
             log.warning("models.reveal_failed", models_dir=str(models_dir))
-            self._show_error(Message("managedModels.revealFailed"))
+            self._folder_error = Message("managedModels.revealFailed")
+            self._show_error(self._folder_error)
 
     def _show_error(self, message: Message) -> None:
         self.result_view.show_result(message, severity="error")

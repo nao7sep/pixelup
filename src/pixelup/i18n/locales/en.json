@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "Models folder",
+  "managedModels.chooseFolder": "Choose folder…",
+  "managedModels.useFolder": "Use folder",
+  "managedModels.folderHelp": "Choose where to save models before installing. Leave blank to use the default folder. Changing folders does not move or delete existing files.",
+  "managedModels.folderBusy": "Wait for model installation or saving the folder setting to finish before changing folders.",
+  "managedModels.folderOverride": "The models folder is set by a launch override.",
+  "managedModels.checking": "Checking…",
   "about.close": "Close",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 or later",
   "about.description": "Upscale local images in batches with Real-ESRGAN, and run several models over the same images to compare.",

@@ -152,6 +152,15 @@ def window(
     main.deleteLater()
 
 
+def _settle_models(window):
+    import time
+    deadline = time.monotonic() + 10
+    while not window.model_manager.readiness_known or window.model_manager._scan_in_flight:
+        assert time.monotonic() < deadline
+        QApplication.processEvents()
+        time.sleep(0.001)
+
+
 def _populate(main: MainWindow, directory: Path) -> None:
     images = [_png(directory, name) for name in ("a.png", "b.png")]
     folder = directory / "d"
@@ -160,6 +169,7 @@ def _populate(main: MainWindow, directory: Path) -> None:
     for model in UPSCALE_MODELS[1:3]:
         main.model_checks[model].setChecked(True)
     main._queue_all_images_selected_models()
+    _settle_models(main)
     done, failed, cancelled, running = main.jobs
     main._job_finished(done.id, True, Message("queue.statusDone"), {"ok": True}, [])
     main._job_finished(
@@ -227,7 +237,9 @@ def _texts(root: QWidget, *, include_cells: bool = True) -> list[str]:
         elif isinstance(widget, QGroupBox):
             texts.append(widget.title())
         elif isinstance(widget, QLineEdit):
-            texts.append(widget.placeholderText())
+            # The folder placeholder is a literal filesystem path, not UI copy.
+            if not (isinstance(root, ManagedModelsDialog) and widget is root.folder_edit):
+                texts.append(widget.placeholderText())
         elif isinstance(widget, QComboBox):
             texts += [widget.itemText(index) for index in range(widget.count())]
         if isinstance(widget, EmptyStateTableWidget):

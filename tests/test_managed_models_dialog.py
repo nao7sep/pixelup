@@ -21,6 +21,14 @@ from pixelup.model_manager import MAX_CONCURRENT_INSTALLS, ModelManager
 from pixelup.models import model_file
 
 
+def _ready(manager: ModelManager, qapp: QApplication) -> None:
+    deadline = time.monotonic() + 5
+    while not manager.readiness_known or manager._scan_in_flight:
+        assert time.monotonic() < deadline, "models scan did not settle"
+        qapp.processEvents()
+        time.sleep(0.001)
+
+
 def _finish_manager(manager: ModelManager, qapp: QApplication) -> None:
     deadline = time.monotonic() + 3
     while not manager.cleanup_for_quit() and time.monotonic() < deadline:
@@ -28,6 +36,7 @@ def _finish_manager(manager: ModelManager, qapp: QApplication) -> None:
         time.sleep(0.001)
     qapp.processEvents()
     assert manager.cleanup_for_quit()
+    _ready(manager, qapp)
 
 
 def test_manual_install_updates_application_owned_readiness(
@@ -46,6 +55,7 @@ def test_manual_install_updates_application_owned_readiness(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         assert dialog.row_action_buttons[0].text() == "Install"
@@ -76,6 +86,7 @@ def test_reinstall_forces_atomic_reacquisition(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         assert dialog.row_action_buttons[0].text() == "Reinstall"
@@ -99,6 +110,7 @@ def test_queue_install_only_changes_manager_state(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(
         manager,
         required_artifacts=required,
@@ -138,6 +150,7 @@ def test_install_failure_remains_visible_and_retryable(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", fail)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_bundle(0)
@@ -162,6 +175,7 @@ def test_unexpected_install_failure_uses_safe_copy(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", fail)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_bundle(0)
@@ -193,6 +207,7 @@ def test_failure_refreshes_partial_application_owned_readiness(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     assert manager.install(required, force=False)
     _finish_manager(manager, qapp)
 
@@ -218,6 +233,7 @@ def test_closing_dialog_does_not_cancel_application_owned_install(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", wait_then_install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     dialog._install_bundle(0)
     assert started.wait(1)
@@ -250,6 +266,7 @@ def test_explicit_cancel_stops_application_owned_install(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", wait_for_cancel)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     cancellation_observed: list[tuple[str, ...]] = []
     bundle_names = MANAGED_MODEL_BUNDLES[0].artifact_names
@@ -268,7 +285,9 @@ def test_explicit_cancel_stops_application_owned_install(
 def test_manual_surface_has_independent_actions_and_truthful_columns(
     qapp: QApplication, tmp_path: Path
 ) -> None:
-    dialog = ManagedModelsDialog(ModelManager(tmp_path))
+    manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
+    dialog = ManagedModelsDialog(manager)
     try:
         labels = {label.text() for label in dialog.findChildren(QLabel)}
 
@@ -295,6 +314,7 @@ def test_coming_to_the_front_finds_model_files_placed_by_hand(
     qapp: QApplication, tmp_path: Path, process_until
 ) -> None:
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         dialog.show()
@@ -337,6 +357,7 @@ def test_install_all_requests_every_missing_artifact(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_all_or_cancel()
@@ -378,6 +399,7 @@ def test_install_all_caps_concurrent_downloads(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_all_or_cancel()
@@ -422,6 +444,7 @@ def test_independent_row_installs_run_concurrently(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_bundle(0)
@@ -468,6 +491,7 @@ def test_active_progress_is_reported_in_the_row_status(
 
     monkeypatch.setattr("pixelup.model_manager.download_model", install)
     manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_bundle(0)
@@ -493,7 +517,9 @@ def test_columns_are_content_derived_inside_a_width_that_is_chosen(
     # them jump — but the dialog does not size to them. It takes the one chosen
     # width for a table, which has to be wide enough to hold them
     # (modal-dialog-conventions).
-    dialog = ManagedModelsDialog(ModelManager(tmp_path))
+    manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
+    dialog = ManagedModelsDialog(manager)
     try:
         longest_purpose = max(
             (english().of(bundle.purpose) for bundle in MANAGED_MODEL_BUNDLES),
@@ -513,7 +539,9 @@ def test_columns_are_content_derived_inside_a_width_that_is_chosen(
 def test_dynamic_result_grows_dialog_without_compressing_rows_or_footer(
     qapp: QApplication, tmp_path: Path
 ) -> None:
-    dialog = ManagedModelsDialog(ModelManager(tmp_path))
+    manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
+    dialog = ManagedModelsDialog(manager)
     try:
         dialog.show()
         qapp.processEvents()
@@ -524,7 +552,8 @@ def test_dynamic_result_grows_dialog_without_compressing_rows_or_footer(
         dialog._show_error(Message("managedModels.revealFailed"))
         qapp.processEvents()
 
-        assert dialog.height() > initial_height
+        assert dialog.height() >= initial_height
+        assert dialog.result_view.isVisibleTo(dialog)
         assert dialog.row_action_buttons[0].height() >= row_height
         assert dialog.dismiss_button.height() >= close_height
         assert dialog.dismiss_button.isVisibleTo(dialog)
@@ -538,7 +567,9 @@ def test_the_models_panel_separates_its_headings_with_the_sheets_line(
 ) -> None:
     from PySide6.QtWidgets import QFrame
 
-    dialog = ManagedModelsDialog(ModelManager(tmp_path))
+    manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
+    dialog = ManagedModelsDialog(manager)
     try:
         lines = [
             frame

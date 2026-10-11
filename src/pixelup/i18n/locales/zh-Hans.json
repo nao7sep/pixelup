@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "模型文件夹",
+  "managedModels.chooseFolder": "选择文件夹…",
+  "managedModels.useFolder": "使用此文件夹",
+  "managedModels.folderHelp": "安装前请选择模型的保存位置。留空将使用默认文件夹。更改文件夹不会移动或删除现有文件。",
+  "managedModels.folderBusy": "请等待模型安装或文件夹设置保存完成后再更改文件夹。",
+  "managedModels.folderOverride": "模型文件夹已由启动设置指定。",
+  "managedModels.checking": "正在检查…",
   "about.close": "关闭",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 或更高版本",
   "about.description": "用 Real-ESRGAN 批量放大本地图像，并对同一批图像运行多个模型进行比较。",

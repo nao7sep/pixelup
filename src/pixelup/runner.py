@@ -176,6 +176,15 @@ class JobRunner(QObject):
         self._max_concurrent_jobs = 1
         self._shutting_down = False
         self._runtime_dirs = runtime_dirs
+        self._queued_runtime_dirs: dict[int, RuntimeDirs | None] = {}
+
+    def set_runtime_dirs(self, runtime_dirs: RuntimeDirs) -> None:
+        # Workers already running hold their own snapshot. Preserve the same
+        # promise for jobs accepted but not started before a folder change.
+        for job in self._jobs:
+            if job.status == "pending":
+                self._queued_runtime_dirs.setdefault(job.id, self._runtime_dirs)
+        self._runtime_dirs = runtime_dirs
 
     def schedule(self, max_concurrent_jobs: int) -> None:
         if self._shutting_down:
@@ -263,7 +272,7 @@ class JobRunner(QObject):
         self.progress.emit(job.id, job.message)
 
         thread = QThread(self)
-        worker = JobWorker(job, self._runtime_dirs)
+        worker = JobWorker(job, self._queued_runtime_dirs.pop(job.id, self._runtime_dirs))
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.signals.progress.connect(self.progress.emit)

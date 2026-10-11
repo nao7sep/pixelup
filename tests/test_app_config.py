@@ -746,6 +746,7 @@ def test_config_log_payload_shape() -> None:
         "font_family": AppConfig().font_family,
         "language": "system",
         "parameters": job_settings_log_payload(config.parameters),
+        "models_folder": "",
     }
 
 
@@ -779,3 +780,22 @@ def test_edit_writes_the_untouched_user_set_whole_from_memory(tmp_path: Path) ->
         "parameters": _parameter_map(quality=42),
         "language": "ja",
     }
+
+
+def test_models_folder_is_saved_reset_and_preserved_when_rejected(tmp_path):
+    from dataclasses import replace
+
+    from pixelup.app_config import AppConfig, load_app_config_result, save_app_config
+
+    path = tmp_path / "config.json"
+    initial = load_app_config_result(path)
+    chosen = replace(initial.config, models_folder=str(tmp_path / "external models"))
+    saved = save_app_config(chosen, initial.config, initial.file)
+    assert load_app_config_result(path).config.models_folder == chosen.models_folder
+    save_app_config(AppConfig(), chosen, saved.file)
+    assert "models_folder" not in json.loads(path.read_text())
+    path.write_text(json.dumps({"format_version": 1, "models_folder": 123}))
+    rejected = load_app_config_result(path)
+    assert rejected.rejected == ("models_folder",)
+    save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.file)
+    assert json.loads(path.read_text())["models_folder"] == 123

@@ -1,4 +1,11 @@
 {
+  "managedModels.folder": "모델 폴더",
+  "managedModels.chooseFolder": "폴더 선택…",
+  "managedModels.useFolder": "이 폴더 사용",
+  "managedModels.folderHelp": "설치하기 전에 모델을 저장할 위치를 선택합니다. 비워 두면 기본 폴더를 사용합니다. 폴더를 변경해도 기존 파일은 이동하거나 삭제하지 않습니다.",
+  "managedModels.folderBusy": "모델 설치 또는 폴더 설정 저장이 완료된 후 폴더를 변경해 주세요.",
+  "managedModels.folderOverride": "시작 시 지정된 설정에 따라 모델 폴더가 설정되어 있습니다.",
+  "managedModels.checking": "확인 중…",
   "about.close": "닫기",
   "about.copyright": "© 2026 Yoshinao Inoguchi · GNU GPL v3 이상",
   "about.description": "Real-ESRGAN으로 로컬 이미지를 일괄 업스케일하고, 같은 이미지에 여러 모델을 실행하여 비교하세요.",

@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Choose a models folder before downloading and change it later in Managed models, preserving existing files and already-queued jobs.
+- Check model readiness in the background, including after folder changes and at queue submission.
+
 - Keep rejected saved settings and unknown settings entries across unrelated saves, with a startup notice naming settings running on defaults.
 - Keep settings backup history per session without delaying saves; write diagnostics off the window thread.
 - Check offered images and load previews in the background.

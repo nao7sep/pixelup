@@ -45,6 +45,21 @@ def resolve_models_dir(override: Path | None, env: dict[str, str] | None = None)
     return _resolve_dir(override, MODELS_ENV, "models", env)
 
 
+def saved_models_dir(value: str, default: Path) -> Path:
+    """Resolve a saved literal folder without touching a possibly unavailable disk.
+
+    Empty follows the runtime default; relative authored paths are home-relative.
+    Picker paths keep literal environment-looking characters. Symlinks need not be
+    resolved to use the folder and resolving them here could stall the GUI thread.
+    """
+    if not value:
+        return default
+    path = Path(value)
+    if path.parts and path.parts[0] == "~":
+        path = Path.home().joinpath(*path.parts[1:])
+    return Path(os.path.normpath(path if path.is_absolute() else Path.home() / path))
+
+
 def resolve_temp_dir(override: Path | None, env: dict[str, str] | None = None) -> Path:
     return _resolve_dir(override, TEMP_ENV, "temp", env)
 
