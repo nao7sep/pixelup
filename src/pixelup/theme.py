@@ -679,6 +679,11 @@ QFrame[surface="panel"] {{
     border-radius: {RADIUS}px;
     background-color: {tone["content"]};
 }}
+/* A panel the keyboard can enter (a record's or a selected row's details) marks
+   focus on its edge, as the fields do. */
+QFrame[surface="panel"]:focus {{
+    border-color: {accent["fill"]};
+}}
 QFrame[surface="panel"][severity="error"] {{
     border-color: {danger["text"]};
 }}

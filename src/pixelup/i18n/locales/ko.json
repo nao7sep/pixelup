@@ -122,6 +122,7 @@
   "images.reasonUnavailable": "파일을 사용할 수 없습니다",
   "images.reasonUnreadable": "읽을 수 없습니다",
   "images.rejected": "{name}: {reason}.",
+  "images.selectedDetail": "선택한 이미지 세부 정보",
   "images.remove": "제거",
   "images.removeBlocked": "대기 중이거나 실행 중인 작업이 이 이미지를 사용하는 동안에는 제거할 수 없습니다.",
   "images.size": "{width} x {height}",
@@ -220,6 +221,7 @@
   "queue.columnOutput": "출력",
   "queue.columnScale": "배율",
   "queue.columnStatus": "상태",
+  "queue.selectedDetail": "선택한 작업 세부 정보",
   "queue.empty": "아직 대기열에 작업이 없습니다.",
   "queue.failed": {
     "other": "대기열 작업 {count}개가 실패했습니다. 실패한 행을 확인하거나 다시 시도하십시오."

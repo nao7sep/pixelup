@@ -127,6 +127,7 @@
   "images.reasonUnavailable": "die Datei ist nicht verfügbar",
   "images.reasonUnreadable": "konnte nicht gelesen werden",
   "images.rejected": "{name}: {reason}.",
+  "images.selectedDetail": "Details zum ausgewählten Bild",
   "images.remove": "Entfernen",
   "images.removeBlocked": "Dieses Bild kann nicht entfernt werden, solange wartende oder laufende Aufträge es noch verwenden.",
   "images.size": "{width} x {height}",
@@ -230,6 +231,7 @@
   "queue.columnOutput": "Ausgabe",
   "queue.columnScale": "Faktor",
   "queue.columnStatus": "Status",
+  "queue.selectedDetail": "Details zum ausgewählten Auftrag",
   "queue.empty": "Noch keine Aufträge eingereiht.",
   "queue.failed": {
     "one": "{count} Auftrag ist fehlgeschlagen. Prüfen Sie die fehlgeschlagene Zeile oder wiederholen Sie ihn.",

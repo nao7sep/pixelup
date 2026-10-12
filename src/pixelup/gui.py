@@ -145,6 +145,7 @@ from pixelup.widgets import (
     NoWheelDoubleSpinBox,
     NoWheelSpinBox,
     OperationResult,
+    RowDetail,
     choice_combo,
     device_combo,
     output_format_combo,
@@ -160,7 +161,8 @@ from pixelup.window_placement import (
 # column edges (covers Qt's default cell margins plus a little breathing room).
 _CELL_PADDING = 24
 # Minimum readable width for a filename column: a fixed filename column elides to
-# this (with a tooltip), and a stretch filename column uses it as its floor.
+# this (the row detail shows the whole path), and a stretch filename column uses it
+# as its floor.
 _NAME_MIN_WIDTH = 180
 
 # How long the Parameters panel waits after the last edit before writing config.json.
@@ -322,7 +324,7 @@ class ImageDropTable(EmptyStateTableWidget):
 def _fit_columns(widget: QWidget, *samples: str) -> int:
     """Width that shows the widest of ``samples`` in ``widget``'s font without
     eliding. Pass the header label plus the worst-case cell strings that must stay
-    fully visible; rarer, longer values elide and carry a tooltip."""
+    fully visible; rarer, longer values elide, and the row detail shows them whole."""
     metrics = widget.fontMetrics()
     return max(metrics.horizontalAdvance(text) for text in samples) + _CELL_PADDING
 
@@ -494,6 +496,8 @@ class MainWindow(QMainWindow):
         self._image_order: list[Path] = []
         self._image_rows: dict[Path, int] = {}
         self._queue_rows: dict[int, int] = {}
+        self._queue_row_jobs: list[int] = []
+        self._detail_source: Literal["images", "queue"] = "images"
         self._queue_failure_count = 0
         self.model_manager = ModelManager(self.runtime_dirs.models_dir, self)
         self._active_models_dialog: ManagedModelsDialog | None = None
@@ -546,6 +550,7 @@ class MainWindow(QMainWindow):
         self.model_manager.cancelled.connect(self._model_install_cancelled)
         self.model_manager.idle.connect(self._close_when_workers_stop)
         self._bind_shortcuts()
+        QApplication.instance().focusChanged.connect(self._focus_moved)
         # Window minimum = the layout's content-based size hint: the central widget
         # sums the panes' needs, and each table's minimum is its measured column
         # widths plus a filename floor (see _fit_columns). Open a little roomier than
@@ -1024,14 +1029,16 @@ class MainWindow(QMainWindow):
         self.image_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.image_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.image_table.itemSelectionChanged.connect(self._update_selected_image)
+        self.image_table.currentCellChanged.connect(lambda *_: self._detail_follows("images"))
         image_header = self.image_table.horizontalHeader()
         image_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         image_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         image_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         # Fixed widths measured from the worst-case string each column must show in
         # the current UI font (see _fit_columns): Size holds "99999 x 99999"; Jobs
-        # holds a common two-state roll-up and elides + tooltips the rarer longer
-        # summaries. "Image" stretches (filename, elides to the floor with a tooltip).
+        # holds a common two-state roll-up and elides the rarer longer summaries.
+        # "Image" stretches (filename, elides to the floor). The row detail shows
+        # elided values whole.
         self._fit_image_table_columns()
         self.image_table.setMinimumHeight(180)
         layout.addWidget(self.image_table, 1)
@@ -1096,6 +1103,11 @@ class MainWindow(QMainWindow):
         self.preview = ImagePreview()
         self.preview.reads.idle.connect(self._close_when_workers_stop)
         layout.addWidget(self.preview, 1)
+        # One detail for both tables: the image table's or the queue's current
+        # row, whichever table was last entered. A second area under the queue
+        # raised the window's minimum height; this one fits the existing floor.
+        self.row_detail = RowDetail(3, accessible_name="images.selectedDetail")
+        layout.addWidget(self.row_detail)
         return group
 
     def _build_models_group(self) -> QWidget:
@@ -1269,6 +1281,7 @@ class MainWindow(QMainWindow):
         _set_headers(self.queue_table, _QUEUE_COLUMNS)
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.queue_table.currentCellChanged.connect(lambda *_: self._detail_follows("queue"))
         queue_header = self.queue_table.horizontalHeader()
         queue_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         queue_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
@@ -1278,7 +1291,8 @@ class MainWindow(QMainWindow):
         # Widths measured from worst-case content in the current UI font and
         # language: Model shows the longest model name in full; Scale fits its
         # header; Status holds the longest status word. "Image" elides a long
-        # filename to a readable floor (with a tooltip) and "Output" stretches.
+        # filename to a readable floor and "Output" stretches; the row detail shows
+        # elided values whole.
         self._fit_queue_table_columns()
         self.queue_table.setMinimumHeight(180)
 
@@ -1807,10 +1821,12 @@ class MainWindow(QMainWindow):
             self.remove_result.clear_result()
         if path is None:
             self.preview.set_image(None)
+            self._show_row_detail()
             self.remove_image_button.setEnabled(False)
             self._update_action_buttons()
             return
         self.preview.set_image(path)
+        self._show_row_detail()
         self.remove_image_button.setEnabled(not self._has_active_jobs(path))
         self._update_action_buttons()
 
@@ -2185,6 +2201,7 @@ class MainWindow(QMainWindow):
             row = self.queue_table.rowCount()
             self.queue_table.insertRow(row)
             self._queue_rows[job.id] = row
+            self._queue_row_jobs.append(job.id)
             self.queue_table.setItem(
                 row,
                 0,
@@ -2324,6 +2341,56 @@ class MainWindow(QMainWindow):
             else status_text
         )
         self.queue_table.item(row, 4).setToolTip(tooltip)
+        if self._detail_source == "queue" and row == self.queue_table.currentRow():
+            self._show_row_detail()
+
+    def _detail_follows(self, source: Literal["images", "queue"]) -> None:
+        self._detail_source = source
+        self._show_row_detail()
+
+    def _focus_moved(self, _old: QWidget | None, new: QWidget | None) -> None:
+        if new is self.image_table:
+            self._detail_follows("images")
+        elif new is self.queue_table:
+            self._detail_follows("queue")
+
+    def _show_row_detail(self) -> None:
+        """The complete values of the current row in the table last entered.
+
+        Cells elide long paths and messages; this is their keyboard and touch path
+        (text-cleanup-conventions, rule 4), where a tooltip is only a hover one.
+        """
+        if self._detail_source == "queue":
+            localize(self.row_detail, accessible_name="queue.selectedDetail")
+            self.row_detail.set_rows(self._queue_detail_rows())
+        else:
+            localize(self.row_detail, accessible_name="images.selectedDetail")
+            self.row_detail.set_rows(self._image_detail_rows())
+
+    def _image_detail_rows(self) -> tuple[tuple[str, str], ...]:
+        path = self._selected_path()
+        if path is None:
+            return ()
+        row = self._image_rows.get(path)
+        jobs = self.image_table.item(row, 2) if row is not None else None
+        return (
+            (localizer.t("images.columnImage"), str(path)),
+            *(((localizer.t("images.columnJobs"), jobs.text()),) if jobs is not None else ()),
+        )
+
+    def _queue_detail_rows(self) -> tuple[tuple[str, str], ...]:
+        row = self.queue_table.currentRow()
+        if not 0 <= row < len(self._queue_row_jobs):
+            return ()
+        job = self._jobs_by_id[self._queue_row_jobs[row]]
+        cell = self.queue_table.item(row, 4)
+        shown = cell.text() if cell is not None else localizer.of(_status_text(job.status))
+        status = "\n".join((shown, *(localizer.of(warning) for warning in job.warnings)))
+        return (
+            (localizer.t("queue.columnImage"), str(job.input_path)),
+            (localizer.t("queue.columnOutput"), str(job.output_path)),
+            (localizer.t("queue.columnStatus"), status),
+        )
 
     def _refresh_image_job_summaries_for(self, paths: Iterable[Path]) -> None:
         """Recompute only the given images' summaries (PU-5).

@@ -122,6 +122,7 @@
   "images.reasonUnavailable": "ファイルを利用できません",
   "images.reasonUnreadable": "読み込めませんでした",
   "images.rejected": "{name}：{reason}。",
+  "images.selectedDetail": "選択した画像の詳細",
   "images.remove": "取り除く",
   "images.removeBlocked": "待機中または実行中のジョブが使っている間は、この画像を取り除けません。",
   "images.size": "{width} x {height}",
@@ -220,6 +221,7 @@
   "queue.columnOutput": "出力",
   "queue.columnScale": "倍率",
   "queue.columnStatus": "状態",
+  "queue.selectedDetail": "選択したジョブの詳細",
   "queue.empty": "キューにジョブはまだありません。",
   "queue.failed": {
     "other": "キューのジョブが {count} 件失敗しました。失敗した行を確認するか、再試行してください。"

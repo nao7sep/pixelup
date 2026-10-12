@@ -127,6 +127,7 @@
   "images.reasonUnavailable": "the file is unavailable",
   "images.reasonUnreadable": "could not be read",
   "images.rejected": "{name}: {reason}.",
+  "images.selectedDetail": "Selected image details",
   "images.remove": "Remove",
   "images.removeBlocked": "This image cannot be removed while pending or running jobs still use it.",
   "images.size": "{width} x {height}",
@@ -230,6 +231,7 @@
   "queue.columnOutput": "Output",
   "queue.columnScale": "Scale",
   "queue.columnStatus": "Status",
+  "queue.selectedDetail": "Selected job details",
   "queue.empty": "No jobs queued yet.",
   "queue.failed": {
     "one": "{count} queue job has failed. Review the failed row or retry it.",

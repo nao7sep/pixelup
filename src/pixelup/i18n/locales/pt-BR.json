@@ -132,6 +132,7 @@
   "images.reasonUnavailable": "o arquivo não está disponível",
   "images.reasonUnreadable": "não foi possível ler",
   "images.rejected": "{name}: {reason}.",
+  "images.selectedDetail": "Detalhes da imagem selecionada",
   "images.remove": "Remover",
   "images.removeBlocked": "Esta imagem não pode ser removida enquanto tarefas pendentes ou em execução ainda a usam.",
   "images.size": "{width} x {height}",
@@ -240,6 +241,7 @@
   "queue.columnOutput": "Saída",
   "queue.columnScale": "Escala",
   "queue.columnStatus": "Status",
+  "queue.selectedDetail": "Detalhes da tarefa selecionada",
   "queue.empty": "Nenhuma tarefa na fila ainda.",
   "queue.failed": {
     "many": "{count} de tarefas da fila falharam. Revise as linhas com falha ou repita as tarefas.",
