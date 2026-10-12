@@ -214,8 +214,8 @@ def quarantine_corrupt_file(path: Path) -> Path:
     is ``.invalid`` — the file *is* now an invalid cast-off, so its original
     extension is replaced rather than appended to, keeping the debris out of any
     ``*.json`` scan. The name is claimed with exclusive creation before the move, so
-    an earlier quarantine is never replaced: a clash (two launches in one second,
-    the unsupported second-instance case) fails like any other read failure and
+    an earlier quarantine is never replaced: another corrupt file arriving in the
+    same second clashes and fails like any other read failure, which
     leaves the original in place. The move is an atomic same-directory rename onto
     that claimed name, so no interruption can leave a half-copied ``.invalid`` file
     next to a still-corrupt original.

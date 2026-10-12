@@ -321,6 +321,7 @@
   "shortcuts.openSettings": "Открыть настройки",
   "shortcuts.showShortcuts": "Показать сочетания клавиш",
   "shortcuts.title": "Сочетания клавиш",
+  "startup.alreadyRunning": "Другое окно PixelUp использует ту же папку данных. Закройте это окно и повторите попытку.",
   "startup.storageUnreadable": "PixelUp не удалось прочитать хранилище или состояние приложения.",
   "startup.title": "Не удалось запустить PixelUp",
   "units.bytes": "{value}\u00a0Б",

@@ -26,6 +26,8 @@ Managed models shows which pinned model files are ready and installs or repairs 
 
 Parameter edits save automatically. Settings changes save when you press OK; cancelling asks before discarding edits. If a saved setting cannot be used, PixelUp names it at startup and uses its default while preserving the saved value until you change that setting. Close PixelUp before editing its settings file by hand.
 
+One PixelUp window can use a data folder at a time. Opening another copy with the same data folder asks you to close the existing window first.
+
 Preparing a queue runs in the background, so a slow drive does not block the window. Cancel queue also cancels requests still being prepared. If images cannot be queued, the message points to Records for details before you retry.
 
 Outputs never replace existing files. Each completed image has a JSON sidecar describing its processing settings and the source bytes used for that result. Cancelling a job removes its unfinished image and sidecar; a completed result stays. A forced quit can leave an image without its sidecar. Use Records to inspect warnings and errors from the session.

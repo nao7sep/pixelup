@@ -309,6 +309,7 @@
   "shortcuts.openSettings": "Abrir configuración",
   "shortcuts.showShortcuts": "Mostrar atajos de teclado",
   "shortcuts.title": "Atajos de teclado",
+  "startup.alreadyRunning": "Otra ventana de PixelUp está usando la misma carpeta de datos. Cierra esa ventana y vuelve a intentarlo.",
   "startup.storageUnreadable": "PixelUp no pudo leer su almacenamiento ni el estado de la aplicación.",
   "startup.title": "PixelUp no pudo iniciarse",
   "units.bytes": "{value} B",

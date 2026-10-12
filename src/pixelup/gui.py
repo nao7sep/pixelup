@@ -80,7 +80,7 @@ from pixelup.backup_store import drain_backups
 from pixelup.config import MODELS_ENV, RuntimeDirs, resolve_runtime_dirs, saved_models_dir
 from pixelup.config_save import ConfigSave, ConfigSaveOutcome
 from pixelup.devices import DEVICE_CHOICES
-from pixelup.errors import PixelupError, user_text
+from pixelup.errors import ErrorCode, PixelupError, user_text
 from pixelup.fonts import apply_ui_font
 from pixelup.i18n import localizer
 from pixelup.i18n.bootstrap import settle_language
@@ -134,6 +134,7 @@ from pixelup.session_end import os_session_ending
 from pixelup.session_log import configure_session_logging, log, set_stored_listener
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
+from pixelup.startup_admission import admit_data_root
 from pixelup.theme import apply_theme
 from pixelup.ui_common import (
     apply_palette_fixes,
@@ -2521,14 +2522,19 @@ def build_app(
     """Build the fully-wired application and main window, ready to run.
 
     Everything ``main`` does except the blocking ``app.exec()`` lives here so it is exercisable
-    headlessly: session logging, the runtime dirs, the QApplication and its style/icon, the window,
-    and opening any image paths passed on the command line. ``runtime_dirs`` is injectable so a
-    test can point it at a temp location; it defaults to the real resolution.
+    headlessly: root admission, session logging, the runtime dirs, the QApplication and its
+    style/icon, the window, and opening any image paths passed on the command line.
+    ``runtime_dirs`` is injectable so a test can point it at a temp location; it defaults to the
+    real resolution.
     """
-    register_image_plugins()
     # Before the application object exists, so AppKit's own menu items and the
     # first frame are both already in the reader's language.
     settle_language()
+    # The language lookup reads settings and prepares the root idempotently.
+    # Admission precedes every mutable store and stays held until process exit,
+    # beyond Qt/worker/log shutdown.
+    admit_data_root()
+    register_image_plugins()
     log_file = configure_session_logging()
     app = QApplication.instance() or QApplication(argv)
     localizer.sync_qt_translation()
@@ -2627,7 +2633,10 @@ def main() -> int:
     try:
         app, _window = build_app(sys.argv)
     except Exception as exc:  # noqa: BLE001 - windowed startup needs an owned visible failure.
-        log.exception("app.startup_failed")
+        # Contention is an expected startup result. Before admission there is no
+        # shared log writer; unexpected failures use the console fallback.
+        if not isinstance(exc, PixelupError) or exc.code != ErrorCode.APP_ALREADY_RUNNING:
+            log.exception("app.startup_failed")
         app = QApplication.instance() or QApplication(sys.argv)
         app.setApplicationName("PixelUp")
         app.setApplicationDisplayName("PixelUp")

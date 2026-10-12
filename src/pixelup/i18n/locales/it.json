@@ -309,6 +309,7 @@
   "shortcuts.openSettings": "Apri le impostazioni",
   "shortcuts.showShortcuts": "Mostra le scorciatoie da tastiera",
   "shortcuts.title": "Scorciatoie da tastiera",
+  "startup.alreadyRunning": "Un’altra finestra di PixelUp sta usando la stessa cartella di dati. Chiudi quella finestra e riprova.",
   "startup.storageUnreadable": "PixelUp non è riuscito a leggere la propria archiviazione o lo stato dell'app.",
   "startup.title": "Impossibile avviare PixelUp",
   "units.bytes": "{value} B",

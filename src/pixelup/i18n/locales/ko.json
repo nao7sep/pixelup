@@ -285,6 +285,7 @@
   "shortcuts.openSettings": "설정 열기",
   "shortcuts.showShortcuts": "키보드 단축키 보기",
   "shortcuts.title": "키보드 단축키",
+  "startup.alreadyRunning": "다른 PixelUp 창에서 같은 데이터 폴더를 사용하고 있습니다. 해당 창을 닫고 다시 시도하십시오.",
   "startup.storageUnreadable": "PixelUp이 저장소 또는 앱 상태를 읽을 수 없습니다.",
   "startup.title": "PixelUp을 시작할 수 없습니다",
   "units.bytes": "{value} B",

@@ -249,8 +249,8 @@ def test_quarantine_corrupt_file_moves_bytes_to_invalid_sibling(tmp_path: Path) 
 def test_quarantine_never_replaces_an_earlier_quarantine(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Two quarantines in one second (two launches at once, the unsupported second
-    # instance) clash on the name: the second fails like any read failure and leaves
+    # Two corrupt versions quarantined in one second clash on the name: the
+    # second fails like any read failure and leaves
     # both the earlier quarantine and its own original in place.
     monkeypatch.setattr(config_module, "utc_now_stamp", lambda: "20260705-010203-utc")
 

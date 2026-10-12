@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Prevent another PixelUp copy from writing to the same data folder while the first is running or finishing shutdown.
 - Keep source pixels, dimensions, metadata and sidecar provenance consistent if the source changes during processing.
 - Preserve photo orientation when stripping metadata, grayscale tonal range and indexed-image transparency; show oriented previews and dimensions.
 - Honour cancellation during image and sidecar writing, remove only the job's owned files and preserve committed results.

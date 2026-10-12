@@ -297,6 +297,7 @@
   "shortcuts.openSettings": "Open Settings",
   "shortcuts.showShortcuts": "Show keyboard shortcuts",
   "shortcuts.title": "Keyboard shortcuts",
+  "startup.alreadyRunning": "Another PixelUp window is using the same data folder. Close that window and try again.",
   "startup.storageUnreadable": "PixelUp could not read its storage or application state.",
   "startup.title": "PixelUp could not start",
   "units.bytes": "{value} B",

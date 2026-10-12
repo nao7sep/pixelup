@@ -22,6 +22,7 @@ class ErrorCode(StrEnum):
     INTERNAL_ERROR = "internal_error"
     JOB_CANCELLED = "job_cancelled"
     STORE_NEWER_FORMAT = "store_newer_format"
+    APP_ALREADY_RUNNING = "app_already_running"
 
 
 # The two codes whose message never reaches a reader: an internal failure is

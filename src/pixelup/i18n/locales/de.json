@@ -297,6 +297,7 @@
   "shortcuts.openSettings": "Einstellungen öffnen",
   "shortcuts.showShortcuts": "Tastenkürzel anzeigen",
   "shortcuts.title": "Tastenkürzel",
+  "startup.alreadyRunning": "Ein anderes PixelUp-Fenster verwendet denselben Datenordner. Schließen Sie dieses Fenster und versuchen Sie es erneut.",
   "startup.storageUnreadable": "PixelUp konnte seinen Speicher oder Anwendungszustand nicht lesen.",
   "startup.title": "PixelUp konnte nicht starten",
   "units.bytes": "{value} B",

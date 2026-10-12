@@ -285,6 +285,7 @@
   "shortcuts.openSettings": "打开设置",
   "shortcuts.showShortcuts": "显示键盘快捷键",
   "shortcuts.title": "键盘快捷键",
+  "startup.alreadyRunning": "另一个 PixelUp 窗口正在使用同一个数据文件夹。请关闭该窗口，然后重试。",
   "startup.storageUnreadable": "PixelUp 无法读取其存储或应用状态。",
   "startup.title": "PixelUp 无法启动",
   "units.bytes": "{value} B",

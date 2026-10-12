@@ -77,9 +77,9 @@ class AppConfig:
 class SettingsFile:
     """What PixelUp knows of ``config.json``, which it owns while it runs.
 
-    One PixelUp process is the supported writer (a second instance is neither
-    prevented nor coordinated), so the file is read once at launch and each save
-    writes from this state rather than reading the file again. Hand edits made while
+    Startup admits one PixelUp writer per data root, so the file is read once at
+    launch and each save writes from this state rather than reading the file again.
+    Hand edits made while
     PixelUp runs are replaced by its next save (developer decision).
 
     ``data`` is the stored map as last read or written. ``unapplied`` names the keys

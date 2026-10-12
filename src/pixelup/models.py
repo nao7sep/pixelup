@@ -119,10 +119,11 @@ def download_model_info(
 ) -> dict[str, object]:
     """Download, verify and atomically publish one model file.
 
-    One PixelUp process is the supported writer, and ``ModelManager`` refuses an
-    artifact already running or queued, so no cross-process lock guards the
-    download. A duplicate download from an unsupported second instance wastes
-    bandwidth but still publishes only a verified file atomically.
+    Startup admits one writer per data root, and ``ModelManager`` refuses an
+    artifact already running or queued, so no per-download lock is needed. Apps
+    with independent data roots can still share a separately configured models
+    folder: a duplicate download wastes bandwidth but publishes only a verified
+    file atomically.
     """
     if download_timeout <= 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.downloadTimeoutInvalid"))
