@@ -50,10 +50,6 @@ DONE = Message("queue.statusDone")
 CANCELLED = Message("queue.statusCancelled")
 FAILED = Message("jobs.failedFallback")
 DISK_WARNING = Message.of("warning.extensionMismatch", extension="png", format="jpg")
-# Hang guard for disposable child processes. It also covers cold PySide6 import
-# under a loaded suite; the bounds under test are the much shorter in-process
-# quit budgets and watchdogs.
-CHILD_PROCESS_GUARD_S = 60
 
 
 
@@ -1876,7 +1872,7 @@ logging.shutdown()
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
-        timeout=CHILD_PROCESS_GUARD_S,
+        timeout=5,
     )
     assert result.returncode == 0
     assert "logging tail entered" in result.stdout
@@ -2718,10 +2714,7 @@ worker.wait()
 raise RuntimeError('wait unexpectedly returned')
 """
     result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        timeout=CHILD_PROCESS_GUARD_S,
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=5,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["native wait entered", "watchdog expired"]
@@ -3111,10 +3104,7 @@ assert window._workers_clean_for_quit()
 print('reads physically settled', flush=True)
 '''.replace('SETTLES', repr(settles))
     result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        timeout=CHILD_PROCESS_GUARD_S,
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=5,
     )
     assert result.returncode == 0, result.stderr
     assert "read owned during quit" in result.stdout
