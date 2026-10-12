@@ -150,7 +150,7 @@
   "main.settingsTooltip": "Настройки ({shortcut})",
   "main.shortcuts": "Сочетания клавиш",
   "managedModels.batchSummary": "Для этого пакета нужно установить {files} ({size}), прежде чем можно будет поставить в очередь {jobs}. Задания будут созданы только после успешной установки.",
-  "managedModels.cancel": "Отмена",
+  "managedModels.cancel": "Отменить",
   "managedModels.cancelInstallation": "Отменить установку",
   "managedModels.cancelling": "Отмена…",
   "managedModels.close": "Закрыть",
