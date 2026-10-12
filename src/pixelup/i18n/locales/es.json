@@ -124,7 +124,7 @@
     "other": "{count} en cola"
   },
   "images.noJobs": "Sin trabajos",
-  "images.open": "Abrir",
+  "images.open": "Abrir…",
   "images.openDialogTitle": "Abrir imágenes",
   "images.pickerFailed": "No se pudo abrir el selector de imágenes. Inténtalo de nuevo.",
   "images.reasonFolder": "no se admiten carpetas",
@@ -226,15 +226,15 @@
   "preview.none": "Ninguna imagen seleccionada",
   "preview.title": "Vista previa",
   "preview.unavailable": "Vista previa no disponible",
-  "progress.loadingModel": "Cargando modelo",
-  "progress.saving": "Guardando",
-  "progress.starting": "Iniciando",
+  "progress.loadingModel": "Cargando modelo…",
+  "progress.saving": "Guardando…",
+  "progress.starting": "Iniciando…",
   "progress.tiles": {
     "many": "{done}/{count} de bloques procesados",
     "one": "{done}/{count} bloque procesado",
     "other": "{done}/{count} bloques procesados"
   },
-  "progress.upscaling": "Ampliando",
+  "progress.upscaling": "Ampliando…",
   "queue.columnImage": "Imagen",
   "queue.columnModel": "Modelo",
   "queue.columnOutput": "Salida",
@@ -251,7 +251,7 @@
   "queue.statusDone": "Terminado",
   "queue.statusFailed": "Fallido",
   "queue.statusPending": "Pendiente",
-  "queue.statusRunning": "En curso",
+  "queue.statusRunning": "En curso…",
   "queue.title": "Cola",
   "quit.activeJobs": {
     "many": "Se abandonarán {count} de trabajos activos. ¿Salir de PixelUp?",

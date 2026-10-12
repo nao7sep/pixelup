@@ -28,6 +28,8 @@ READ_TIMEOUT_SECONDS = 10.0
 # How many SQLite virtual-machine steps run between two looks at the deadline.
 _PROGRESS_STEPS = 1000
 # The list shows the start of a record's fields; the detail reads them whole.
+# Display-only: the store keeps every field. The list pane is at most 640 px wide,
+# far short of 400 characters, so Qt always elides the row and draws its one marker.
 _SUMMARY_FIELDS_LENGTH = 400
 
 type RecordLevel = Literal["error", "warn", "info", "debug"]

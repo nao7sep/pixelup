@@ -114,7 +114,7 @@
     "other": "대기열 {count}"
   },
   "images.noJobs": "작업 없음",
-  "images.open": "열기",
+  "images.open": "열기…",
   "images.openDialogTitle": "이미지 열기",
   "images.pickerFailed": "이미지 선택 창을 열 수 없습니다. 다시 시도하십시오.",
   "images.reasonFolder": "폴더는 지원되지 않습니다",
@@ -208,13 +208,13 @@
   "preview.none": "선택한 이미지 없음",
   "preview.title": "미리 보기",
   "preview.unavailable": "미리 보기를 표시할 수 없음",
-  "progress.loadingModel": "모델을 불러오는 중",
-  "progress.saving": "저장하는 중",
-  "progress.starting": "시작하는 중",
+  "progress.loadingModel": "모델을 불러오는 중…",
+  "progress.saving": "저장하는 중…",
+  "progress.starting": "시작하는 중…",
   "progress.tiles": {
     "other": "타일 {done}/{count} 처리됨"
   },
-  "progress.upscaling": "업스케일하는 중",
+  "progress.upscaling": "업스케일하는 중…",
   "queue.columnImage": "이미지",
   "queue.columnModel": "모델",
   "queue.columnOutput": "출력",
@@ -229,7 +229,7 @@
   "queue.statusDone": "완료",
   "queue.statusFailed": "실패",
   "queue.statusPending": "대기 중",
-  "queue.statusRunning": "실행 중",
+  "queue.statusRunning": "실행 중…",
   "queue.title": "대기열",
   "quit.activeJobs": {
     "other": "진행 중인 작업 {count}개가 중단됩니다. PixelUp을 종료하시겠습니까?"

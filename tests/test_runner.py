@@ -31,9 +31,9 @@ from pixelup.session_log import configure_session_logging
 
 
 def test_progress_text_maps_every_phase_inference_reports() -> None:
-    assert english().of(_progress_text("load_model")) == "Loading model"
-    assert english().of(_progress_text("upscale")) == "Upscaling"
-    assert english().of(_progress_text("encode")) == "Saving"
+    assert english().of(_progress_text("load_model")) == "Loading model…"
+    assert english().of(_progress_text("upscale")) == "Upscaling…"
+    assert english().of(_progress_text("encode")) == "Saving…"
 
 
 def test_tile_progress_text() -> None:
@@ -984,7 +984,7 @@ def test_worker_run_forwards_processing_progress_as_text(
 
     worker.run()
 
-    assert (job.id, "Upscaling") in progress
+    assert (job.id, "Upscaling…") in progress
     assert (job.id, "1/4 tiles processed") in progress
 
 

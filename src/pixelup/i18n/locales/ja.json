@@ -114,7 +114,7 @@
     "other": "キュー内 {count}"
   },
   "images.noJobs": "ジョブなし",
-  "images.open": "開く",
+  "images.open": "開く…",
   "images.openDialogTitle": "画像を開く",
   "images.pickerFailed": "画像の選択画面を開けませんでした。もう一度お試しください。",
   "images.reasonFolder": "フォルダーには対応していません",
@@ -208,13 +208,13 @@
   "preview.none": "画像が選択されていません",
   "preview.title": "プレビュー",
   "preview.unavailable": "プレビューを表示できません",
-  "progress.loadingModel": "モデルを読み込み中",
-  "progress.saving": "保存中",
-  "progress.starting": "開始中",
+  "progress.loadingModel": "モデルを読み込み中…",
+  "progress.saving": "保存中…",
+  "progress.starting": "開始中…",
   "progress.tiles": {
     "other": "タイル {done}/{count} を処理済み"
   },
-  "progress.upscaling": "アップスケール中",
+  "progress.upscaling": "アップスケール中…",
   "queue.columnImage": "画像",
   "queue.columnModel": "モデル",
   "queue.columnOutput": "出力",
@@ -229,7 +229,7 @@
   "queue.statusDone": "完了",
   "queue.statusFailed": "失敗",
   "queue.statusPending": "待機中",
-  "queue.statusRunning": "実行中",
+  "queue.statusRunning": "実行中…",
   "queue.title": "キュー",
   "quit.activeJobs": {
     "other": "実行中のジョブ {count} 件が破棄されます。PixelUp を終了しますか？"

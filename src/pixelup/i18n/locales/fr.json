@@ -124,7 +124,7 @@
     "other": "{count} en file"
   },
   "images.noJobs": "Aucune tâche",
-  "images.open": "Ouvrir",
+  "images.open": "Ouvrir…",
   "images.openDialogTitle": "Ouvrir des images",
   "images.pickerFailed": "Impossible d’ouvrir le sélecteur d’images. Réessayez.",
   "images.reasonFolder": "les dossiers ne sont pas pris en charge",
@@ -226,15 +226,15 @@
   "preview.none": "Aucune image sélectionnée",
   "preview.title": "Aperçu",
   "preview.unavailable": "Aperçu indisponible",
-  "progress.loadingModel": "Chargement du modèle",
-  "progress.saving": "Enregistrement",
-  "progress.starting": "Démarrage",
+  "progress.loadingModel": "Chargement du modèle…",
+  "progress.saving": "Enregistrement…",
+  "progress.starting": "Démarrage…",
   "progress.tiles": {
     "many": "{done}/{count} de tuiles traitées",
     "one": "{done}/{count} tuile traitée",
     "other": "{done}/{count} tuiles traitées"
   },
-  "progress.upscaling": "Agrandissement",
+  "progress.upscaling": "Agrandissement…",
   "queue.columnImage": "Image",
   "queue.columnModel": "Modèle",
   "queue.columnOutput": "Sortie",
@@ -251,7 +251,7 @@
   "queue.statusDone": "Terminée",
   "queue.statusFailed": "Échouée",
   "queue.statusPending": "En attente",
-  "queue.statusRunning": "En cours",
+  "queue.statusRunning": "En cours…",
   "queue.title": "File d’attente",
   "quit.activeJobs": {
     "many": "{count} de tâches actives seront abandonnées. Quitter PixelUp\u00a0?",

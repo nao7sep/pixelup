@@ -114,7 +114,7 @@
     "other": "排队 {count}"
   },
   "images.noJobs": "无任务",
-  "images.open": "打开",
+  "images.open": "打开…",
   "images.openDialogTitle": "打开图像",
   "images.pickerFailed": "无法打开图像选择器。请重试。",
   "images.reasonFolder": "不支持文件夹",
@@ -208,13 +208,13 @@
   "preview.none": "未选择图像",
   "preview.title": "预览",
   "preview.unavailable": "无法预览",
-  "progress.loadingModel": "正在加载模型",
-  "progress.saving": "正在保存",
-  "progress.starting": "正在开始",
+  "progress.loadingModel": "正在加载模型…",
+  "progress.saving": "正在保存…",
+  "progress.starting": "正在开始…",
   "progress.tiles": {
     "other": "已处理分块 {done}/{count}"
   },
-  "progress.upscaling": "正在放大",
+  "progress.upscaling": "正在放大…",
   "queue.columnImage": "图像",
   "queue.columnModel": "模型",
   "queue.columnOutput": "输出",
@@ -229,7 +229,7 @@
   "queue.statusDone": "完成",
   "queue.statusFailed": "失败",
   "queue.statusPending": "等待中",
-  "queue.statusRunning": "运行中",
+  "queue.statusRunning": "运行中…",
   "queue.title": "队列",
   "quit.activeJobs": {
     "other": "{count} 个活动任务将被放弃。要退出 PixelUp 吗？"

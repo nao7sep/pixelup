@@ -129,7 +129,7 @@
     "other": "{count} в очереди"
   },
   "images.noJobs": "Нет заданий",
-  "images.open": "Открыть",
+  "images.open": "Открыть…",
   "images.openDialogTitle": "Открыть изображения",
   "images.pickerFailed": "Не удалось открыть окно выбора изображений. Повторите попытку.",
   "images.reasonFolder": "папки не поддерживаются",
@@ -235,16 +235,16 @@
   "preview.none": "Изображение не выбрано",
   "preview.title": "Предпросмотр",
   "preview.unavailable": "Предпросмотр недоступен",
-  "progress.loadingModel": "Загрузка модели",
-  "progress.saving": "Сохранение",
-  "progress.starting": "Запуск",
+  "progress.loadingModel": "Загрузка модели…",
+  "progress.saving": "Сохранение…",
+  "progress.starting": "Запуск…",
   "progress.tiles": {
     "few": "Обработано фрагментов: {done}/{count}",
     "many": "Обработано фрагментов: {done}/{count}",
     "one": "Обработано фрагментов: {done}/{count}",
     "other": "Обработано фрагментов: {done}/{count}"
   },
-  "progress.upscaling": "Увеличение",
+  "progress.upscaling": "Увеличение…",
   "queue.columnImage": "Изображение",
   "queue.columnModel": "Модель",
   "queue.columnOutput": "Результат",
@@ -262,7 +262,7 @@
   "queue.statusDone": "Готово",
   "queue.statusFailed": "Ошибка",
   "queue.statusPending": "Ожидает",
-  "queue.statusRunning": "Выполняется",
+  "queue.statusRunning": "Выполняется…",
   "queue.title": "Очередь",
   "quit.activeJobs": {
     "few": "{count} активных задания будут прерваны. Выйти из PixelUp?",

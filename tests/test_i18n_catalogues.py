@@ -1,10 +1,10 @@
 """The catalogue gate (localization-conventions).
 
-English defines the key set; every language has exactly it; placeholders and
-plural forms match; nothing is left in English by accident; and no file carries a
-character a reader cannot see. These read the files in the repository rather than
-the parsed catalogues, because the hidden-character and trailing-newline checks
-are about the file itself, which parsing erases.
+English defines the key set; every language has exactly it; placeholders, plural
+forms and ellipses match; nothing is left in English by accident; and no file
+carries a character a reader cannot see. These read the files in the repository
+rather than the parsed catalogues, because the hidden-character and
+trailing-newline checks are about the file itself, which parsing erases.
 """
 
 from __future__ import annotations
@@ -162,6 +162,28 @@ def test_every_form_keeps_english_placeholders(tag: str) -> None:
         )
         for form, text in _forms(entry):
             assert _placeholders(text) == expected, f"{tag}: {key} {form}"
+
+
+@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+def test_every_form_has_an_ellipsis_exactly_when_english_does(tag: str) -> None:
+    # The ellipsis carries meaning, so a translation never adds or drops one; only
+    # its spacing follows the language: German puts a no-break space before it
+    # (Duden), and every other language attaches it to the word.
+    english = _raw("en")
+    for key, entry in _raw(tag).items():
+        english_forms = dict(_forms(english[key]))
+        for form, text in _forms(entry):
+            wanted = "…" in english_forms.get(form, english_forms.get("other", ""))
+            assert "..." not in text, f"{tag}: {key} {form} uses three periods"
+            assert ("…" in text) == wanted, f"{tag}: {key} {form}"
+            assert " …" not in text, f"{tag}: {key} {form} has a space before the ellipsis"
+            if tag == "de":
+                assert text.count("…") == text.count(" …"), f"{tag}: {key} {form}"
+            else:
+                assert " …" not in text, f"{tag}: {key} {form}"
+    raw = locale_file(tag).read_text(encoding="utf-8").casefold()
+    for written in ("\\u2026", "&hellip;", "&#8230;", "&#x2026;"):
+        assert written not in raw, f"{tag}.json writes the ellipsis as {written}"
 
 
 @pytest.mark.parametrize("tag", [tag for tag in EXPECTED_TAGS if tag != "en"])

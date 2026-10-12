@@ -124,7 +124,7 @@
     "other": "{count} na fila"
   },
   "images.noJobs": "Nenhuma tarefa",
-  "images.open": "Abrir",
+  "images.open": "Abrir…",
   "images.openDialogTitle": "Abrir imagens",
   "images.pickerFailed": "Não foi possível abrir o seletor de imagens. Tente novamente.",
   "images.reasonFolder": "pastas não são suportadas",
@@ -226,15 +226,15 @@
   "preview.none": "Nenhuma imagem selecionada",
   "preview.title": "Pré-visualização",
   "preview.unavailable": "Pré-visualização indisponível",
-  "progress.loadingModel": "Carregando modelo",
-  "progress.saving": "Salvando",
-  "progress.starting": "Iniciando",
+  "progress.loadingModel": "Carregando modelo…",
+  "progress.saving": "Salvando…",
+  "progress.starting": "Iniciando…",
   "progress.tiles": {
     "many": "{done}/{count} de blocos processados",
     "one": "{done}/{count} bloco processado",
     "other": "{done}/{count} blocos processados"
   },
-  "progress.upscaling": "Ampliando",
+  "progress.upscaling": "Ampliando…",
   "queue.columnImage": "Imagem",
   "queue.columnModel": "Modelo",
   "queue.columnOutput": "Saída",
@@ -251,7 +251,7 @@
   "queue.statusDone": "Concluída",
   "queue.statusFailed": "Com falha",
   "queue.statusPending": "Pendente",
-  "queue.statusRunning": "Em execução",
+  "queue.statusRunning": "Em execução…",
   "queue.title": "Fila",
   "quit.activeJobs": {
     "many": "{count} de tarefas ativas serão abandonadas. Sair do PixelUp?",

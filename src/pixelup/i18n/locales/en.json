@@ -119,7 +119,7 @@
     "other": "{count} queued"
   },
   "images.noJobs": "No jobs",
-  "images.open": "Open",
+  "images.open": "Open…",
   "images.openDialogTitle": "Open images",
   "images.pickerFailed": "Could not open the image picker. Try again.",
   "images.reasonFolder": "folders are not supported",
@@ -217,14 +217,14 @@
   "preview.none": "No image selected",
   "preview.title": "Preview",
   "preview.unavailable": "Preview unavailable",
-  "progress.loadingModel": "Loading model",
-  "progress.saving": "Saving",
-  "progress.starting": "Starting",
+  "progress.loadingModel": "Loading model…",
+  "progress.saving": "Saving…",
+  "progress.starting": "Starting…",
   "progress.tiles": {
     "one": "{done}/{count} tile processed",
     "other": "{done}/{count} tiles processed"
   },
-  "progress.upscaling": "Upscaling",
+  "progress.upscaling": "Upscaling…",
   "queue.columnImage": "Image",
   "queue.columnModel": "Model",
   "queue.columnOutput": "Output",
@@ -240,7 +240,7 @@
   "queue.statusDone": "Done",
   "queue.statusFailed": "Failed",
   "queue.statusPending": "Pending",
-  "queue.statusRunning": "Running",
+  "queue.statusRunning": "Running…",
   "queue.title": "Queue",
   "quit.activeJobs": {
     "one": "{count} active job will be abandoned. Quit PixelUp?",

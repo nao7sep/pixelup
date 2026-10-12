@@ -363,7 +363,7 @@ class ManagedModelsDialog(DialogShell):
 
     def _choose_folder(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
-            self, localizer.t("managedModels.chooseFolder"),
+            self, localizer.t("managedModels.folder"),
             self.folder_edit.text() or str(self._manager.models_dir),
         )
         if chosen:

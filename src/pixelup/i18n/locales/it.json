@@ -124,7 +124,7 @@
     "other": "{count} in coda"
   },
   "images.noJobs": "Nessun lavoro",
-  "images.open": "Apri",
+  "images.open": "Apri…",
   "images.openDialogTitle": "Apri immagini",
   "images.pickerFailed": "Impossibile aprire la selezione delle immagini. Riprova.",
   "images.reasonFolder": "le cartelle non sono supportate",
@@ -226,15 +226,15 @@
   "preview.none": "Nessuna immagine selezionata",
   "preview.title": "Anteprima",
   "preview.unavailable": "Anteprima non disponibile",
-  "progress.loadingModel": "Caricamento del modello",
-  "progress.saving": "Salvataggio",
-  "progress.starting": "Avvio",
+  "progress.loadingModel": "Caricamento del modello…",
+  "progress.saving": "Salvataggio…",
+  "progress.starting": "Avvio…",
   "progress.tiles": {
     "many": "{done}/{count} di riquadri elaborati",
     "one": "{done}/{count} riquadro elaborato",
     "other": "{done}/{count} riquadri elaborati"
   },
-  "progress.upscaling": "Ingrandimento",
+  "progress.upscaling": "Ingrandimento…",
   "queue.columnImage": "Immagine",
   "queue.columnModel": "Modello",
   "queue.columnOutput": "Output",
@@ -251,7 +251,7 @@
   "queue.statusDone": "Completato",
   "queue.statusFailed": "Non riuscito",
   "queue.statusPending": "In attesa",
-  "queue.statusRunning": "In corso",
+  "queue.statusRunning": "In corso…",
   "queue.title": "Coda",
   "quit.activeJobs": {
     "many": "{count} di lavori attivi verranno abbandonati. Uscire da PixelUp?",
