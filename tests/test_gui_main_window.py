@@ -14,7 +14,7 @@ import pytest
 from PIL import Image, PngImagePlugin
 from PySide6.QtCore import QEvent, QMargins, QRect, QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QImageReader, QKeySequence, QPalette
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton, QStyle
 
 from pixelup import gui, theme
 from pixelup.app_config import (
@@ -270,6 +270,12 @@ def test_build_app_wires_application_and_opens_argv_paths(
     try:
         assert app is qapp  # reuses the running QApplication rather than constructing a second
         assert app.applicationName() == "PixelUp"
+        assert app.style().styleHint(
+            QStyle.StyleHint.SH_ComboBox_ListMouseTracking_Current
+        ) == 0
+        assert app.style().styleHint(
+            QStyle.StyleHint.SH_ComboBox_ListMouseTracking_Active
+        ) == 1
         assert window.windowTitle() == "PixelUp"
         assert window.runtime_dirs is runtime_dirs
         # The image path on the command line was opened into the window.

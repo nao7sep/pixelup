@@ -17,6 +17,7 @@ from pixelup.i18n.localizer import english
 from pixelup.model_management import MANAGED_ARTIFACT_NAMES
 from pixelup.model_manager import ModelManager
 from pixelup.session_log import LOGGER_NAME
+from pixelup.theme import PixelupStyle
 
 CORPUS = Path(__file__).resolve().parents[2] / "company" / "assets" / "test-fixtures"
 MODEL_INSTALL_TIMEOUT_S = 60 * 60
@@ -120,7 +121,7 @@ def _session_qapp() -> QApplication:
     # from it, so a test that measures what the app draws has to measure it under
     # the same style rather than the platform default.
     if "Fusion" in QStyleFactory.keys():
-        app.setStyle("Fusion")
+        app.setStyle(PixelupStyle())
     return app
 
 

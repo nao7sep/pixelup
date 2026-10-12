@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtCore import QEvent, QModelIndex, QPersistentModelIndex, QPointF, QSize, Qt
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
+    QIcon,
     QPainter,
     QPaintEvent,
     QPalette,
@@ -22,6 +23,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
     QSpinBox,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QToolButton,
     QWidget,
@@ -33,6 +37,7 @@ from pixelup.i18n.localized import localize, unlocalize
 from pixelup.i18n.message import Message
 from pixelup.paths import OutputFormat
 from pixelup.session_log import log
+from pixelup.theme import INDICATOR_SIZE, _check_pixmap
 
 ResultSeverity = Literal["information", "warning", "error"]
 
@@ -246,7 +251,38 @@ def repolish(widget: QWidget) -> None:
     style.polish(widget)
 
 
+class _ChoiceDelegate(QStyledItemDelegate):
+    """Keep the committed choice marked separately from popup navigation."""
+
+    def initStyleOption(  # noqa: N802 - Qt override name
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
+        super().initStyleOption(option, index)
+        combo = self.parent()
+        role = (
+            QPalette.ColorRole.HighlightedText
+            if option.state & QStyle.StateFlag.State_Selected else QPalette.ColorRole.Text
+        )
+        mark = _check_pixmap(option.palette.color(role))
+        if index.row() == combo.currentIndex():
+            option.icon = QIcon(mark)
+        else:
+            mark.fill(Qt.GlobalColor.transparent)
+            option.icon = QIcon(mark)
+        option.features |= QStyleOptionViewItem.ViewItemFeature.HasDecoration
+        option.decorationPosition = QStyleOptionViewItem.Position.Right
+        option.decorationSize = QSize(INDICATOR_SIZE, INDICATOR_SIZE)
+        # Native layout reserves the mark's space, and native selection/focus
+        # remain in sync with accessibility. The combo's value owns the tick.
+
+
 class NoWheelComboBox(QComboBox):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setItemDelegate(_ChoiceDelegate(self))
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
             super().wheelEvent(event)

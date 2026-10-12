@@ -125,6 +125,7 @@ def test_every_colour_in_the_sheet_is_one_the_app_names() -> None:
                 | set(theme.accent_colours(palette).values())
                 | set(theme.danger_colours(palette).values())
                 | {theme.warning_text(palette)}
+                | {theme.selection_hover(palette)}
             )
         }
         assert literals <= allowed, f"unexpected literal colours: {sorted(literals - allowed)}"

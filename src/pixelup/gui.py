@@ -135,7 +135,7 @@ from pixelup.session_log import configure_session_logging, log, set_stored_liste
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.startup_admission import admit_data_root
-from pixelup.theme import apply_theme
+from pixelup.theme import PixelupStyle, apply_theme
 from pixelup.ui_common import (
     apply_palette_fixes,
     use_regular_spacing,
@@ -2539,7 +2539,7 @@ def build_app(
     app = QApplication.instance() or QApplication(argv)
     localizer.sync_qt_translation()
     if "Fusion" in QStyleFactory.keys():
-        app.setStyle("Fusion")
+        app.setStyle(PixelupStyle())
     # PixelUp follows the OS light/dark theme; it owns no colours, only two
     # corrections to what Fusion resolves (apply_palette_fixes).
     #

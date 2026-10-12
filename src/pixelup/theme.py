@@ -25,10 +25,41 @@ from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPalette, QPen, QPixmap, QPolygon, QPolygonF
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import (
+    QApplication,
+    QProxyStyle,
+    QStyle,
+    QStyleHintReturn,
+    QStyleOption,
+    QWidget,
+)
 
 from pixelup.config import resolve_state_dir
 from pixelup.fonts import DEFAULT_UI_FONT_SIZE
+
+
+class PixelupStyle(QProxyStyle):
+    """Fusion with visual-only hover in selection popups."""
+
+    def __init__(self) -> None:
+        super().__init__("Fusion")
+
+    def styleHint(  # noqa: N802 - Qt override name
+        self,
+        hint: QStyle.StyleHint,
+        option: QStyleOption | None = None,
+        widget: QWidget | None = None,
+        returnData: QStyleHintReturn | None = None,
+    ) -> int:
+        # Qt's combo container otherwise moves the navigation target on every
+        # mouse move, including after arrows. Clicks still use the native view.
+        if hint == QStyle.StyleHint.SH_ComboBox_ListMouseTracking_Current:
+            return 0
+        # Keep native hover painting and its click-release guard active.
+        if hint == QStyle.StyleHint.SH_ComboBox_ListMouseTracking_Active:
+            return 1
+        return super().styleHint(hint, option, widget, returnData)
+
 
 # One standard height for a one-line control — a text field, a combo box, a spin
 # box or a button beside them — and one compact height for a dense row. Before
@@ -346,7 +377,12 @@ QComboBox QAbstractItemView {{
     border: {BORDER_WIDTH}px solid {tone["field_edge"]};
     selection-background-color: {accent["fill"]};
     selection-color: {accent["ink"]};
-    outline: 0;
+}}
+QComboBox QAbstractItemView::item:hover:!selected {{
+    background-color: {tone["button_hover"]};
+}}
+QComboBox QAbstractItemView::item:selected:hover {{
+    background-color: {accent["fill_hover"]};
 }}
 
 /* Once a sheet draws these, the toolkit stops drawing their arrows, and a sheet
@@ -427,6 +463,10 @@ QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
     background-color: {accent["fill"]};
     border-color: {accent["fill"]};
 }}
+QCheckBox::indicator:checked:hover:!disabled, QRadioButton::indicator:checked:hover:!disabled {{
+    background-color: {accent["fill_hover"]};
+    border-color: {accent["fill_hover"]};
+}}
 QCheckBox::indicator:checked {{ image: url({marks["check"].as_posix()}); }}
 QRadioButton::indicator:checked {{ image: url({marks["radio"].as_posix()}); }}
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
@@ -440,6 +480,12 @@ QCheckBox::indicator:checked:disabled, QRadioButton::indicator:checked:disabled 
 QCheckBox::indicator:checked:disabled {{ image: url({marks["check-disabled"].as_posix()}); }}
 QRadioButton::indicator:checked:disabled {{ image: url({marks["radio-disabled"].as_posix()}); }}
 """
+
+
+def selection_hover(palette: QPalette) -> str:
+    """A hover step of the existing collection selection, retaining its hue."""
+    fill = palette.color(QPalette.ColorRole.Highlight)
+    return (fill.lighter(110) if is_dark(palette) else fill.darker(110)).name()
 
 
 def build_stylesheet(palette: QPalette, marks: dict[str, Path] | None = None) -> str:
@@ -613,6 +659,14 @@ QHeaderView::section {{
 }}
 QTableWidget::item, QTableView::item {{
     padding: 4px 8px;
+}}
+QTableWidget::item:hover:!selected, QTableView::item:hover:!selected,
+QListView#recordsList::item:hover:!selected {{
+    background-color: {tone["button_hover"]};
+}}
+QTableWidget::item:selected:hover, QTableView::item:selected:hover,
+QListView#recordsList::item:selected:hover {{
+    background-color: {selection_hover(palette)};
 }}
 
 /* A panel holds content a surface lays out itself — the models list, a result
