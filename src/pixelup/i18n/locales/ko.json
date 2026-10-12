@@ -1,6 +1,6 @@
 {
   "managedModels.folder": "모델 폴더",
-  "managedModels.chooseFolder": "폴더 선택…",
+  "managedModels.chooseFolder": "폴더 선택",
   "managedModels.useFolder": "이 폴더 사용",
   "managedModels.folderHelp": "설치하기 전에 모델을 저장할 위치를 선택합니다. 비워 두면 기본 폴더를 사용합니다. 폴더를 변경해도 기존 파일은 이동하거나 삭제하지 않습니다.",
   "managedModels.folderBusy": "모델 설치 또는 폴더 설정 저장이 완료된 후 폴더를 변경해 주세요.",
@@ -114,7 +114,7 @@
     "other": "대기열 {count}"
   },
   "images.noJobs": "작업 없음",
-  "images.open": "열기…",
+  "images.open": "열기",
   "images.openDialogTitle": "이미지 열기",
   "images.pickerFailed": "이미지 선택 창을 열 수 없습니다. 다시 시도하십시오.",
   "images.reasonFolder": "폴더는 지원되지 않습니다",

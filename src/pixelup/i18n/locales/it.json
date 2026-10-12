@@ -1,6 +1,6 @@
 {
   "managedModels.folder": "Cartella dei modelli",
-  "managedModels.chooseFolder": "Scegli cartella…",
+  "managedModels.chooseFolder": "Scegli cartella",
   "managedModels.useFolder": "Usa cartella",
   "managedModels.folderHelp": "Scegli dove salvare i modelli prima di installarli. Lascia il campo vuoto per usare la cartella predefinita. Cambiare cartella non sposta né elimina i file esistenti.",
   "managedModels.folderBusy": "Attendi il completamento dell’installazione dei modelli o del salvataggio dell’impostazione della cartella prima di cambiarla.",
@@ -124,7 +124,7 @@
     "other": "{count} in coda"
   },
   "images.noJobs": "Nessun lavoro",
-  "images.open": "Apri…",
+  "images.open": "Apri",
   "images.openDialogTitle": "Apri immagini",
   "images.pickerFailed": "Impossibile aprire la selezione delle immagini. Riprova.",
   "images.reasonFolder": "le cartelle non sono supportate",

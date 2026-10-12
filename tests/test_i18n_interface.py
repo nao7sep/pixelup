@@ -377,10 +377,10 @@ def test_a_language_change_rewrites_what_is_already_on_screen(
     window: MainWindow, qapp: QApplication
 ) -> None:
     gc.collect()
-    assert window.open_images_button.text() == "Open…"
+    assert window.open_images_button.text() == "Open"
     with localizer.speaking("de"):
         qapp.processEvents()
-        assert window.open_images_button.text() == "Öffnen\u00a0…"
+        assert window.open_images_button.text() == "Öffnen"
         assert window.findChild(QGroupBox).title() in {"Bilder", "Vorschau", "Modelle"}
         assert window.image_table.horizontalHeaderItem(0).text() == "Bild"
         assert window.tile.itemText(window.tile.count() - 1) == "Ganzes Bild"
@@ -401,7 +401,7 @@ def test_a_language_change_rewrites_what_is_already_on_screen(
         finally:
             dialog.deleteLater()
     qapp.processEvents()
-    assert window.open_images_button.text() == "Open…"
+    assert window.open_images_button.text() == "Open"
     assert window.image_table.horizontalHeaderItem(0).text() == "Image"
     assert any(cell.startswith("1 done") for cell in _status_cells(window))
 
@@ -421,7 +421,7 @@ def test_saving_a_language_in_settings_applies_it_live(
     qapp.processEvents()
     assert window.config.language == "ja"
     assert localizer.preference() == "ja"
-    assert window.open_images_button.text() == "開く…"
+    assert window.open_images_button.text() == "開く"
 
 
 def test_a_closed_dialog_is_left_alone_by_a_language_change(qapp: QApplication) -> None:

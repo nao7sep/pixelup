@@ -1,6 +1,6 @@
 {
   "managedModels.folder": "Pasta de modelos",
-  "managedModels.chooseFolder": "Escolher pasta…",
+  "managedModels.chooseFolder": "Escolher pasta",
   "managedModels.useFolder": "Usar pasta",
   "managedModels.folderHelp": "Escolha onde salvar os modelos antes de instalar. Deixe em branco para usar a pasta padrão. Alterar a pasta não move nem apaga os arquivos existentes.",
   "managedModels.folderBusy": "Aguarde a conclusão da instalação dos modelos ou do salvamento da configuração da pasta antes de alterá-la.",
@@ -124,7 +124,7 @@
     "other": "{count} na fila"
   },
   "images.noJobs": "Nenhuma tarefa",
-  "images.open": "Abrir…",
+  "images.open": "Abrir",
   "images.openDialogTitle": "Abrir imagens",
   "images.pickerFailed": "Não foi possível abrir o seletor de imagens. Tente novamente.",
   "images.reasonFolder": "pastas não são suportadas",

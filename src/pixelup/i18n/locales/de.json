@@ -1,6 +1,6 @@
 {
   "managedModels.folder": "Modellordner",
-  "managedModels.chooseFolder": "Ordner auswählen\u00a0…",
+  "managedModels.chooseFolder": "Ordner auswählen",
   "managedModels.useFolder": "Ordner verwenden",
   "managedModels.folderHelp": "Wählen Sie vor der Installation den Speicherort für Modelle. Lassen Sie das Feld leer, um den Standardordner zu verwenden. Ein Ordnerwechsel verschiebt oder löscht keine vorhandenen Dateien.",
   "managedModels.folderBusy": "Warten Sie, bis die Modellinstallation oder das Speichern der Ordnereinstellung abgeschlossen ist, bevor Sie den Ordner ändern.",
@@ -119,7 +119,7 @@
     "other": "{count} eingereiht"
   },
   "images.noJobs": "Keine Aufträge",
-  "images.open": "Öffnen\u00a0…",
+  "images.open": "Öffnen",
   "images.openDialogTitle": "Bilder öffnen",
   "images.pickerFailed": "Die Bildauswahl konnte nicht geöffnet werden. Versuchen Sie es erneut.",
   "images.reasonFolder": "Ordner werden nicht unterstützt",

@@ -1,6 +1,6 @@
 {
   "managedModels.folder": "模型文件夹",
-  "managedModels.chooseFolder": "选择文件夹…",
+  "managedModels.chooseFolder": "选择文件夹",
   "managedModels.useFolder": "使用此文件夹",
   "managedModels.folderHelp": "安装前请选择模型的保存位置。留空将使用默认文件夹。更改文件夹不会移动或删除现有文件。",
   "managedModels.folderBusy": "请等待模型安装或文件夹设置保存完成后再更改文件夹。",
@@ -114,7 +114,7 @@
     "other": "排队 {count}"
   },
   "images.noJobs": "无任务",
-  "images.open": "打开…",
+  "images.open": "打开",
   "images.openDialogTitle": "打开图像",
   "images.pickerFailed": "无法打开图像选择器。请重试。",
   "images.reasonFolder": "不支持文件夹",

@@ -1,6 +1,6 @@
 {
   "managedModels.folder": "Models folder",
-  "managedModels.chooseFolder": "Choose folder…",
+  "managedModels.chooseFolder": "Choose folder",
   "managedModels.useFolder": "Use folder",
   "managedModels.folderHelp": "Choose where to save models before installing. Leave blank to use the default folder. Changing folders does not move or delete existing files.",
   "managedModels.folderBusy": "Wait for model installation or saving the folder setting to finish before changing folders.",
@@ -119,7 +119,7 @@
     "other": "{count} queued"
   },
   "images.noJobs": "No jobs",
-  "images.open": "Open…",
+  "images.open": "Open",
   "images.openDialogTitle": "Open images",
   "images.pickerFailed": "Could not open the image picker. Try again.",
   "images.reasonFolder": "folders are not supported",

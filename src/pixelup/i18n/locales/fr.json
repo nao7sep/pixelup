@@ -1,6 +1,6 @@
 {
   "managedModels.folder": "Dossier des modèles",
-  "managedModels.chooseFolder": "Choisir un dossier…",
+  "managedModels.chooseFolder": "Choisir un dossier",
   "managedModels.useFolder": "Utiliser ce dossier",
   "managedModels.folderHelp": "Choisissez où enregistrer les modèles avant de les installer. Laissez le champ vide pour utiliser le dossier par défaut. Changer de dossier ne déplace ni ne supprime les fichiers existants.",
   "managedModels.folderBusy": "Attendez la fin de l’installation des modèles ou de l’enregistrement du choix du dossier avant de changer de dossier.",
@@ -124,7 +124,7 @@
     "other": "{count} en file"
   },
   "images.noJobs": "Aucune tâche",
-  "images.open": "Ouvrir…",
+  "images.open": "Ouvrir",
   "images.openDialogTitle": "Ouvrir des images",
   "images.pickerFailed": "Impossible d’ouvrir le sélecteur d’images. Réessayez.",
   "images.reasonFolder": "les dossiers ne sont pas pris en charge",

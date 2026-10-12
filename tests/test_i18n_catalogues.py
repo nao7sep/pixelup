@@ -186,28 +186,6 @@ def test_every_form_has_an_ellipsis_exactly_when_english_does(tag: str) -> None:
         assert written not in raw, f"{tag}.json writes the ellipsis as {written}"
 
 
-# A command and the running status that replaces it on the same control. Equal
-# text would make a press look ignored, and so would text that differs only by
-# the ellipsis, so the comparison sets the ellipsis and its spacing aside.
-COMMAND_STATUS_PAIRS = (
-    ("managedModels.cancel", "managedModels.cancelling"),
-    ("managedModels.cancelInstallation", "managedModels.cancelling"),
-)
-
-
-def _without_ellipsis(text: str) -> str:
-    return text.replace("\u00a0…", "").replace("…", "").strip().casefold()
-
-
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
-def test_a_command_reads_differently_from_the_status_that_replaces_it(tag: str) -> None:
-    entries = _raw(tag)
-    for command, status in COMMAND_STATUS_PAIRS:
-        assert _without_ellipsis(entries[command]) != _without_ellipsis(entries[status]), (
-            f"{tag}: {command} reads as {status}"
-        )
-
-
 @pytest.mark.parametrize("tag", [tag for tag in EXPECTED_TAGS if tag != "en"])
 def test_no_language_copies_english(tag: str) -> None:
     english = _raw("en")

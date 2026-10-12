@@ -1,6 +1,6 @@
 {
   "managedModels.folder": "Carpeta de modelos",
-  "managedModels.chooseFolder": "Elegir carpeta…",
+  "managedModels.chooseFolder": "Elegir carpeta",
   "managedModels.useFolder": "Usar carpeta",
   "managedModels.folderHelp": "Elige dónde guardar los modelos antes de instalarlos. Deja el campo vacío para usar la carpeta predeterminada. Cambiar de carpeta no mueve ni elimina los archivos existentes.",
   "managedModels.folderBusy": "Espera a que termine la instalación de modelos o se guarde la configuración de la carpeta antes de cambiarla.",
@@ -124,7 +124,7 @@
     "other": "{count} en cola"
   },
   "images.noJobs": "Sin trabajos",
-  "images.open": "Abrir…",
+  "images.open": "Abrir",
   "images.openDialogTitle": "Abrir imágenes",
   "images.pickerFailed": "No se pudo abrir el selector de imágenes. Inténtalo de nuevo.",
   "images.reasonFolder": "no se admiten carpetas",
