@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QScrollArea
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QScrollArea, QWidget
 
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import AppConfig
@@ -70,6 +70,28 @@ def test_cmd_or_ctrl_w_closes_the_dialog_like_its_close_button(
 
     assert not dialog.isVisible()
     assert dialog.result() == QDialog.DialogCode.Rejected
+
+
+def test_a_dialog_takes_focus_above_its_opener_and_returns_it(
+    dialog: DialogShell, qapp: QApplication, process_until
+) -> None:
+    # window-conventions: a window opened at the user's request becomes the key
+    # window above the one it was opened from. Owned by its opener, the OS keeps
+    # it above and hands focus back when it closes; the offscreen test platform
+    # reactivates nothing on close, so that last step is the OS's to qualify.
+    opener = QWidget()
+    opener.show()
+    opener.activateWindow()
+    process_until(opener.isActiveWindow, timeout_s=5, what="Opener becomes the key window")
+    dialog.setParent(opener, dialog.windowFlags())
+    try:
+        dialog.show()
+        process_until(dialog.isActiveWindow, timeout_s=5, what="Dialog becomes the key window")
+        assert dialog.windowHandle().transientParent() is opener.windowHandle()
+    finally:
+        dialog.setParent(None)
+        opener.close()
+        opener.deleteLater()
 
 
 def test_the_title_bar_is_the_header(dialog: DialogShell) -> None:
