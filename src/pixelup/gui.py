@@ -533,6 +533,8 @@ class MainWindow(QMainWindow):
         self._quit_when_workers_idle = False
         self._quit_bounded = False
         self._session_shutdown = False
+        # Set once Qt announces that the event loop is ending (see _app_about_to_quit).
+        self._app_quitting = False
         # Coalesces the Parameters panel's edits into one save (see
         # _PARAMETERS_SAVE_DELAY_MS). Built before the UI, because building the panel
         # connects the widget-change signals that start it.
@@ -579,6 +581,7 @@ class MainWindow(QMainWindow):
             commit = getattr(app, "commitDataRequest", None)
             if commit is not None:
                 commit.connect(self._on_commit_data_request)
+            app.aboutToQuit.connect(self._app_about_to_quit)
             self._application_state = app.applicationState()
             app.applicationStateChanged.connect(self._application_state_changed)
         # Each record the database stores tells an open Records window to read again.
@@ -648,11 +651,24 @@ class MainWindow(QMainWindow):
         # Asked again for every quit on macOS, the user's own included, so each
         # request decides afresh (see session_end).
         self._session_shutdown = os_session_ending()
+        if (self._session_shutdown and self._config_save is None
+                and self._parameters_save_timer.isActive()):
+            # Windows ends the process soon after the session ends, so the
+            # debounced Parameters save starts now rather than at its timer.
+            self._flush_parameters_save(surface_failure=False)
         if self._session_shutdown and self._closing:
             self._bound_quit()
             self._dismiss_session_question()
             self._quit_ready = True
             QTimer.singleShot(0, self.close)
+
+    @Slot()
+    def _app_about_to_quit(self) -> None:
+        # Windows emits this at WM_ENDSESSION, before Qt closes the windows; the
+        # session is still ending, but isSavingSession() was true only during the
+        # commit request. Elsewhere it follows the last close, so nothing changes.
+        # Either way no user interaction is possible any more (QCoreApplication).
+        self._app_quitting = True
 
     def _dismiss_session_question(self) -> None:
         if self._quit_dialog is not None:
@@ -696,6 +712,8 @@ class MainWindow(QMainWindow):
         self._update_native_minimum()
 
     def _is_session_shutdown(self) -> bool:
+        if self._app_quitting:
+            return True
         app = QGuiApplication.instance()
         if sys.platform == "darwin":
             # Cocoa also starts Qt session handling for ordinary Cmd+Q.
@@ -835,6 +853,10 @@ class MainWindow(QMainWindow):
         except Exception:
             # Forced exit is already under way; another diagnostic sink could stall too.
             pass
+
+    def holds_work_after_os_close(self) -> bool:
+        """Whether an accepted OS close still owns work the event loop must settle."""
+        return self._os_close_accepted and not self._workers_clean_for_quit()
 
     def _close_when_workers_stop(self) -> None:
         if self._os_close_accepted and self._workers_clean_for_quit():
@@ -2715,7 +2737,14 @@ def main() -> int:
         show_startup_failure(detail, hint)
         return 1
     try:
-        return app.exec()
+        code = app.exec()
+        # An OS quit (Cocoa's terminate, Windows' WM_ENDSESSION) delivers Qt's Quit
+        # event, which ends the event loop as soon as the windows accept closing,
+        # while the window may still own jobs, installs and reads. Run on until they
+        # settle; the quit watchdog bounds this to QUIT_BUDGET_S.
+        while _window.holds_work_after_os_close():
+            app.exec()
+        return code
     finally:
         # An ordinary quit gives pending backup writes a short bound; an OS session
         # end skips them (data-backup-conventions). The quit watchdog still owns the

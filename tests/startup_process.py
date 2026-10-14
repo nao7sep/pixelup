@@ -67,6 +67,9 @@ class ProbeWindow:
     def show_prepared(self) -> None:
         pass
 
+    def holds_work_after_os_close(self) -> bool:
+        return False
+
 
 gui.MainWindow = ProbeWindow
 

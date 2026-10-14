@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -1851,6 +1852,42 @@ def test_session_shutdown_requires_the_current_platform_session(
     assert window._is_session_shutdown() is expected
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_once_qt_announces_the_quit_no_close_asks(
+    make_window, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # Windows emits aboutToQuit at WM_ENDSESSION, after the commit request that
+    # set isSavingSession() has returned and before Qt closes the windows.
+    window = make_window()
+    monkeypatch.setattr(gui.sys, "platform", platform)
+    monkeypatch.setattr(
+        gui,
+        "QGuiApplication",
+        SimpleNamespace(instance=lambda: SimpleNamespace(isSavingSession=lambda: False)),
+    )
+    assert window._is_session_shutdown() is False
+    window._app_about_to_quit()
+    assert window._is_session_shutdown() is True
+
+
+@pytest.mark.parametrize("os_ending", [True, False])
+def test_a_session_end_starts_the_debounced_parameters_save_at_once(
+    make_window, monkeypatch: pytest.MonkeyPatch, os_ending: bool
+) -> None:
+    # Windows ends the process soon after WM_ENDSESSION, so the edit cannot wait
+    # for its debounce; macOS's own Quit keeps the ordinary debounce.
+    window = make_window()
+    monkeypatch.setattr(gui, "os_session_ending", lambda: os_ending)
+    window.quality.setValue(window.quality.value() - 1)
+    assert window._parameters_save_timer.isActive()
+
+    window._on_commit_data_request(None)
+
+    assert (window._config_save is not None) is os_ending
+    _settle_config(window)
+    assert (load_app_config().parameters.quality == window.quality.value()) is os_ending
+
+
 def test_hard_quit_bounds_a_blocked_logging_tail() -> None:
     # Use the real os._exit in a disposable process: neither Handler.close nor
     # the final diagnostic can delay the already committed quit deadline.
@@ -3109,6 +3146,194 @@ print('reads physically settled', flush=True)
     assert result.returncode == 0, result.stderr
     assert "read owned during quit" in result.stdout
     assert ("reads physically settled" in result.stdout) is settles
+
+
+# A disposable process with PixelUp's real main loop, an open image and a held
+# background read, and every quit question replaced by one that reports itself.
+# It never sends anything to the user's OS session or another process.
+_OS_QUIT_PROCESS = r"""
+import os
+import threading
+from pathlib import Path
+from PIL import Image
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QApplication
+from pixelup import gui
+
+class Asked:
+    def __init__(self, *_args):
+        print('asked', flush=True)
+    def reject(self):
+        pass
+    def exec(self):
+        return 0
+    def choose(self):
+        return 'cancel'
+
+gui.QuitConfirmDialog = gui.QuitSaveFailedDialog = Asked
+gui.warn_jobs_stopping = Asked
+gui.drain_backups = lambda _seconds: None
+gui.QUIT_BUDGET_S = 1.0
+app = QApplication([])
+window = gui.MainWindow(log_file=Path(os.environ['PIXELUP_DATA_DIR']) / 'test.log')
+window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+window.setWindowOpacity(0.0)
+window.show()
+image = Path(os.environ['PIXELUP_DATA_DIR']) / 'open.png'
+Image.new('RGB', (4, 3), 'white').save(image)
+window.open_paths([image])
+while window.opening:
+    app.processEvents()
+assert window._images_by_path
+entered, release = threading.Event(), threading.Event()
+def held_probe(paths):
+    entered.set()
+    release.wait()
+    return []
+gui._probe_open_paths = held_probe
+window.open_paths([Path('held.png')])
+assert entered.wait(3)
+gui.build_app = lambda _argv: (app, window)
+
+def settle_later():
+    print('quit delivered', flush=True)
+    if SETTLES:
+        QTimer.singleShot(200, release.set)
+
+QUIT_ROUTE
+
+code = gui.main()
+print('main returned', code, window._workers_clean_for_quit(), flush=True)
+"""
+
+
+def _run_os_quit(route: str, settles: bool, **env: str) -> subprocess.CompletedProcess[str]:
+    script = _OS_QUIT_PROCESS.replace("QUIT_ROUTE", route).replace("SETTLES", repr(settles))
+    return subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10,
+        env={**os.environ, **env},
+    )
+
+
+def _assert_os_quit(result: subprocess.CompletedProcess[str], settles: bool) -> None:
+    # Unsettled work is left to the quit bound's hard exit, which still exits 0.
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert "asked" not in lines
+    assert "quit delivered" in lines
+    assert ("main returned 0 True" in lines) is settles
+
+
+@pytest.mark.parametrize("settles", [True, False])
+def test_windows_session_end_sequence_quits_silently_and_settles_owned_work(settles):
+    # WM_ENDSESSION's own calls: aboutToQuit, then QGuiApplication::quit, whose Quit
+    # event ends the event loop once the windows accept closing.
+    route = """
+def end_session():
+    app.aboutToQuit.emit()
+    QApplication.quit()
+    settle_later()
+QTimer.singleShot(0, end_session)
+"""
+    _assert_os_quit(_run_os_quit(route, settles), settles)
+
+
+_SEND_QUIT_APPLE_EVENT = r"""
+import ctypes
+objc = ctypes.CDLL('/usr/lib/libobjc.A.dylib')
+objc.objc_getClass.restype = ctypes.c_void_p
+objc.objc_getClass.argtypes = [ctypes.c_char_p]
+objc.sel_registerName.restype = ctypes.c_void_p
+objc.sel_registerName.argtypes = [ctypes.c_char_p]
+
+def send(restype, receiver, selector, *args, argtypes=()):
+    call = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p, *argtypes)(
+        ('objc_msgSend', objc))
+    return call(receiver, objc.sel_registerName(selector), *args)
+
+def code(text):
+    return int.from_bytes(text, 'big')
+
+def send_quit():
+    # The quit Apple Event loginwindow sends at logout, addressed to this process
+    # only, so AppKit dispatches it here through Qt's own terminate handling.
+    descriptor = objc.objc_getClass(b'NSAppleEventDescriptor')
+    target = send(ctypes.c_void_p, descriptor, b'currentProcessDescriptor')
+    event = send(
+        ctypes.c_void_p, descriptor,
+        b'appleEventWithEventClass:eventID:targetDescriptor:returnID:transactionID:',
+        code(b'aevt'), code(b'quit'), target, -1, 0,
+        argtypes=(ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int16,
+                  ctypes.c_int32),
+    )
+    if REASON is not None:
+        reason = send(ctypes.c_void_p, descriptor, b'descriptorWithEnumCode:', code(REASON),
+                      argtypes=(ctypes.c_uint32,))
+        send(None, event, b'setAttributeDescriptor:forKeyword:', reason, code(b'why?'),
+             argtypes=(ctypes.c_void_p, ctypes.c_uint32))
+    send(ctypes.c_void_p, event, b'sendEventWithOptions:timeout:error:', 1, -1.0, None,
+         argtypes=(ctypes.c_uint64, ctypes.c_double, ctypes.c_void_p))
+    settle_later()
+
+QTimer.singleShot(0, send_quit)
+"""
+_COCOA = {"QT_QPA_PLATFORM": "cocoa", "QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM": "1"}
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="delivers a macOS quit Apple Event")
+@pytest.mark.parametrize("settles", [True, False])
+def test_macos_logout_apple_event_quits_silently_and_settles_owned_work(settles):
+    # Restart and shutdown differ only in the reason, which session_end classifies.
+    route = _SEND_QUIT_APPLE_EVENT.replace("REASON", repr(b"logo"))
+    _assert_os_quit(_run_os_quit(route, settles, **_COCOA), settles)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="delivers a macOS quit Apple Event")
+def test_macos_quit_apple_event_without_a_reason_is_the_users_own_quit():
+    # The Dock's Quit: the same event with no reason still asks, and PixelUp stays.
+    route = _SEND_QUIT_APPLE_EVENT.replace("REASON", "None") + """
+def still_open():
+    print('still open', window.isVisible(), flush=True)
+    release.set()
+    app.exit(3)
+QTimer.singleShot(500, still_open)
+"""
+    result = _run_os_quit(route, settles=False, **_COCOA)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert "asked" in lines
+    assert lines[-2:] == ["still open True", "main returned 3 True"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="sends WM_QUERYENDSESSION to a native window")
+def test_windows_session_end_messages_save_the_last_edit_and_quit_silently():
+    # Windows' own session messages, sent to this process's window only. The
+    # query must be answered yes, and the debounced edit must land before exit.
+    route = """
+import ctypes
+from ctypes import wintypes
+from pixelup.app_config import load_app_config
+user32 = ctypes.WinDLL('user32')
+user32.SendMessageW.restype = ctypes.c_ssize_t
+user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+ENDSESSION_LOGOFF = 0x80000000
+
+def end_session():
+    hwnd = int(window.winId())
+    window.quality.setValue(window.quality.value() - 1)
+    print('query answered', user32.SendMessageW(hwnd, 0x0011, 0, ENDSESSION_LOGOFF), flush=True)
+    user32.SendMessageW(hwnd, 0x0016, 1, ENDSESSION_LOGOFF)
+    settle_later()
+
+QTimer.singleShot(0, end_session)
+import atexit
+atexit.register(lambda: print(
+    'saved', load_app_config().parameters.quality == window.quality.value(), flush=True))
+"""
+    result = _run_os_quit(route, settles=True, QT_QPA_PLATFORM="windows")
+    _assert_os_quit(result, settles=True)
+    assert "query answered 1" in result.stdout.splitlines()
+    assert "saved True" in result.stdout.splitlines()
 
 
 @pytest.mark.parametrize("read_kind", ["listing", "historical_resolve", "retry_listing"])
