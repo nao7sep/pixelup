@@ -2821,6 +2821,9 @@ def test_failed_folder_save_keeps_current_location_and_starts_no_install(
     assert dialog.result_view.isVisibleTo(dialog)
     assert dialog._folder_error == Message("settings.saveFailed")
     dialog.folder_edit.setText("")
+    # An application-modal dialog left open would block every later test's input.
+    dialog.close()
+    assert not dialog.isVisible()
 
 
 def test_late_folder_save_after_dialog_close_applies_without_starting_download(
@@ -3316,7 +3319,12 @@ def test_macos_quit_apple_event_without_a_reason_is_the_users_own_quit():
 def still_open():
     print('still open', window.isVisible(), flush=True)
     release.set()
-    app.exit(3)
+    exit_once_settled()
+def exit_once_settled():
+    if window._workers_clean_for_quit():
+        app.exit(3)
+    else:
+        QTimer.singleShot(10, exit_once_settled)
 QTimer.singleShot(500, still_open)
 """
     result = _run_os_quit(route, settles=False, **_COCOA)
@@ -3765,3 +3773,32 @@ def test_the_status_tooltip_carries_the_whole_message_with_its_warnings(
     assert window.queue_table.item(0, 4).toolTip() == (
         f"{english().of(FAILED)}\n{english().of(DISK_WARNING)}"
     )
+
+
+def test_cmd_or_ctrl_w_runs_the_main_windows_own_close(
+    make_window, tmp_path, monkeypatch, process_until, quit_bound
+) -> None:
+    from PySide6.QtTest import QTest
+
+    window = make_window()
+    _open(window, [_png(tmp_path, "open.png")])
+    asked: list[int] = []
+
+    class Confirm:
+        def __init__(self, active, _parent):
+            asked.append(active)
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(gui, "QuitConfirmDialog", Confirm)
+    window.show()
+    window.activateWindow()
+    process_until(window.isActiveWindow, timeout_s=5, what="Main window becomes key")
+
+    QTest.keyClick(window, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
+    process_until(lambda: asked == [0], timeout_s=5, what="The quit question")
+
+    # The same question the close button asks; declining it keeps PixelUp open.
+    assert window.isVisible()
+    assert not window._closing

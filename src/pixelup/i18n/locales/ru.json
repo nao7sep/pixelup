@@ -328,6 +328,7 @@
   "settings.uiFontCaption": "Если оставить пустым, используется системный шрифт интерфейса. Иначе используется первый установленный шрифт.",
   "settings.unsavedMessage": "Есть несохранённые изменения. Отказаться от них и закрыть?",
   "settings.unsavedTitle": "Отказаться от изменений?",
+  "shortcuts.closeWindow": "Закрыть окно",
   "shortcuts.groupGeneral": "Общие",
   "shortcuts.introduction": "Эти сочетания клавиш работают в любом месте PixelUp.",
   "shortcuts.openSettings": "Открыть настройки",

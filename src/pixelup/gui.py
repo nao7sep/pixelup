@@ -140,6 +140,7 @@ from pixelup.theme import PixelupStyle, apply_theme
 from pixelup.ui_common import (
     NAMED_IN_MESSAGE,
     apply_palette_fixes,
+    bind_close_shortcut,
     identifying_name,
     named_values,
     use_regular_spacing,
@@ -1039,6 +1040,8 @@ class MainWindow(QMainWindow):
         self.shortcuts_shortcut.activated.connect(self._shortcuts_dialog)
         self.shortcuts_question_shortcut = QShortcut(QKeySequence("Ctrl+?"), self)
         self.shortcuts_question_shortcut.activated.connect(self._shortcuts_dialog)
+        # Closing the main window by keyboard runs its ordinary close, the quit.
+        self.close_shortcut = bind_close_shortcut(self)
 
     def _build_image_panel(self) -> QWidget:
         panel = QWidget()
@@ -1797,11 +1800,15 @@ class MainWindow(QMainWindow):
         window = RecordsWindow(self._records_reads)
         window.closed.connect(lambda: self._records_window_closed(window))
         self._records_window = window
-        window.show()
+        # Opened at the user's request, it becomes the key window in front.
+        window.bring_forward()
 
     def _records_window_closed(self, window: RecordsWindow) -> None:
         if self._records_window is window:
             self._records_window = None
+        # Closing it as the key window hands the keyboard back to the main window.
+        if window.isActiveWindow() and not self._closing and self.isVisible():
+            self.activateWindow()
         log.info("records.window_closed")
 
     def _add_image_row(self, entry: ImageEntry) -> None:

@@ -12,7 +12,12 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.i18n.localized import localize
-from pixelup.ui_common import DIALOG_MARGIN, DIALOG_SPACING, REGULAR_SPACING
+from pixelup.ui_common import (
+    DIALOG_MARGIN,
+    DIALOG_SPACING,
+    REGULAR_SPACING,
+    bind_close_shortcut,
+)
 
 # The share of the screen's working area a whole dialog may take — the title bar
 # the OS draws above it included, which is what the allowance below stands in for
@@ -77,6 +82,7 @@ class DialogShell(QDialog):
         super().__init__(parent, Qt.WindowType.Dialog)
         localize(self, title=title_key)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.close_shortcut = bind_close_shortcut(self)
         self._width = width
         self._body_height_limit = body_height_limit
 

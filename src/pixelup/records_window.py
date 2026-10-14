@@ -81,7 +81,7 @@ from pixelup.records import (
 )
 from pixelup.session_log import current_session, log
 from pixelup.theme import danger_colours, surfaces, warning_text
-from pixelup.ui_common import REGULAR_SPACING, use_regular_spacing
+from pixelup.ui_common import REGULAR_SPACING, bind_close_shortcut, use_regular_spacing
 from pixelup.widgets import NoWheelComboBox, repolish
 from pixelup.window_placement import (
     WindowState,
@@ -600,6 +600,7 @@ class RecordsWindow(QWidget):
         # Closing the main window quits PixelUp whether or not this one is open.
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.close_shortcut = bind_close_shortcut(self)
         localize(self, title="records.title")
         self._reads = reads
         self._state = state if state is not None else window_state()

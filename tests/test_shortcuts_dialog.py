@@ -21,7 +21,9 @@ def test_shortcuts_dialog_catalogues_every_bound_chord(qapp: QApplication) -> No
         assert f"{modifier}+Comma" in text
         assert "Show keyboard shortcuts" in text
         assert f"{modifier}+Slash/Question" in text
-        assert len(dialog.findChildren(QLabel, "shortcutKey")) == 2
+        assert "Close window" in text
+        assert f"{modifier}+W" in text
+        assert len(dialog.findChildren(QLabel, "shortcutKey")) == 3
         assert dialog.findChild(QDialogButtonBox) is not None
     finally:
         dialog.deleteLater()

@@ -314,6 +314,7 @@
   "settings.uiFontCaption": "Vide utilise la police d’interface du système. Sinon, la première police installée est utilisée.",
   "settings.unsavedMessage": "Des modifications ne sont pas enregistrées. Les abandonner et fermer\u00a0?",
   "settings.unsavedTitle": "Abandonner les modifications\u00a0?",
+  "shortcuts.closeWindow": "Fermer la fenêtre",
   "shortcuts.groupGeneral": "Général",
   "shortcuts.introduction": "Ces raccourcis fonctionnent partout dans PixelUp.",
   "shortcuts.openSettings": "Ouvrir les réglages",

@@ -700,6 +700,27 @@ def test_the_records_button_opens_one_window_and_brings_it_forward_again(make_ma
     assert main._records_window is not first
 
 
+def test_the_records_window_opens_in_front_and_closes_by_keyboard_back_to_the_main_window(
+    make_main, process_until
+) -> None:
+    from PySide6.QtTest import QTest
+
+    main = make_main()
+    main.show()
+    main.activateWindow()
+    process_until(main.isActiveWindow, timeout_s=5, what="Main window becomes key")
+
+    main.records_button.click()
+    records = main._records_window
+    process_until(records.isActiveWindow, timeout_s=5, what="Records window becomes key")
+
+    QTest.keyClick(records, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
+
+    assert main._records_window is None
+    process_until(main.isActiveWindow, timeout_s=5, what="Main window is key again")
+    main.hide()
+
+
 def test_the_records_window_reopens_where_it_was_closed(make_main, process_until) -> None:
     main = make_main()
     main._open_records_window()

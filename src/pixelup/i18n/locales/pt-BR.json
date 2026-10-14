@@ -314,6 +314,7 @@
   "settings.uiFontCaption": "Em branco, usa a fonte de interface do sistema. Caso contrário, usa a primeira fonte instalada.",
   "settings.unsavedMessage": "Há alterações não salvas. Descartá-las e fechar?",
   "settings.unsavedTitle": "Descartar as alterações?",
+  "shortcuts.closeWindow": "Fechar janela",
   "shortcuts.groupGeneral": "Geral",
   "shortcuts.introduction": "Estes atalhos funcionam em qualquer lugar do PixelUp.",
   "shortcuts.openSettings": "Abrir configurações",

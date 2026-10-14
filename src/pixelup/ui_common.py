@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QPalette
-from PySide6.QtWidgets import QApplication, QLabel, QLayout
+from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QKeySequence, QPalette, QShortcut
+from PySide6.QtWidgets import QApplication, QLabel, QLayout, QWidget
 
 from .fonts import DEFAULT_UI_FONT_SIZE
 from .i18n.message import Message
@@ -100,3 +100,15 @@ def named_values(names: Sequence[str], metrics: QFontMetrics) -> tuple[str | Mes
     rest = len(names) - len(shown)
     return (*shown, Message.of("common.more", count=rest)) if rest else shown
 
+
+
+def bind_close_shortcut(window: QWidget) -> QShortcut:
+    """Cmd/Ctrl+W closes ``window`` through its close button's own path.
+
+    Qt's standard Close key is Cmd+W on macOS and Ctrl+W (with Ctrl+F4) on Windows;
+    a window shortcut fires only while ``window`` is the key window
+    (keyboard-shortcut-conventions, Closing a window).
+    """
+    shortcut = QShortcut(QKeySequence.StandardKey.Close, window)
+    shortcut.activated.connect(window.close)
+    return shortcut

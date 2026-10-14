@@ -314,6 +314,7 @@
   "settings.uiFontCaption": "Si se deja vacío, se usa la fuente de interfaz del sistema. Si no, se usa la primera fuente instalada.",
   "settings.unsavedMessage": "Tienes cambios sin guardar. ¿Descartarlos y cerrar?",
   "settings.unsavedTitle": "¿Descartar los cambios?",
+  "shortcuts.closeWindow": "Cerrar ventana",
   "shortcuts.groupGeneral": "General",
   "shortcuts.introduction": "Estos atajos funcionan en cualquier parte de PixelUp.",
   "shortcuts.openSettings": "Abrir configuración",

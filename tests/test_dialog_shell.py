@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QScrollArea
 
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import AppConfig
@@ -56,6 +57,19 @@ def test_every_dialog_uses_the_shared_shell(dialog: DialogShell) -> None:
     # one place. A dialog that subclasses QDialog directly would be deciding its
     # own bands, bound and sizing again, which is how the seven drifted apart.
     assert isinstance(dialog, DialogShell)
+
+
+def test_cmd_or_ctrl_w_closes_the_dialog_like_its_close_button(
+    dialog: DialogShell, qapp: QApplication, process_until
+) -> None:
+    dialog.show()
+    dialog.activateWindow()
+    process_until(dialog.isActiveWindow, timeout_s=5, what="Dialog becomes the key window")
+
+    QTest.keyClick(dialog, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
+
+    assert not dialog.isVisible()
+    assert dialog.result() == QDialog.DialogCode.Rejected
 
 
 def test_the_title_bar_is_the_header(dialog: DialogShell) -> None:

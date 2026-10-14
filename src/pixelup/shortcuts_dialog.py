@@ -53,6 +53,7 @@ class ShortcutsDialog(DialogShell):
         group_layout.addWidget(
             _shortcut_row("shortcuts.showShortcuts", shortcut_chord("Slash/Question"))
         )
+        group_layout.addWidget(_shortcut_row("shortcuts.closeWindow", shortcut_chord("W")))
         self.body_layout.addWidget(group)
         self.body_layout.addStretch()
 

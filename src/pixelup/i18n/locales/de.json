@@ -300,6 +300,7 @@
   "settings.uiFontCaption": "Leer verwendet die Systemschrift der Oberfläche. Sonst wird die erste installierte Schrift verwendet.",
   "settings.unsavedMessage": "Sie haben nicht gespeicherte Änderungen. Verwerfen und schließen?",
   "settings.unsavedTitle": "Änderungen verwerfen?",
+  "shortcuts.closeWindow": "Fenster schließen",
   "shortcuts.groupGeneral": "Allgemein",
   "shortcuts.introduction": "Diese Tastenkürzel funktionieren überall in PixelUp.",
   "shortcuts.openSettings": "Einstellungen öffnen",

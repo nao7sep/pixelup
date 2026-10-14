@@ -300,6 +300,7 @@
   "settings.uiFontCaption": "Blank uses the platform UI face. Otherwise, the first installed font is used.",
   "settings.unsavedMessage": "You have unsaved changes. Discard them and close?",
   "settings.unsavedTitle": "Discard changes?",
+  "shortcuts.closeWindow": "Close window",
   "shortcuts.groupGeneral": "General",
   "shortcuts.introduction": "Use these shortcuts anywhere in PixelUp.",
   "shortcuts.openSettings": "Open Settings",
