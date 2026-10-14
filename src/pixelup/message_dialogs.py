@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
 from pixelup.i18n.localized import localize
 from pixelup.i18n.message import Message
-from pixelup.ui_common import wrap_anywhere
 
 
 class MessageDialog(DialogShell):
@@ -57,18 +56,15 @@ def _show_message(parent: QWidget | None, message: Message) -> None:
 
 
 def warn_config_reset(parent: QWidget | None, quarantined_to: Path) -> None:
-    _show_message(parent, Message.of("notice.configReset", path=wrap_anywhere(str(quarantined_to))))
+    _show_message(parent, Message.of("notice.configReset", path=str(quarantined_to)))
 
 
 def warn_config_rejected(parent: QWidget | None, settings: tuple[Message, ...], path: Path) -> None:
-    _show_message(
-        parent,
-        Message.of("notice.configRejected", settings=settings, path=wrap_anywhere(str(path))),
-    )
+    _show_message(parent, Message.of("notice.configRejected", settings=settings, path=str(path)))
 
 
 def warn_config_newer(parent: QWidget | None, path: Path) -> None:
-    _show_message(parent, Message.of("notice.configNewer", path=wrap_anywhere(str(path))))
+    _show_message(parent, Message.of("notice.configNewer", path=str(path)))
 
 
 def warn_jobs_stopping(parent: QWidget | None) -> None:

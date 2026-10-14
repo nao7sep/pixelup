@@ -26,8 +26,7 @@ def test_config_reset_uses_an_icon_free_authored_dialog(
     assert len(shown) == 1
     dialog = shown[0]
     try:
-        # The path carries zero-width breaks so it can wrap anywhere.
-        text = dialog.message_label.text().replace("\u200b", "")
+        text = dialog.message_label.text()
         assert dialog.windowTitle() == "PixelUp"
         assert dialog.findChildren(QMessageBox) == []
         assert text == (
@@ -108,25 +107,5 @@ def test_recovery_path_is_always_plain_text(qapp: QApplication) -> None:
         assert dialog.message_label.textFormat() == Qt.TextFormat.PlainText
         assert path in dialog.message_label.text()
         assert dialog.hint_label.textFormat() == Qt.TextFormat.PlainText
-    finally:
-        dialog.deleteLater()
-
-
-def test_a_long_settings_path_wraps_whole_inside_the_notice(
-    qapp: QApplication, monkeypatch
-) -> None:
-    shown: list[MessageDialog] = []
-    monkeypatch.setattr(MessageDialog, "exec", lambda dialog: shown.append(dialog))
-    path = Path("/Users") / ("a" * 90) / ("b" * 120) / "config-20261014-120000.invalid"
-    message_dialogs.warn_config_newer(None, path)
-    dialog = shown[0]
-    try:
-        dialog.show()
-        qapp.processEvents()
-        label = dialog.message_label
-        assert str(path) in label.text().replace("\u200b", "")
-        # Text to be read is never cut and never widens the notice.
-        assert label.width() <= dialog.width()
-        assert label.minimumSizeHint().width() < dialog.width()
     finally:
         dialog.deleteLater()

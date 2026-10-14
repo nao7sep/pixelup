@@ -135,7 +135,6 @@
     "one": "{count} weitere Datei konnte nicht geöffnet werden.",
     "other": "{count} weitere Dateien konnten nicht geöffnet werden."
   },
-  "images.selectedDetail": "Details zum ausgewählten Bild",
   "images.remove": "Entfernen",
   "images.removeBlocked": "Dieses Bild kann nicht entfernt werden, solange wartende oder laufende Aufträge es noch verwenden.",
   "images.size": "{width} x {height}",
@@ -239,7 +238,6 @@
   "queue.columnOutput": "Ausgabe",
   "queue.columnScale": "Faktor",
   "queue.columnStatus": "Status",
-  "queue.selectedDetail": "Details zum ausgewählten Auftrag",
   "queue.empty": "Noch keine Aufträge eingereiht.",
   "queue.failed": {
     "one": "{count} Auftrag ist fehlgeschlagen. Prüfen Sie die fehlgeschlagene Zeile oder wiederholen Sie ihn.",

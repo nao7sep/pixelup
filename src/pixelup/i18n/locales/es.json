@@ -142,7 +142,6 @@
     "one": "No se pudo abrir {count} archivo más.",
     "other": "No se pudieron abrir otros {count} archivos."
   },
-  "images.selectedDetail": "Detalles de la imagen seleccionada",
   "images.remove": "Quitar",
   "images.removeBlocked": "No se puede quitar esta imagen mientras la usen trabajos pendientes o en curso.",
   "images.size": "{width} x {height}",
@@ -251,7 +250,6 @@
   "queue.columnOutput": "Salida",
   "queue.columnScale": "Escala",
   "queue.columnStatus": "Estado",
-  "queue.selectedDetail": "Detalles del trabajo seleccionado",
   "queue.empty": "Aún no hay trabajos en cola.",
   "queue.failed": {
     "many": "Fallaron {count} de trabajos de la cola. Revisa las filas con error o reinténtalos.",

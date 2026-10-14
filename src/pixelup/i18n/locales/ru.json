@@ -149,7 +149,6 @@
     "one": "Не удалось открыть ещё {count} файл.",
     "other": "Не удалось открыть ещё {count} файла."
   },
-  "images.selectedDetail": "Сведения о выбранном изображении",
   "images.remove": "Убрать",
   "images.removeBlocked": "Это изображение нельзя убрать, пока его используют ожидающие или выполняющиеся задания.",
   "images.size": "{width} x {height}",
@@ -263,7 +262,6 @@
   "queue.columnOutput": "Результат",
   "queue.columnScale": "Масштаб",
   "queue.columnStatus": "Состояние",
-  "queue.selectedDetail": "Сведения о выбранном задании",
   "queue.empty": "В очереди пока нет заданий.",
   "queue.failed": {
     "few": "{count} задания в очереди завершились ошибкой. Проверьте строки с ошибкой или повторите их.",

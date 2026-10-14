@@ -128,7 +128,6 @@
   "images.rejectedMore": {
     "other": "另有 {count} 个文件无法打开。"
   },
-  "images.selectedDetail": "所选图像的详情",
   "images.remove": "移除",
   "images.removeBlocked": "在等待中或运行中的任务仍在使用此图像时，无法移除它。",
   "images.size": "{width} x {height}",
@@ -227,7 +226,6 @@
   "queue.columnOutput": "输出",
   "queue.columnScale": "倍数",
   "queue.columnStatus": "状态",
-  "queue.selectedDetail": "所选任务的详情",
   "queue.empty": "队列中还没有任务。",
   "queue.failed": {
     "other": "队列中有 {count} 个任务失败。请查看失败的行，或重试这些任务。"

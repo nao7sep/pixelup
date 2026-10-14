@@ -142,7 +142,6 @@
     "one": "Non è stato possibile aprire {count} altro file.",
     "other": "Non è stato possibile aprire altri {count} file."
   },
-  "images.selectedDetail": "Dettagli dell'immagine selezionata",
   "images.remove": "Rimuovi",
   "images.removeBlocked": "Impossibile rimuovere questa immagine finché lavori in attesa o in corso la usano.",
   "images.size": "{width} x {height}",
@@ -251,7 +250,6 @@
   "queue.columnOutput": "Output",
   "queue.columnScale": "Fattore",
   "queue.columnStatus": "Stato",
-  "queue.selectedDetail": "Dettagli del lavoro selezionato",
   "queue.empty": "Ancora nessun lavoro in coda.",
   "queue.failed": {
     "many": "{count} di lavori in coda non sono riusciti. Controlla le righe non riuscite o riprovali.",

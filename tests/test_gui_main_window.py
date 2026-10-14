@@ -3749,62 +3749,19 @@ def test_planning_failure_is_presented_only_for_retained_input_intent(
     assert not window._removed_plan_inputs
 
 
-def test_selected_rows_show_their_complete_values_by_keyboard(make_window, tmp_path) -> None:
-    # Cells elide long names; the current row's detail, for whichever table was
-    # last entered, is the keyboard and touch path to the whole value
-    # (text-cleanup-conventions, rule 4), not a hover tooltip.
-    from PySide6.QtTest import QTest
-
+def test_the_status_tooltip_carries_the_whole_message_with_its_warnings(
+    make_window, tmp_path
+) -> None:
     window = make_window()
-    folder = tmp_path / ("a-folder-name-long-enough-to-elide-in-any-column " * 3).strip()
-    folder.mkdir()
-    first = _png(folder, "first.png")
-    second = _png(folder, "second-" + "x" * 120 + ".png")
-    _open(window, [first, second])
-    window.image_table.setFocus()
-    window.image_table.setCurrentCell(0, 0)
-    QTest.keyClick(window.image_table, Qt.Key.Key_Down)
-    _settle_opens(window)
-    detail = window.row_detail
-    assert detail.rows() == (("Image", str(second)), ("Jobs", "No jobs"))
-    assert detail.accessibleName() == "Selected image details"
-
+    image = _png(tmp_path, "image.png")
+    _open(window, [image])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     window._queue_selected_image()
     _settle_models(window)
     job = window.jobs[0]
-    assert detail.rows() == (("Image", str(second)), ("Jobs", "1 queued"))
-    window.queue_table.setFocus()
-    QTest.keyClick(window.queue_table, Qt.Key.Key_Down)
-    assert window.queue_table.currentRow() == 0
-    assert detail.rows() == (
-        ("Image", str(second)),
-        ("Output", str(job.output_path)),
-        ("Status", window.queue_table.item(0, 4).text()),
-    )
-    assert detail.accessibleName() == "Selected job details"
 
     window._job_finished(job.id, False, FAILED, {}, [DISK_WARNING])
-    assert detail.rows()[2] == (
-        "Status",
-        f"{english().of(FAILED)}\n{english().of(DISK_WARNING)}",
+
+    assert window.queue_table.item(0, 4).toolTip() == (
+        f"{english().of(FAILED)}\n{english().of(DISK_WARNING)}"
     )
-
-    # Entering the image table again shows its current row without moving it.
-    window._focus_moved(window.queue_table, window.image_table)
-    assert detail.rows() == (("Image", str(second)), ("Jobs", "1 failed"))
-
-
-def test_row_detail_wraps_an_unbroken_value_instead_of_cutting_it(qapp) -> None:
-    from pixelup.widgets import RowDetail
-
-    detail = RowDetail(2, accessible_name="images.selectedDetail")
-    detail.resize(240, detail.height())
-    detail.show()
-    value = "/" + "x" * 400 + ".png"
-    detail.set_rows((("Image", value),))
-    QApplication.processEvents()
-    assert detail.horizontalScrollBar().maximum() == 0
-    assert value in detail.toPlainText().replace("\n", "").replace(" ", "")
-    assert detail.verticalScrollBar().maximum() > 0
-    detail.close()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from PySide6.QtCore import Qt, QTextBoundaryFinder, QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QLayout
 
@@ -13,7 +13,6 @@ from .i18n.message import Message
 # and counts the rest (interface-styling-conventions, Labels).
 NAMED_IN_MESSAGE = 3
 _NAME_WIDTH_CHARACTERS = 40
-_BREAK = "\u200b"
 
 REGULAR_SPACING = 10
 # The roomy rhythm DialogShell gives a dialog's body band.
@@ -101,20 +100,3 @@ def named_values(names: Sequence[str], metrics: QFontMetrics) -> tuple[str | Mes
     rest = len(names) - len(shown)
     return (*shown, Message.of("common.more", count=rest)) if rest else shown
 
-
-def wrap_anywhere(text: str) -> str:
-    """``text`` with a zero-width break between its graphemes.
-
-    A wrapping QLabel breaks only between words, so a long path would otherwise
-    overflow or widen its container; this lets it wrap whole, like RowDetail.
-    """
-    # QTextBoundaryFinder counts UTF-16 units, which differ from Python's indices
-    # wherever a character lies outside the Basic Multilingual Plane.
-    units = text.encode("utf-16-le")
-    finder = QTextBoundaryFinder(QTextBoundaryFinder.BoundaryType.Grapheme, text)
-    pieces: list[str] = []
-    start = 0
-    while (end := finder.toNextBoundary()) not in (-1, start):
-        pieces.append(units[start * 2 : end * 2].decode("utf-16-le"))
-        start = end
-    return _BREAK.join(pieces)

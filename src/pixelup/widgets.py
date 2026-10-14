@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import html
-from collections.abc import Sequence
 from typing import Literal
 
 from PySide6.QtCore import QEvent, QModelIndex, QPersistentModelIndex, QPointF, QSize, Qt
@@ -29,7 +27,6 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidget,
-    QTextBrowser,
     QToolButton,
     QWidget,
 )
@@ -74,17 +71,6 @@ class ResultCloseButton(QToolButton):
         painter.drawLine(QPointF(16, 8), QPointF(8, 16))
 
 
-class _ResultLabel(QLabel):
-    """A wrapping message label whose longest word never sets the banner's width.
-
-    The banner takes its width from the window (interface-styling-conventions,
-    Labels); a word wider than that is clipped rather than widening the window.
-    """
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override name
-        return QSize(0, super().minimumSizeHint().height())
-
-
 class OperationResult(QFrame):
     """A persistent inline result whose severity controls behavior and palette.
 
@@ -110,7 +96,7 @@ class OperationResult(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 7, 5 if dismissible else 10, 7)
         layout.setSpacing(8)
-        self.message_label = _ResultLabel()
+        self.message_label = QLabel()
         self.message_label.setWordWrap(True)
         self.message_label.setMinimumWidth(0)
         layout.addWidget(self.message_label, 1)
@@ -381,59 +367,6 @@ class EmptyStateTableWidget(QTableWidget):
             Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
             self.empty_text,
         )
-
-
-class RowDetail(QTextBrowser):
-    """The current row's complete values, beneath a table whose cells elide.
-
-    A long filename, output path or message is cut short in its cell with Qt's one
-    marker; a hover tooltip alone is not a keyboard or touch path to the whole
-    value (text-cleanup-conventions, rule 4). Selecting a row by arrow keys, click
-    or tap shows its values here in full, wrapping anywhere a path has no space,
-    and the area scrolls rather than cutting when they need more than ``lines``.
-    """
-
-    def __init__(self, lines: int, *, accessible_name: str) -> None:
-        super().__init__()
-        self._lines = lines
-        self._rows: tuple[tuple[str, str], ...] = ()
-        localize(self, accessible_name=accessible_name)
-        self.setProperty("surface", "panel")
-        self.setOpenLinks(False)
-        self.setTabChangesFocus(True)
-        self.document().setDocumentMargin(8)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self._fit_height()
-
-    def set_rows(self, rows: Sequence[tuple[str, str]]) -> None:
-        """Show ``(label, value)`` rows; no rows leaves the area empty."""
-        rows = tuple(rows)
-        if rows == self._rows:
-            return
-        self._rows = rows
-        parts = ['<table cellspacing="0" cellpadding="0">']
-        for label, value in rows:
-            parts.append(
-                f'<tr><td style="font-weight:600; padding:0 12px 2px 0">{html.escape(label)}</td>'
-                '<td style="white-space:pre-wrap; padding:0 0 2px 0">'
-                f"{html.escape(value)}</td></tr>"
-            )
-        parts.append("</table>")
-        self.setHtml("".join(parts) if rows else "")
-
-    def rows(self) -> tuple[tuple[str, str], ...]:
-        return self._rows
-
-    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt override name
-        super().changeEvent(event)
-        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
-            self._fit_height()
-
-    def _fit_height(self) -> None:
-        margin = round(self.document().documentMargin())
-        frame = 2 * self.frameWidth()
-        text = self._lines * (self.fontMetrics().lineSpacing() + 2)
-        self.setFixedHeight(text + 2 * margin + frame)
 
 
 def choice_combo(choices: tuple[tuple[Message | str, object], ...]) -> NoWheelComboBox:
