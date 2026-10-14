@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QFrame, QLabel
 
+from pixelup import shortcuts_dialog
 from pixelup.shortcuts_dialog import ShortcutsDialog, command_modifier_name
 
 
@@ -37,3 +39,11 @@ def test_the_shortcut_list_carries_no_card(qapp: QApplication) -> None:
             assert label.parentWidget().styleSheet() == ""
     finally:
         dialog.deleteLater()
+
+
+@pytest.mark.parametrize(("platform", "name"), [("darwin", "Cmd"), ("win32", "Ctrl")])
+def test_the_command_modifier_is_named_for_the_platform(
+    monkeypatch: pytest.MonkeyPatch, platform: str, name: str
+) -> None:
+    monkeypatch.setattr(shortcuts_dialog.sys, "platform", platform)
+    assert command_modifier_name() == name

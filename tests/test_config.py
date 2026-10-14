@@ -110,6 +110,34 @@ def test_fresh_root_is_created_owner_only(
     assert mode == 0o700
 
 
+def test_windows_leaves_the_root_to_its_own_permission_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "relocated"
+    root.mkdir()
+    monkeypatch.setattr(config_module.sys, "platform", "win32")
+    monkeypatch.setattr(Path, "chmod", lambda *_args: pytest.fail("chmod on Windows"))
+    config_module._tighten_root_permissions(root)
+
+
+def test_only_macos_copies_the_replaced_files_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Windows' chmod sets only the read-only flag, which would make the replacement
+    # itself refuse to land; ordinary permission bits are a POSIX contract.
+    monkeypatch.setattr("pixelup.backup_store.record", lambda *_args: None)
+    copied: list[str] = []
+    monkeypatch.setattr(
+        config_module, "_keep_replaced_file_mode", lambda path, _temp: copied.append(path.name)
+    )
+    target = tmp_path / "config.json"
+    for platform in ("win32", "darwin"):
+        monkeypatch.setattr(config_module.sys, "platform", platform)
+        config_module.write_managed_text(target, platform)
+        assert target.read_text(encoding="utf-8") == platform
+    assert copied == ["config.json"]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission model")
 def test_existing_broader_root_is_tightened_on_launch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
