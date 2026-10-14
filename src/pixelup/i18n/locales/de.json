@@ -27,6 +27,10 @@
   "actions.title": "Warteschlange",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
+  "common.more": {
+    "one": "{count} weitere",
+    "other": "{count} weitere"
+  },
   "error.alphaModeInvalid": "Der Alpha-Modus muss Real-ESRGAN oder Bikubisch sein.",
   "error.backgroundInvalid": "Die Hintergrundfarbe ist ungültig.",
   "error.configNewer": "Ihre Einstellungsdatei wurde von einer neueren Version von PixelUp gespeichert, daher ändert diese Version sie nicht. Öffnen Sie die neuere Version, um Ihre Einstellungen zu ändern.",
@@ -127,6 +131,10 @@
   "images.reasonUnavailable": "die Datei ist nicht verfügbar",
   "images.reasonUnreadable": "konnte nicht gelesen werden",
   "images.rejected": "{name}: {reason}.",
+  "images.rejectedMore": {
+    "one": "{count} weitere Datei konnte nicht geöffnet werden.",
+    "other": "{count} weitere Dateien konnten nicht geöffnet werden."
+  },
   "images.selectedDetail": "Details zum ausgewählten Bild",
   "images.remove": "Entfernen",
   "images.removeBlocked": "Dieses Bild kann nicht entfernt werden, solange wartende oder laufende Aufträge es noch verwenden.",

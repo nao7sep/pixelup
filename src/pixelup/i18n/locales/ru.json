@@ -27,6 +27,12 @@
   "actions.title": "Очередь",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
+  "common.more": {
+    "few": "ещё {count}",
+    "many": "ещё {count}",
+    "one": "ещё {count}",
+    "other": "ещё {count}"
+  },
   "error.alphaModeInvalid": "Режим альфа-канала должен быть Real-ESRGAN или «Бикубический».",
   "error.backgroundInvalid": "Недопустимый цвет фона.",
   "error.configNewer": "Файл настроек сохранён более новой версией PixelUp, поэтому эта версия его не изменяет. Чтобы изменить настройки, откройте более новую версию.",
@@ -137,6 +143,12 @@
   "images.reasonUnavailable": "файл недоступен",
   "images.reasonUnreadable": "не удалось прочитать",
   "images.rejected": "{name}: {reason}.",
+  "images.rejectedMore": {
+    "few": "Не удалось открыть ещё {count} файла.",
+    "many": "Не удалось открыть ещё {count} файлов.",
+    "one": "Не удалось открыть ещё {count} файл.",
+    "other": "Не удалось открыть ещё {count} файла."
+  },
   "images.selectedDetail": "Сведения о выбранном изображении",
   "images.remove": "Убрать",
   "images.removeBlocked": "Это изображение нельзя убрать, пока его используют ожидающие или выполняющиеся задания.",

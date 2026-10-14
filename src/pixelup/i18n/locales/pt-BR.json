@@ -27,6 +27,11 @@
   "actions.title": "Fila",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
+  "common.more": {
+    "many": "mais {count}",
+    "one": "mais {count}",
+    "other": "mais {count}"
+  },
   "error.alphaModeInvalid": "O modo alfa deve ser Real-ESRGAN ou Bicúbico.",
   "error.backgroundInvalid": "A cor de fundo não é válida.",
   "error.configNewer": "Seu arquivo de configurações foi salvo por uma versão mais recente do PixelUp, então esta versão não o altera. Abra a versão mais recente para alterar suas configurações.",
@@ -132,6 +137,11 @@
   "images.reasonUnavailable": "o arquivo não está disponível",
   "images.reasonUnreadable": "não foi possível ler",
   "images.rejected": "{name}: {reason}.",
+  "images.rejectedMore": {
+    "many": "Não foi possível abrir mais {count} de arquivos.",
+    "one": "Não foi possível abrir mais {count} arquivo.",
+    "other": "Não foi possível abrir mais {count} arquivos."
+  },
   "images.selectedDetail": "Detalhes da imagem selecionada",
   "images.remove": "Remover",
   "images.removeBlocked": "Esta imagem não pode ser removida enquanto tarefas pendentes ou em execução ainda a usam.",

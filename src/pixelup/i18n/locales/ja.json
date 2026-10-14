@@ -27,6 +27,9 @@
   "actions.title": "キュー",
   "app.name": "PixelUp",
   "common.sentences": "{first}{rest}",
+  "common.more": {
+    "other": "ほか {count} 件"
+  },
   "error.alphaModeInvalid": "アルファモードは Real-ESRGAN か「バイキュービック」のどちらかにしてください。",
   "error.backgroundInvalid": "背景色が正しくありません。",
   "error.configNewer": "設定ファイルは新しいバージョンの PixelUp で保存されたため、このバージョンでは変更しません。設定を変更するには新しいバージョンを開いてください。",
@@ -122,6 +125,9 @@
   "images.reasonUnavailable": "ファイルを利用できません",
   "images.reasonUnreadable": "読み込めませんでした",
   "images.rejected": "{name}：{reason}。",
+  "images.rejectedMore": {
+    "other": "ほか {count} 件のファイルを開けませんでした。"
+  },
   "images.selectedDetail": "選択した画像の詳細",
   "images.remove": "取り除く",
   "images.removeBlocked": "待機中または実行中のジョブが使っている間は、この画像を取り除けません。",

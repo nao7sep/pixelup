@@ -31,6 +31,7 @@ from PySide6.QtGui import (
     QDragLeaveEvent,
     QDragMoveEvent,
     QDropEvent,
+    QFontMetrics,
     QGuiApplication,
     QIcon,
     QImage,
@@ -137,7 +138,10 @@ from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.startup_admission import admit_data_root
 from pixelup.theme import PixelupStyle, apply_theme
 from pixelup.ui_common import (
+    NAMED_IN_MESSAGE,
     apply_palette_fixes,
+    identifying_name,
+    named_values,
     use_regular_spacing,
 )
 from pixelup.widgets import (
@@ -935,16 +939,27 @@ class MainWindow(QMainWindow):
         duplicates: list[Path],
         rejected: list[tuple[Path, Message, bool]],
     ) -> None:
+        # The banner names a few files and counts the rest; Records keeps every
+        # rejection and the image table every open image.
+        metrics = self.open_result.message_label.fontMetrics()
         if rejected:
             parts: list[Message] = []
             if added:
                 parts.append(Message.of("images.added", count=len(added)))
             if duplicates:
-                parts.append(_already_open(duplicates))
+                parts.append(_already_open(duplicates, metrics))
             parts.extend(
-                Message.of("images.rejected", name=path.name or str(path), reason=reason)
-                for path, reason, _error in rejected
+                Message.of(
+                    "images.rejected",
+                    name=identifying_name(path.name or str(path), metrics),
+                    reason=reason,
+                )
+                for path, reason, _error in rejected[:NAMED_IN_MESSAGE]
             )
+            if len(rejected) > NAMED_IN_MESSAGE:
+                parts.append(
+                    Message.of("images.rejectedMore", count=len(rejected) - NAMED_IN_MESSAGE)
+                )
             self._set_open_result(
                 join("common.sentences", parts),
                 severity="error" if any(error for _path, _reason, error in rejected) else "warning",
@@ -952,7 +967,7 @@ class MainWindow(QMainWindow):
             )
         elif duplicates:
             self._set_open_result(
-                _already_open(duplicates),
+                _already_open(duplicates, metrics),
                 severity="information",
                 issue_paths=duplicates,
             )
@@ -2536,8 +2551,8 @@ def _form_label(key: str) -> QLabel:
     return localize(QLabel(), text=key)
 
 
-def _already_open(paths: list[Path]) -> Message:
-    return Message.of("images.alreadyOpen", names=tuple(path.name for path in paths))
+def _already_open(paths: list[Path], metrics: QFontMetrics) -> Message:
+    return Message.of("images.alreadyOpen", names=named_values([p.name for p in paths], metrics))
 
 
 @dataclass(frozen=True, slots=True)

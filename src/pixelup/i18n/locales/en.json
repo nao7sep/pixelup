@@ -27,6 +27,10 @@
   "actions.title": "Queue",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
+  "common.more": {
+    "one": "{count} more",
+    "other": "{count} more"
+  },
   "error.alphaModeInvalid": "Alpha mode must be Real-ESRGAN or Bicubic.",
   "error.backgroundInvalid": "Background is not a valid color.",
   "error.configNewer": "Your settings file was saved by a newer version of PixelUp, so this version leaves it unchanged. Open the newer version to change your settings.",
@@ -127,6 +131,10 @@
   "images.reasonUnavailable": "the file is unavailable",
   "images.reasonUnreadable": "could not be read",
   "images.rejected": "{name}: {reason}.",
+  "images.rejectedMore": {
+    "one": "{count} more file could not be opened.",
+    "other": "{count} more files could not be opened."
+  },
   "images.selectedDetail": "Selected image details",
   "images.remove": "Remove",
   "images.removeBlocked": "This image cannot be removed while pending or running jobs still use it.",

@@ -27,6 +27,11 @@
   "actions.title": "File d’attente",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
+  "common.more": {
+    "many": "{count} autres",
+    "one": "{count} autre",
+    "other": "{count} autres"
+  },
   "error.alphaModeInvalid": "Le mode alpha doit être Real-ESRGAN ou Bicubique.",
   "error.backgroundInvalid": "La couleur d’arrière-plan n’est pas valide.",
   "error.configNewer": "Votre fichier de réglages a été enregistré par une version plus récente de PixelUp, donc cette version ne le modifie pas. Ouvrez la version plus récente pour modifier vos réglages.",
@@ -132,6 +137,11 @@
   "images.reasonUnavailable": "le fichier n’est pas disponible",
   "images.reasonUnreadable": "lecture impossible",
   "images.rejected": "{name}\u00a0: {reason}.",
+  "images.rejectedMore": {
+    "many": "{count} d’autres fichiers n’ont pas pu être ouverts.",
+    "one": "{count} autre fichier n’a pas pu être ouvert.",
+    "other": "{count} autres fichiers n’ont pas pu être ouverts."
+  },
   "images.selectedDetail": "Détails de l’image sélectionnée",
   "images.remove": "Retirer",
   "images.removeBlocked": "Impossible de retirer cette image tant que des tâches en attente ou en cours l’utilisent.",

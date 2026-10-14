@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QPalette
+from collections.abc import Sequence
+
+from PySide6.QtCore import Qt, QTextBoundaryFinder, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QLayout
 
 from .fonts import DEFAULT_UI_FONT_SIZE
+from .i18n.message import Message
+
+# A message about several items names a few, each shortened as identifying text,
+# and counts the rest (interface-styling-conventions, Labels).
+NAMED_IN_MESSAGE = 3
+_NAME_WIDTH_CHARACTERS = 40
+_BREAK = "\u200b"
 
 REGULAR_SPACING = 10
 # The roomy rhythm DialogShell gives a dialog's body band.
@@ -78,3 +87,34 @@ def apply_palette_fixes(app: QApplication) -> None:
 def open_url(url: str) -> None:
     if not QDesktopServices.openUrl(QUrl(url)):
         raise RuntimeError(f"Could not open URL: {url}")
+
+
+def identifying_name(name: str, metrics: QFontMetrics) -> str:
+    """``name`` shortened to a short run inside a sentence, keeping its beginning."""
+    width = metrics.averageCharWidth() * _NAME_WIDTH_CHARACTERS
+    return metrics.elidedText(name, Qt.TextElideMode.ElideRight, width)
+
+
+def named_values(names: Sequence[str], metrics: QFontMetrics) -> tuple[str | Message, ...]:
+    """The first few ``names``, shortened, then a count of the rest, as a list value."""
+    shown = tuple(identifying_name(name, metrics) for name in names[:NAMED_IN_MESSAGE])
+    rest = len(names) - len(shown)
+    return (*shown, Message.of("common.more", count=rest)) if rest else shown
+
+
+def wrap_anywhere(text: str) -> str:
+    """``text`` with a zero-width break between its graphemes.
+
+    A wrapping QLabel breaks only between words, so a long path would otherwise
+    overflow or widen its container; this lets it wrap whole, like RowDetail.
+    """
+    # QTextBoundaryFinder counts UTF-16 units, which differ from Python's indices
+    # wherever a character lies outside the Basic Multilingual Plane.
+    units = text.encode("utf-16-le")
+    finder = QTextBoundaryFinder(QTextBoundaryFinder.BoundaryType.Grapheme, text)
+    pieces: list[str] = []
+    start = 0
+    while (end := finder.toNextBoundary()) not in (-1, start):
+        pieces.append(units[start * 2 : end * 2].decode("utf-16-le"))
+        start = end
+    return _BREAK.join(pieces)

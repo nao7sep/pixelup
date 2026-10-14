@@ -464,6 +464,27 @@ def test_open_duplicate_is_information_and_unrelated_success_does_not_clear_it(
     assert window.open_result.isHidden()
 
 
+def test_open_banner_names_a_few_files_and_never_widens_the_window(
+    make_window, tmp_path: Path
+) -> None:
+    window = make_window()
+    long_stem = "downloaded-" + "x" * 200
+    images = [_png(tmp_path, f"{long_stem}-{index}.png") for index in range(5)]
+    missing = [tmp_path / f"{long_stem}-missing-{index}.png" for index in range(5)]
+    _open(window, images)
+    minimum = window.minimumSizeHint().width()
+
+    _open(window, [*images, *missing])
+
+    message = window.open_result.message_label.text()
+    assert message.startswith("Already open: downloaded-")
+    assert "and 2 more." in message
+    assert message.count(": the file is unavailable.") == 3
+    assert message.endswith("2 more files could not be opened.")
+    assert long_stem not in message
+    assert window.minimumSizeHint().width() == minimum
+
+
 def test_exact_corrected_open_clears_the_previous_rejection(make_window, tmp_path: Path) -> None:
     window = make_window()
     broken = tmp_path / "repair.png"

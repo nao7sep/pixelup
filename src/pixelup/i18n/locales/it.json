@@ -27,6 +27,11 @@
   "actions.title": "Coda",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
+  "common.more": {
+    "many": "altre {count}",
+    "one": "{count} altra",
+    "other": "altre {count}"
+  },
   "error.alphaModeInvalid": "La modalità alfa deve essere Real-ESRGAN o Bicubica.",
   "error.backgroundInvalid": "Il colore di sfondo non è valido.",
   "error.configNewer": "Il file delle impostazioni è stato salvato da una versione più recente di PixelUp, quindi questa versione non lo modifica. Apri la versione più recente per cambiare le impostazioni.",
@@ -132,6 +137,11 @@
   "images.reasonUnavailable": "il file non è disponibile",
   "images.reasonUnreadable": "impossibile leggerlo",
   "images.rejected": "{name}: {reason}.",
+  "images.rejectedMore": {
+    "many": "Non è stato possibile aprire altri {count} di file.",
+    "one": "Non è stato possibile aprire {count} altro file.",
+    "other": "Non è stato possibile aprire altri {count} file."
+  },
   "images.selectedDetail": "Dettagli dell'immagine selezionata",
   "images.remove": "Rimuovi",
   "images.removeBlocked": "Impossibile rimuovere questa immagine finché lavori in attesa o in corso la usano.",

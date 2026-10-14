@@ -27,6 +27,11 @@
   "actions.title": "Cola",
   "app.name": "PixelUp",
   "common.sentences": "{first} {rest}",
+  "common.more": {
+    "many": "{count} más",
+    "one": "{count} más",
+    "other": "{count} más"
+  },
   "error.alphaModeInvalid": "El modo alfa debe ser Real-ESRGAN o Bicúbico.",
   "error.backgroundInvalid": "El color de fondo no es válido.",
   "error.configNewer": "Tu archivo de configuración se guardó con una versión más reciente de PixelUp, así que esta versión no lo modifica. Abre la versión más reciente para cambiar tu configuración.",
@@ -132,6 +137,11 @@
   "images.reasonUnavailable": "el archivo no está disponible",
   "images.reasonUnreadable": "no se pudo leer",
   "images.rejected": "{name}: {reason}.",
+  "images.rejectedMore": {
+    "many": "No se pudieron abrir otros {count} de archivos.",
+    "one": "No se pudo abrir {count} archivo más.",
+    "other": "No se pudieron abrir otros {count} archivos."
+  },
   "images.selectedDetail": "Detalles de la imagen seleccionada",
   "images.remove": "Quitar",
   "images.removeBlocked": "No se puede quitar esta imagen mientras la usen trabajos pendientes o en curso.",

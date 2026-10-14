@@ -27,6 +27,9 @@
   "actions.title": "队列",
   "app.name": "PixelUp",
   "common.sentences": "{first}{rest}",
+  "common.more": {
+    "other": "另外 {count} 个"
+  },
   "error.alphaModeInvalid": "Alpha 模式必须是 Real-ESRGAN 或“双三次”。",
   "error.backgroundInvalid": "背景颜色无效。",
   "error.configNewer": "你的设置文件由更新版本的 PixelUp 保存，此版本不会更改它。要更改设置，请打开更新的版本。",
@@ -122,6 +125,9 @@
   "images.reasonUnavailable": "文件不可用",
   "images.reasonUnreadable": "无法读取",
   "images.rejected": "{name}：{reason}。",
+  "images.rejectedMore": {
+    "other": "另有 {count} 个文件无法打开。"
+  },
   "images.selectedDetail": "所选图像的详情",
   "images.remove": "移除",
   "images.removeBlocked": "在等待中或运行中的任务仍在使用此图像时，无法移除它。",

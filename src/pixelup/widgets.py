@@ -74,6 +74,17 @@ class ResultCloseButton(QToolButton):
         painter.drawLine(QPointF(16, 8), QPointF(8, 16))
 
 
+class _ResultLabel(QLabel):
+    """A wrapping message label whose longest word never sets the banner's width.
+
+    The banner takes its width from the window (interface-styling-conventions,
+    Labels); a word wider than that is clipped rather than widening the window.
+    """
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        return QSize(0, super().minimumSizeHint().height())
+
+
 class OperationResult(QFrame):
     """A persistent inline result whose severity controls behavior and palette.
 
@@ -99,7 +110,7 @@ class OperationResult(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 7, 5 if dismissible else 10, 7)
         layout.setSpacing(8)
-        self.message_label = QLabel()
+        self.message_label = _ResultLabel()
         self.message_label.setWordWrap(True)
         self.message_label.setMinimumWidth(0)
         layout.addWidget(self.message_label, 1)
