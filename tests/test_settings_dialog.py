@@ -385,3 +385,32 @@ def test_async_save_owns_commit_and_late_success_keeps_a_newer_draft(qapp: QAppl
         assert dialog.result() == QDialog.DialogCode.Accepted
     finally:
         dialog.deleteLater()
+
+
+def test_the_time_zone_lists_system_first_with_its_zone_then_every_zone(
+    qapp: QApplication,
+) -> None:
+    from pixelup.time_zones import system_zone_id, zone_ids
+
+    dialog = SettingsDialog(AppConfig())
+    try:
+        combo = dialog.display_zone
+        assert combo.itemText(0) == f"System ({system_zone_id()})"
+        assert combo.itemData(0) == "system"
+        assert [combo.itemData(index) for index in range(1, combo.count())] == list(zone_ids())
+        assert dialog.is_dirty() is False
+
+        combo.setCurrentIndex(combo.findData("Asia/Tokyo"))
+        assert dialog.config().display_zone == "Asia/Tokyo"
+        assert dialog.ok_button.isEnabled()
+    finally:
+        dialog.deleteLater()
+
+
+def test_a_saved_time_zone_is_selected_when_settings_opens(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig(display_zone="Europe/Paris"))
+    try:
+        assert dialog.display_zone.currentData() == "Europe/Paris"
+        assert dialog.is_dirty() is False
+    finally:
+        dialog.deleteLater()

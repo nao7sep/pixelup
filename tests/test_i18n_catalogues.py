@@ -44,6 +44,7 @@ SAME_AS_ENGLISH: dict[str, list[str]] = {
         "records.levelDebug",
         "records.levelInfo",
         "settings.languageSystem",
+        "settings.timeZoneSystem",
         *_OK,
         *_UNITS,
     ],

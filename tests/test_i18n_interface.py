@@ -52,6 +52,7 @@ from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
 from pixelup.settings_dialog import DiscardChangesDialog, SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
+from pixelup.time_zones import system_zone_id, zone_ids
 from pixelup.widgets import EmptyStateTableWidget
 
 KEYS = set(json.loads(locale_file("en").read_text(encoding="utf-8")))
@@ -329,8 +330,11 @@ def _texts(root: QWidget, *, include_cells: bool = True) -> list[str]:
 
 
 def _english_left_over(text: str) -> list[str]:
+    # IANA zone IDs are names, listed as they are in every language.
+    if text in zone_ids():
+        return []
     # The system font's family is a name, shown as the UI font field's placeholder.
-    for word in (*_LITERAL_WORDS, system_ui_font_family()):
+    for word in (*_LITERAL_WORDS, system_ui_font_family(), system_zone_id()):
         text = text.replace(word, " ")
     return _ENGLISH_WORD.findall(text)
 

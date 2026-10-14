@@ -310,6 +310,8 @@
   "settings.ok": "OK",
   "settings.saveFailed": "PixelUp n’a pas pu enregistrer vos réglages. Vos modifications sont toujours là\u00a0; réessayez.",
   "settings.title": "Réglages",
+  "settings.timeZone": "Fuseau horaire",
+  "settings.timeZoneSystem": "Système ({zone})",
   "settings.uiFont": "Police de l’interface",
   "settings.uiFontCaption": "Vide utilise la police d’interface du système. Sinon, la première police installée est utilisée.",
   "settings.unsavedMessage": "Des modifications ne sont pas enregistrées. Les abandonner et fermer\u00a0?",

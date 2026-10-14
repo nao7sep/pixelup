@@ -296,6 +296,8 @@
   "settings.ok": "OK",
   "settings.saveFailed": "PixelUp konnte Ihre Einstellungen nicht speichern. Ihre Änderungen sind noch hier; versuchen Sie es erneut.",
   "settings.title": "Einstellungen",
+  "settings.timeZone": "Zeitzone",
+  "settings.timeZoneSystem": "System ({zone})",
   "settings.uiFont": "Oberflächenschrift",
   "settings.uiFontCaption": "Leer verwendet die Systemschrift der Oberfläche. Sonst wird die erste installierte Schrift verwendet.",
   "settings.unsavedMessage": "Sie haben nicht gespeicherte Änderungen. Verwerfen und schließen?",

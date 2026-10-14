@@ -815,3 +815,19 @@ def test_only_becoming_active_while_already_active_is_a_reopen() -> None:
     assert is_reopen(active, active)
     assert not is_reopen(inactive, active)
     assert not is_reopen(active, inactive)
+
+
+def test_a_landed_time_zone_redraws_the_open_records_window(make_main, monkeypatch) -> None:
+    from dataclasses import replace
+
+    from pixelup.time_zones import display_zone
+
+    main = make_main()
+    main._open_records_window()
+    redrawn: list[bool] = []
+    monkeypatch.setattr(main._records_window, "show_times_again", lambda: redrawn.append(True))
+
+    main._apply_saved_settings(main.config, replace(main.config, display_zone="Asia/Tokyo"))
+
+    assert bytes(display_zone().id().data()).decode() == "Asia/Tokyo"
+    assert redrawn == [True]

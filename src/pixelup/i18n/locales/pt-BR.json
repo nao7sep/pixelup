@@ -310,6 +310,8 @@
   "settings.ok": "OK",
   "settings.saveFailed": "O PixelUp não conseguiu salvar suas configurações. Suas alterações continuam aqui; tente novamente.",
   "settings.title": "Configurações",
+  "settings.timeZone": "Fuso horário",
+  "settings.timeZoneSystem": "Sistema ({zone})",
   "settings.uiFont": "Fonte da interface",
   "settings.uiFontCaption": "Em branco, usa a fonte de interface do sistema. Caso contrário, usa a primeira fonte instalada.",
   "settings.unsavedMessage": "Há alterações não salvas. Descartá-las e fechar?",

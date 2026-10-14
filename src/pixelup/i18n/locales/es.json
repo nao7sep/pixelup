@@ -310,6 +310,8 @@
   "settings.ok": "Aceptar",
   "settings.saveFailed": "PixelUp no pudo guardar tu configuración. Tus cambios siguen aquí; inténtalo de nuevo.",
   "settings.title": "Configuración",
+  "settings.timeZone": "Zona horaria",
+  "settings.timeZoneSystem": "Sistema ({zone})",
   "settings.uiFont": "Fuente de la interfaz",
   "settings.uiFontCaption": "Si se deja vacío, se usa la fuente de interfaz del sistema. Si no, se usa la primera fuente instalada.",
   "settings.unsavedMessage": "Tienes cambios sin guardar. ¿Descartarlos y cerrar?",

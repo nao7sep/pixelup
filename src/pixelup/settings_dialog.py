@@ -23,6 +23,7 @@ from pixelup.i18n.languages import LANGUAGES, SYSTEM
 from pixelup.i18n.localized import localize
 from pixelup.i18n.message import Message
 from pixelup.text_cleanup import single_line
+from pixelup.time_zones import SYSTEM_ZONE, system_zone_id, zone_ids
 from pixelup.ui_common import secondary_label, use_regular_spacing
 from pixelup.widgets import NoWheelComboBox, NoWheelSpinBox
 
@@ -85,7 +86,7 @@ class SettingsDialog(DialogShell):
     One home per thing. The image-processing parameters live in the main window's
     Parameters panel, which persists its own edits and resets to its own built-ins,
     so this dialog deliberately holds only the leftovers: the interface language, the
-    UI font and the concurrent job count. It carries no reset button — no setting here
+    time zone, the UI font and the concurrent job count. It carries no reset button — no setting here
     is a stale-able built-in or a tuned, interacting set worth returning to, so there
     is no default worth a control (config-sets-conventions).
 
@@ -134,6 +135,18 @@ class SettingsDialog(DialogShell):
             self.language.addItem(name, tag)
         self.language.setCurrentIndex(max(0, self.language.findData(config.language)))
 
+        # System first, naming the zone it resolves to now, then every zone the
+        # platform offers, chosen rather than typed (timestamp-conventions).
+        self.display_zone = NoWheelComboBox()
+        self.display_zone.addItem(
+            localizer.t("settings.timeZoneSystem", zone=system_zone_id()), SYSTEM_ZONE
+        )
+        for zone in zone_ids():
+            self.display_zone.addItem(zone, zone)
+        self.display_zone.setCurrentIndex(
+            max(0, self.display_zone.findData(config.display_zone))
+        )
+
         # Each caption groups under its own control (see _captioned) rather than
         # floating a full row-gap away, so the label reads as sub-text of the
         # field it explains. Row labels top-align to sit beside the control, not
@@ -142,6 +155,9 @@ class SettingsDialog(DialogShell):
         row = 0
         form.addWidget(localize(QLabel(), text="settings.language"), row, 0)
         form.addWidget(self.language, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
+        form.addWidget(localize(QLabel(), text="settings.timeZone"), row, 0)
+        form.addWidget(self.display_zone, row, 1, Qt.AlignmentFlag.AlignLeft)
         row += 1
         form.addWidget(localize(QLabel(), text="settings.uiFont"), row, 0, label_align)
         form.addWidget(_captioned(self.font_family, "settings.uiFontCaption"), row, 1)
@@ -181,6 +197,7 @@ class SettingsDialog(DialogShell):
             self.concurrent.valueChanged,
             self.font_family.textChanged,
             self.language.currentIndexChanged,
+            self.display_zone.currentIndexChanged,
         ):
             changed.connect(self._update_commit_enabled)
         self._update_commit_enabled()
@@ -198,6 +215,7 @@ class SettingsDialog(DialogShell):
             max_concurrent_jobs=self.concurrent.value(),
             font_family=single_line(self.font_family.text()),
             language=self.language.currentData(),
+            display_zone=self.display_zone.currentData(),
         )
 
     def is_dirty(self) -> bool:
@@ -236,6 +254,7 @@ class SettingsDialog(DialogShell):
         self.concurrent.setEnabled(False)
         self.font_family.setEnabled(False)
         self.language.setEnabled(False)
+        self.display_zone.setEnabled(False)
         self._try_save(
             candidate,
             lambda failure: self._saved(generation, candidate, failure),
@@ -250,6 +269,7 @@ class SettingsDialog(DialogShell):
         self.concurrent.setEnabled(True)
         self.font_family.setEnabled(True)
         self.language.setEnabled(True)
+        self.display_zone.setEnabled(True)
         self._update_commit_enabled()
         if failure is not None:
             localize(self.error_message, text=failure, accessible_name=failure)

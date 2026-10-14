@@ -261,6 +261,15 @@ def _english_interface(monkeypatch: pytest.MonkeyPatch):
     localizer.use("en", ("en",))
 
 
+@pytest.fixture(autouse=True)
+def _system_display_zone():
+    """Put the display zone back to System after a test that chose one."""
+    from pixelup.time_zones import SYSTEM_ZONE, set_display_zone
+
+    yield
+    set_display_zone(SYSTEM_ZONE)
+
+
 class QuitBound:
     """The quit's bound on a clock the test runs: nothing expires until ``expire()``,
     and the forced exit is counted instead of ending the test run."""

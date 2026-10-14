@@ -31,6 +31,7 @@ from pixelup.parameters import (
 from pixelup.paths import OutputFormat
 from pixelup.session_log import log
 from pixelup.text_cleanup import single_line
+from pixelup.time_zones import SYSTEM_ZONE, is_zone_preference
 
 
 def config_path() -> Path:
@@ -69,6 +70,9 @@ class AppConfig:
     # The interface language: "system" to follow the computer, or a language tag
     # (localization-conventions).
     language: str = SYSTEM
+    # The zone the shown times are read in: "system" to follow the computer, or an
+    # IANA zone (timestamp-conventions).
+    display_zone: str = SYSTEM_ZONE
     parameters: JobSettings = field(default_factory=JobSettings)
     models_folder: str = ""
 
@@ -257,6 +261,12 @@ def _decode_language(value: Any) -> str:
     return value
 
 
+def _decode_display_zone(value: Any) -> str:
+    if not is_zone_preference(value):
+        raise ValueError("display_zone is not a recognized zone")
+    return value
+
+
 def _decode_max_concurrent_jobs(value: Any) -> int:
     return _int_range(value, "max_concurrent_jobs", MIN_CONCURRENT_JOBS, MAX_CONCURRENT_JOBS)
 
@@ -289,6 +299,7 @@ def _decode_parameters(value: Any) -> JobSettings:
 _SET_DECODERS: dict[str, Callable[[Any], Any]] = {
     "font_family": _decode_font_family,
     "language": _decode_language,
+    "display_zone": _decode_display_zone,
     "max_concurrent_jobs": _decode_max_concurrent_jobs,
     "parameters": _decode_parameters,
     "models_folder": _decode_models_folder,
@@ -335,6 +346,7 @@ def _to_json(config: AppConfig) -> dict[str, Any]:
     return {
         "font_family": config.font_family,
         "language": config.language,
+        "display_zone": config.display_zone,
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "parameters": _parameters_to_json(config.parameters),
         "models_folder": config.models_folder,
@@ -360,6 +372,7 @@ def config_log_payload(config: AppConfig) -> dict[str, object]:
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "font_family": config.font_family,
         "language": config.language,
+        "display_zone": config.display_zone,
         "parameters": job_settings_log_payload(config.parameters),
         "models_folder": config.models_folder,
     }

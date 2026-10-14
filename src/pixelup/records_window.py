@@ -81,6 +81,7 @@ from pixelup.records import (
 )
 from pixelup.session_log import current_session, log
 from pixelup.theme import danger_colours, surfaces, warning_text
+from pixelup.time_zones import display_zone
 from pixelup.ui_common import REGULAR_SPACING, bind_close_shortcut, use_regular_spacing
 from pixelup.widgets import NoWheelComboBox, repolish
 from pixelup.window_placement import (
@@ -139,14 +140,14 @@ def saved_list_width(value: object) -> int:
 
 
 def format_record_time(stored: str, locale: QLocale, *, milliseconds: bool = False) -> str:
-    """A stored UTC instant as local time in the reader's locale, to the second.
+    """A stored UTC instant in the display zone and the reader's locale, to the second.
 
     A text the database holds that is not an instant is shown as it is.
     """
     moment = QDateTime.fromString(stored, Qt.DateFormat.ISODateWithMs)
     if not moment.isValid():
         return stored
-    local = moment.toLocalTime()
+    local = moment.toTimeZone(display_zone())
     time_format = locale.timeFormat(QLocale.FormatType.ShortFormat)
     if "ss" not in time_format:
         time_format = time_format.replace("mm", "mm:ss")
@@ -1134,6 +1135,10 @@ class RecordsWindow(QWidget):
         self.detail.setHtml("".join(parts))
 
     @Slot()
+    def show_times_again(self) -> None:
+        """Redraw every shown time, after the display zone changed."""
+        self._retranslate()
+
     def _retranslate(self) -> None:
         for index, level in enumerate((None, *LEVEL_FILTERS)):
             key = "records.allLevels" if level is None else LEVEL_FILTER_LABELS[level]

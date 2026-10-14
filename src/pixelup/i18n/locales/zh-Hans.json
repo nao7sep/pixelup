@@ -282,6 +282,8 @@
   "settings.ok": "确定",
   "settings.saveFailed": "PixelUp 无法保存你的设置。你的更改仍保留在这里；请重试。",
   "settings.title": "设置",
+  "settings.timeZone": "时区",
+  "settings.timeZoneSystem": "跟随系统（{zone}）",
   "settings.uiFont": "界面字体",
   "settings.uiFontCaption": "留空则使用系统界面字体；否则使用列出的第一个已安装字体。",
   "settings.unsavedMessage": "你有未保存的更改。要放弃这些更改并关闭吗？",

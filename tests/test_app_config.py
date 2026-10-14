@@ -745,6 +745,7 @@ def test_config_log_payload_shape() -> None:
         "max_concurrent_jobs": 2,
         "font_family": AppConfig().font_family,
         "language": "system",
+        "display_zone": "system",
         "parameters": job_settings_log_payload(config.parameters),
         "models_folder": "",
     }
@@ -799,3 +800,22 @@ def test_models_folder_is_saved_reset_and_preserved_when_rejected(tmp_path):
     assert rejected.rejected == ("models_folder",)
     save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.file)
     assert json.loads(path.read_text())["models_folder"] == 123
+
+
+def test_display_zone_is_saved_and_preserved_when_this_computer_lacks_it(tmp_path):
+    from dataclasses import replace
+
+    path = tmp_path / "config.json"
+    initial = load_app_config_result(path)
+    assert initial.config.display_zone == "system"
+    chosen = replace(initial.config, display_zone="Asia/Tokyo")
+    save_app_config(chosen, initial.config, initial.file)
+    assert json.loads(path.read_text())["display_zone"] == "Asia/Tokyo"
+    assert load_app_config_result(path).config.display_zone == "Asia/Tokyo"
+
+    path.write_text(json.dumps({"format_version": 1, "display_zone": "Mars/Olympus_Mons"}))
+    rejected = load_app_config_result(path)
+    assert rejected.rejected == ("display_zone",)
+    assert rejected.config.display_zone == "system"
+    save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.file)
+    assert json.loads(path.read_text())["display_zone"] == "Mars/Olympus_Mons"

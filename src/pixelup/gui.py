@@ -137,6 +137,7 @@ from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.startup_admission import admit_data_root
 from pixelup.theme import PixelupStyle, apply_theme
+from pixelup.time_zones import set_display_zone
 from pixelup.ui_common import (
     NAMED_IN_MESSAGE,
     apply_palette_fixes,
@@ -455,6 +456,7 @@ class MainWindow(QMainWindow):
         # after the window is built, so the message box has a real parent.
         load_result = load_app_config_result()
         self.config = load_result.config
+        set_display_zone(self.config.display_zone)
         # What config.json holds; every save writes from it and replaces it.
         self._settings_file = load_result.file
         self._config_save: ConfigSave | None = None
@@ -1456,11 +1458,21 @@ class MainWindow(QMainWindow):
             )
             self.runner.set_runtime_dirs(self.runtime_dirs)
             self.model_manager.set_models_dir(self.runtime_dirs.models_dir)
+        if previous.display_zone != current.display_zone:
+            set_display_zone(current.display_zone)
+            if self._records_window is not None:
+                self._records_window.show_times_again()
         if (
             previous.font_family,
             previous.language,
+            previous.display_zone,
             previous.max_concurrent_jobs,
-        ) == (current.font_family, current.language, current.max_concurrent_jobs):
+        ) == (
+            current.font_family,
+            current.language,
+            current.display_zone,
+            current.max_concurrent_jobs,
+        ):
             return
         if previous.font_family != current.font_family:
             # Re-apply the UI font so a changed family takes effect immediately,
@@ -2456,6 +2468,7 @@ _STATUS_KEYS = {
 _SET_LABELS = {
     "font_family": Message("settings.uiFont"),
     "language": Message("settings.language"),
+    "display_zone": Message("settings.timeZone"),
     "max_concurrent_jobs": Message("settings.concurrentJobs"),
     "parameters": Message("parameters.title"),
     "models_folder": Message("managedModels.folder"),
