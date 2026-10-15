@@ -363,10 +363,6 @@ class ModelManager(QObject):
         worker.progress.connect(self._show_progress)
         worker.finished.connect(self._worker_finished)
         thread.setProperty("operation_id", operation_id)
-        # Queue destruction on the worker thread before asking that thread to
-        # quit. Keeping deletion until thread.finished races its native teardown
-        # against the manager releasing the last Python reference.
-        worker.finished.connect(worker.deleteLater)
         thread.finished.connect(self._thread_finished)
         self._threads[operation_id] = thread
         self._workers[operation_id] = worker
@@ -469,6 +465,10 @@ class ModelManager(QObject):
             return
         operation_id = int(sender.property("operation_id"))
         result = self._install_results.pop(operation_id, None)
+        # The worker has one owner: Python, through this registry. finished is
+        # emitted before the thread ends, so wait for that before releasing it;
+        # a Qt-side deleteLater raced this release and deleted it twice.
+        sender.wait()
         self._workers.pop(operation_id, None)
         thread = self._threads.pop(operation_id, None)
         if thread is not None:

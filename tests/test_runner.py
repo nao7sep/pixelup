@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import errno
 import os
+import subprocess
+import sys
 from itertools import count
 from pathlib import Path
 from threading import Event
@@ -1076,3 +1078,67 @@ def test_folder_switch_keeps_accepted_jobs_on_original_folder(
     process_until(lambda: len(observed) == 3 and not runner._threads,
                   timeout_s=5, what="Jobs captured before and after the folder switch")
     assert observed == {1: original.models_dir, 2: original.models_dir, 3: replacement.models_dir}
+
+
+# A disposable process runs real job workers whose upscale fails at once. Each
+# worker's destruction is slowed by a hook, which widens the overlap in which a
+# Qt-side deleteLater on the job thread and the runner's release on the window
+# thread both deleted the worker (SIGSEGV). Every worker must instead be deleted
+# once, by the runner, on the window thread.
+_WORKER_RELEASE_PROCESS = r"""
+import sys
+import threading
+import time
+from pathlib import Path
+from PySide6.QtCore import QCoreApplication, Qt, QTimer
+from pixelup import runner
+from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
+from pixelup.jobs import Job, JobSettings
+
+def failing_upscale(*_args, **_kwargs):
+    time.sleep(0.02)
+    raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("jobs.failedFallback"))
+
+runner.run_upscale = failing_upscale
+deleted_on_window_thread = []
+start_job = runner.JobRunner._start_job
+
+def start_watched_job(self, job):
+    start_job(self, job)
+    _thread, worker = self._threads[job.id]
+    def destroyed(*_args):
+        deleted_on_window_thread.append(threading.current_thread() is threading.main_thread())
+        time.sleep(0.02)
+    worker.destroyed.connect(destroyed, Qt.ConnectionType.DirectConnection)
+
+runner.JobRunner._start_job = start_watched_job
+folder = Path(sys.argv[1])
+count = 10
+app = QCoreApplication([])
+jobs = [
+    Job(id=i, input_path=folder / f"{i}.png", model="realesr-general-x4v3",
+        output_path=folder / f"{i}-out.png", settings=JobSettings(), status="pending")
+    for i in range(1, count + 1)
+]
+job_runner = runner.JobRunner(jobs)
+finished = []
+def record(job_id, *_outcome):
+    finished.append(job_id)
+    if len(finished) == count:
+        app.quit()
+job_runner.finished.connect(record)
+QTimer.singleShot(0, lambda: job_runner.schedule(1))
+app.exec()
+app.processEvents()
+print("finished", len(finished), deleted_on_window_thread.count(True), flush=True)
+"""
+
+
+def test_finished_workers_are_released_once_without_crashing(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", _WORKER_RELEASE_PROCESS, str(tmp_path)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.splitlines()[-1] == "finished 10 10"

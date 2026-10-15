@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -284,3 +286,61 @@ def test_quit_tracks_folder_reveal_preparation(qapp, tmp_path, monkeypatch, proc
         release.set()
     process_until(manager.cleanup_for_quit, timeout_s=5, what="Folder reveal settlement")
     manager.deleteLater()
+
+
+# Install workers end the same way job workers do. With each worker's destruction
+# slowed, a Qt-side deleteLater and the manager's release both deleted it
+# (SIGSEGV); every worker must be deleted once, by the manager, on the window thread.
+_INSTALL_RELEASE_PROCESS = r"""
+import sys
+import threading
+import time
+from pathlib import Path
+from PySide6.QtCore import QCoreApplication, Qt, QTimer
+from pixelup import model_manager
+from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
+
+def failing_download(*_args, **_kwargs):
+    time.sleep(0.02)
+    raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("jobs.failedFallback"))
+
+model_manager.download_model = failing_download
+deleted_on_window_thread = []
+spawned = []
+spawn = model_manager.ModelManager._spawn_worker
+
+def spawn_watched(self, operation_id, names, *, force):
+    spawn(self, operation_id, names, force=force)
+    spawned.append(operation_id)
+    def destroyed(*_args):
+        deleted_on_window_thread.append(threading.current_thread() is threading.main_thread())
+        time.sleep(0.02)
+    self._workers[operation_id].destroyed.connect(destroyed, Qt.ConnectionType.DirectConnection)
+
+model_manager.ModelManager._spawn_worker = spawn_watched
+app = QCoreApplication([])
+manager = model_manager.ModelManager(Path(sys.argv[1]))
+count = 10
+done = []
+def next_install():
+    if len(done) == count:
+        app.quit()
+        return
+    done.append(manager.install(("realesr-general-x4v3",), force=True))
+manager.idle.connect(lambda: QTimer.singleShot(0, next_install))
+QTimer.singleShot(0, next_install)
+app.exec()
+app.processEvents()
+print(len(spawned) > 1, len(spawned) == deleted_on_window_thread.count(True), flush=True)
+"""
+
+
+def test_finished_install_workers_are_released_once_without_crashing(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", _INSTALL_RELEASE_PROCESS, str(tmp_path)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    # Several workers started, and each was deleted once, on the window thread.
+    assert result.stdout.splitlines()[-1] == "True True"

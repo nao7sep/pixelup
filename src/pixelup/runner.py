@@ -280,7 +280,6 @@ class JobRunner(QObject):
         thread.started.connect(worker.run)
         worker.signals.progress.connect(self.progress.emit)
         worker.signals.finished.connect(self._job_finished)
-        worker.signals.finished.connect(worker.deleteLater)
         thread.setProperty("job_id", job.id)
         thread.finished.connect(self._thread_finished)
         self._threads[job.id] = (thread, worker)
@@ -292,6 +291,10 @@ class JobRunner(QObject):
         if not isinstance(thread, QThread):
             return
         job_id = int(thread.property("job_id"))
+        # The worker has one owner: Python, through this registry. finished is
+        # emitted before the thread ends, so wait for that before releasing it;
+        # a Qt-side deleteLater raced this release and deleted it twice.
+        thread.wait()
         self._threads.pop(job_id, None)
         outcome = self._job_results.pop(job_id, None)
         self._active_jobs = max(0, self._active_jobs - 1)
