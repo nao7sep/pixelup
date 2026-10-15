@@ -117,8 +117,12 @@ def formatting_locale(tag: str, computer_locale: QLocale) -> QLocale:
 
     The computer's own regional format when the computer already works in the
     interface language, so a reader keeps the separators they chose, and
-    otherwise the language's own.
+    otherwise the language's own. Qt's C locale names itself English but is no
+    regional choice at all (an environment without a locale), so it never counts.
     """
-    if _match_one(computer_locale.bcp47Name()) == tag:
+    if (
+        computer_locale.language() != QLocale.Language.C
+        and _match_one(computer_locale.bcp47Name()) == tag
+    ):
         return computer_locale
     return QLocale(tag)

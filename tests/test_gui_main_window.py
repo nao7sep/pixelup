@@ -3820,7 +3820,7 @@ def test_auto_device_names_the_backend_it_resolves_to_once_known(
     assert window.device.currentData() == "auto"
     with localizer.speaking("ja"):
         window._retranslate()
-        assert window.device.itemText(0) == "自動 (MPS)"
+        assert window.device.itemText(0) == "自動（MPS）"
     window._retranslate()
 
 

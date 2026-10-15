@@ -455,7 +455,7 @@ def test_the_settings_picker_offers_system_then_each_language_in_its_own_name(
             ]
             # System names the language it resolves to on this computer (pinned to
             # English for tests), in the interface language.
-            assert items[0] == ("システム (英語)", "system")
+            assert items[0] == ("システム（英語）", "system")
             assert items[1:] == list((name, tag) for tag, name in LANGUAGES)
             assert dialog.language.currentData() == "ko"
         finally:
@@ -492,21 +492,27 @@ def test_labels_fit_the_dialogs_that_cannot_grow(
 @pytest.mark.parametrize(
     ("tag", "computer", "language", "zone"),
     [
-        ("en", ("ja",), "System (Japanese)", "System ({zone})"),
-        ("ja", ("de",), "システム (ドイツ語)", "システム ({zone})"),
-        ("ru", ("zh-Hans",), "Системный (китайский)", "Системный ({zone})"),
+        ("en", "ja", "System (Japanese)", "System ({zone})"),
+        ("ja", "de", "システム（ドイツ語）", "システム（{zone}）"),
+        ("ru", "zh-Hans", "Системный (китайский)", "Системный ({zone})"),
     ],
 )
 def test_system_entries_name_what_they_resolve_to_in_the_interface_language(
-    qapp: QApplication, tag: str, computer: tuple[str, ...], language: str, zone: str
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    tag: str,
+    computer: str,
+    language: str,
+    zone: str,
 ) -> None:
-    localizer.use(tag, computer)
-    dialog = SettingsDialog(AppConfig(language=tag))
-    try:
-        assert dialog.language.itemText(0) == language
-        assert dialog.display_zone.itemText(0) == zone.format(zone=system_zone_id())
-    finally:
-        dialog.deleteLater()
+    monkeypatch.setattr(localizer, "system_language", lambda: computer)
+    with localizer.speaking(tag):
+        dialog = SettingsDialog(AppConfig(language=tag))
+        try:
+            assert dialog.language.itemText(0) == language
+            assert dialog.display_zone.itemText(0) == zone.format(zone=system_zone_id())
+        finally:
+            dialog.deleteLater()
 
 
 def test_every_language_names_every_language(qapp: QApplication) -> None:

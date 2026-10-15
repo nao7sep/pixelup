@@ -367,3 +367,14 @@ def test_appkit_is_pointed_at_the_language_for_this_process_only() -> None:
         [sys.executable, "-c", probe], capture_output=True, text=True, timeout=60, check=True
     )
     assert result.stdout.strip() == "ja"
+
+
+def test_a_computer_without_a_locale_formats_english_as_english() -> None:
+    from PySide6.QtCore import QLocale
+
+    from pixelup.i18n.languages import formatting_locale
+
+    # Qt names the C locale "en-POSIX", which matches English.
+    locale = formatting_locale("en", QLocale.c())
+    assert locale.language() == QLocale.Language.English
+    assert locale.createSeparatedList(["a", "b", "c"]) == "a, b, and c"
