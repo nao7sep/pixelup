@@ -48,6 +48,26 @@ _QT_TRANSLATION_NAMES = {
 }
 
 
+# Each language's name in the interface language, for "System (Japanese)".
+_NAME_KEYS = {
+    "de": "languages.de",
+    "en": "languages.en",
+    "es": "languages.es",
+    "fr": "languages.fr",
+    "it": "languages.it",
+    "pt-BR": "languages.pt-BR",
+    "ru": "languages.ru",
+    "zh-Hans": "languages.zh-Hans",
+    "ja": "languages.ja",
+    "ko": "languages.ko",
+}
+
+
+def name_key(tag: str) -> str:
+    """The catalogue key of ``tag``'s name as the interface language writes it."""
+    return _NAME_KEYS[tag]
+
+
 def name_of(tag: str) -> str:
     """The name ``tag`` is shown under, or the tag itself outside the set."""
     return dict(LANGUAGES).get(tag, tag)

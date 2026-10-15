@@ -3802,3 +3802,57 @@ def test_cmd_or_ctrl_w_runs_the_main_windows_own_close(
     # The same question the close button asks; declining it keeps PixelUp open.
     assert window.isVisible()
     assert not window._closing
+
+
+def test_auto_device_names_the_backend_it_resolves_to_once_known(
+    make_window, monkeypatch, process_until
+) -> None:
+    from pixelup.i18n import localizer
+
+    window = make_window()
+    assert window.device.itemText(0) == "Auto"
+    monkeypatch.setattr(gui, "_resolve_auto_device", lambda: "mps")
+
+    window._probe_auto_device()
+    process_until(lambda: window._auto_device == "mps", timeout_s=5, what="Auto device probe")
+
+    assert window.device.itemText(0) == "Auto (MPS)"
+    assert window.device.currentData() == "auto"
+    with localizer.speaking("ja"):
+        window._retranslate()
+        assert window.device.itemText(0) == "自動 (MPS)"
+    window._retranslate()
+
+
+def test_a_failed_auto_device_probe_leaves_auto_unnamed(
+    make_window, monkeypatch, process_until
+) -> None:
+    def broken() -> str:
+        raise OSError("no runtime")
+
+    window = make_window()
+    monkeypatch.setattr(gui, "_resolve_auto_device", broken)
+    window._probe_auto_device()
+    process_until(lambda: window._device_reads.settled, timeout_s=5, what="Auto device probe")
+
+    assert window._auto_device is None
+    assert window.device.itemText(0) == "Auto"
+
+
+def test_quit_waits_for_the_auto_device_probe(make_window, monkeypatch, process_until) -> None:
+    window = make_window()
+    entered, release = threading.Event(), threading.Event()
+
+    def held() -> str:
+        entered.set()
+        release.wait(5)
+        return "cpu"
+
+    monkeypatch.setattr(gui, "_resolve_auto_device", held)
+    window._probe_auto_device()
+    assert entered.wait(5)
+    try:
+        assert not window._workers_clean_for_quit()
+    finally:
+        release.set()
+    process_until(window._workers_clean_for_quit, timeout_s=5, what="Probe settlement")

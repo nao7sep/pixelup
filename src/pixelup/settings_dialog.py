@@ -19,7 +19,7 @@ from pixelup.app_config import MAX_CONCURRENT_JOBS, MIN_CONCURRENT_JOBS, AppConf
 from pixelup.dialog_shell import FORM_WIDTH, NOTICE_WIDTH, DialogShell
 from pixelup.fonts import system_ui_font_family
 from pixelup.i18n import localizer
-from pixelup.i18n.languages import LANGUAGES, SYSTEM
+from pixelup.i18n.languages import LANGUAGES, SYSTEM, name_key
 from pixelup.i18n.localized import localize
 from pixelup.i18n.message import Message
 from pixelup.text_cleanup import single_line
@@ -86,9 +86,9 @@ class SettingsDialog(DialogShell):
     One home per thing. The image-processing parameters live in the main window's
     Parameters panel, which persists its own edits and resets to its own built-ins,
     so this dialog deliberately holds only the leftovers: the interface language, the
-    time zone, the UI font and the concurrent job count. It carries no reset button — no setting here
-    is a stale-able built-in or a tuned, interacting set worth returning to, so there
-    is no default worth a control (config-sets-conventions).
+    time zone, the UI font and the concurrent job count. It carries no reset button —
+    no setting here is a stale-able built-in or a tuned, interacting set worth
+    returning to, so there is no default worth a control (config-sets-conventions).
 
     The widgets hold a draft; the incoming config is never mutated. The commit
     (OK) button stays disabled until the draft differs from the config the
@@ -125,12 +125,14 @@ class SettingsDialog(DialogShell):
         self.font_family.setPlaceholderText(system_ui_font_family())
         self.font_family.setMinimumWidth(260)
 
-        # System first, then each language in its own name, so a reader finds
-        # theirs whatever language is showing (localization-conventions). The
-        # names are the languages' own and are never translated. A modal dialog
-        # renders its choices once: the language cannot change while it is up.
+        # System first, naming the language it resolves to now in the interface
+        # language, then each language in its own name, so a reader finds theirs
+        # whatever language is showing (localization-conventions). Those names are
+        # the languages' own and are never translated. A modal dialog renders its
+        # choices once: the language cannot change while it is up.
         self.language = NoWheelComboBox()
-        self.language.addItem(localizer.t("settings.languageSystem"), SYSTEM)
+        system = localizer.t(name_key(localizer.system_language()))
+        self.language.addItem(localizer.t("settings.languageSystem", language=system), SYSTEM)
         for tag, name in LANGUAGES:
             self.language.addItem(name, tag)
         self.language.setCurrentIndex(max(0, self.language.findData(config.language)))

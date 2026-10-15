@@ -80,7 +80,7 @@ from pixelup.app_config import (
 from pixelup.backup_store import drain_backups
 from pixelup.config import MODELS_ENV, RuntimeDirs, resolve_runtime_dirs, saved_models_dir
 from pixelup.config_save import ConfigSave, ConfigSaveOutcome
-from pixelup.devices import DEVICE_CHOICES
+from pixelup.devices import DEVICE_CHOICES, resolve_device
 from pixelup.errors import ErrorCode, PixelupError, user_text
 from pixelup.fonts import apply_ui_font
 from pixelup.i18n import localizer
@@ -476,6 +476,12 @@ class MainWindow(QMainWindow):
         self._open_results.ready.connect(self._apply_opened)
         self._open_reads = ReadThreads(self)
         self._open_reads.idle.connect(self._close_when_workers_stop)
+        # What Auto resolves to on this computer, once the background probe knows.
+        self._auto_device: str | None = None
+        self._device_probed = _Loaded(self)
+        self._device_probed.ready.connect(self._auto_device_known)
+        self._device_reads = ReadThreads(self)
+        self._device_reads.idle.connect(self._close_when_workers_stop)
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. The blank
         # built-in resolves to the system UI font. setFont propagates app-wide, so
@@ -621,7 +627,7 @@ class MainWindow(QMainWindow):
         for combo, choices in (
             (self.alpha_mode, ALPHA_MODE_CHOICES),
             (self.tile, TILE_CHOICES),
-            (self.device, DEVICE_CHOICES),
+            (self.device, self._device_choices()),
             (self.target_profile, TARGET_PROFILE_CHOICES),
         ):
             retranslate_choices(combo, choices)
@@ -712,6 +718,38 @@ class MainWindow(QMainWindow):
             self._watch_layout_screen(screen)
         QApplication.instance().screenAdded.connect(self._watch_layout_screen)
         self._update_native_minimum()
+        self._probe_auto_device()
+
+    def _probe_auto_device(self) -> None:
+        """Learn what Auto resolves to, off the window thread and after it shows:
+        the answer needs torch, which window startup never imports."""
+
+        def read() -> None:
+            try:
+                device = _resolve_auto_device()
+            except Exception:  # noqa: BLE001 - Auto then names nothing, as before.
+                log.exception("device.auto_probe_failed")
+                return
+            try:
+                self._device_probed.ready.emit(0, device)
+            except RuntimeError:
+                pass  # An explicitly disposed window has abandoned the probe.
+
+        self._device_reads.start("pixelup-device-probe", read)
+
+    @Slot(int, object)
+    def _auto_device_known(self, _request: int, device: str) -> None:
+        self._auto_device = device
+        retranslate_choices(self.device, self._device_choices())
+
+    def _device_choices(self) -> tuple[tuple[Message | str, str], ...]:
+        """The device choices, with Auto naming what it resolves to once known
+        (localization-conventions)."""
+        if self._auto_device is None:
+            return DEVICE_CHOICES
+        names = dict((value, label) for label, value in DEVICE_CHOICES)
+        auto = Message.of("parameters.deviceAutoResolved", device=names[self._auto_device])
+        return tuple((auto if value == "auto" else label, value) for label, value in DEVICE_CHOICES)
 
     def _is_session_shutdown(self) -> bool:
         if self._app_quitting:
@@ -822,6 +860,7 @@ class MainWindow(QMainWindow):
             return
         self._quit_bounded = True
         self._open_reads.closing = True
+        self._device_reads.closing = True
         self._planning_reads.closing = True
         self._pending_job_plans.clear()
         self._job_plan_abandoned = True
@@ -870,6 +909,7 @@ class MainWindow(QMainWindow):
         return (
             self._config_save is None
             and self._open_reads.settled
+            and self._device_reads.settled
             and self._planning_reads.settled
             and self.preview.reads.settled
             and output_cleanup.settled
@@ -2513,6 +2553,11 @@ class _OpenProbe:
     size: tuple[int, int] | None = None
     rejected: Message | None = None
     failed: bool = False
+
+
+def _resolve_auto_device() -> str:
+    """The backend Auto runs on here; imports torch, so only off the window thread."""
+    return resolve_device("auto")
 
 
 def _probe_open_paths(paths: list[Path]) -> list[_OpenProbe]:

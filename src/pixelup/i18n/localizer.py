@@ -55,6 +55,11 @@ def preference() -> str:
     return _preference
 
 
+def system_language() -> str:
+    """The language System resolves to on this computer now."""
+    return languages.match(_computer_languages)
+
+
 def t(key: str, /, **values: object) -> str:
     return _translator.t(key, **values)
 

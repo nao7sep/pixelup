@@ -262,6 +262,14 @@ def _english_interface(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _known_auto_device(monkeypatch: pytest.MonkeyPatch):
+    """Answer the Auto device probe at once instead of importing torch."""
+    from pixelup import gui
+
+    monkeypatch.setattr(gui, "_resolve_auto_device", lambda: "cpu")
+
+
+@pytest.fixture(autouse=True)
 def _system_display_zone():
     """Put the display zone back to System after a test that chose one."""
     from pixelup.time_zones import SYSTEM_ZONE, set_display_zone
