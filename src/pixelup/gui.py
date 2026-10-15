@@ -678,11 +678,21 @@ class MainWindow(QMainWindow):
         # Either way no user interaction is possible any more (QCoreApplication).
         self._app_quitting = True
 
+    def _question_parent(self) -> QWidget | None:
+        """The shown window a question attaches to: the main window, else Records.
+        With neither showing, the question stands alone rather than attaching to a
+        hidden or minimized window and bringing it back (window-conventions)."""
+        for window in (self, self._records_window):
+            if window is not None and window.isVisible() and not window.isMinimized():
+                return window
+        return None
+
     def _dismiss_session_question(self) -> None:
         if self._quit_dialog is not None:
             self._quit_dialog.reject()
+        # Every modal is PixelUp's own, whether attached to a window or standing alone.
         modal = QApplication.activeModalWidget()
-        if isinstance(modal, QDialog) and self.isAncestorOf(modal):
+        if isinstance(modal, QDialog):
             modal.reject()
 
     def event(self, event: QEvent) -> bool:
@@ -794,7 +804,7 @@ class MainWindow(QMainWindow):
             self.close()
             return
         if not saved:
-            dialog = QuitSaveFailedDialog(self)
+            dialog = QuitSaveFailedDialog(self._question_parent())
             self._quit_dialog = dialog
             choice = dialog.choose()
             self._quit_dialog = None
@@ -816,11 +826,17 @@ class MainWindow(QMainWindow):
                 "quit.parameters_unsaved",
                 values=job_settings_log_payload(self.current_job_settings()),
             )
-        if self._images_by_path:
+        installs = len(self.model_manager.in_progress_operations)
+        if self._images_by_path or installs:
             active = sum(
                 1 for job in self.jobs if job.status in {"pending", "running", "cancelling"}
             )
-            dialog = QuitConfirmDialog(active, self)
+            dialog = QuitConfirmDialog(
+                active,
+                self._question_parent(),
+                installs=installs,
+                images_open=bool(self._images_by_path),
+            )
             self._quit_dialog = dialog
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
             self._quit_dialog = None
@@ -828,7 +844,7 @@ class MainWindow(QMainWindow):
                 self._closing = False
                 log.info("quit.cancelled")
                 return
-            log.info("quit.confirmed", active_jobs=active)
+            log.info("quit.confirmed", active_jobs=active, model_installs=installs)
         self._quit_ready = True
         QTimer.singleShot(0, self.close)
 
@@ -852,7 +868,7 @@ class MainWindow(QMainWindow):
             return
         if not self._quit_when_workers_idle:
             self._quit_when_workers_idle = True
-            warn_jobs_stopping(self)
+            warn_jobs_stopping(self._question_parent())
 
     def _bound_quit(self) -> None:
         """Start the quit's one bound, once; past it PixelUp exits regardless."""

@@ -17,6 +17,22 @@ def test_quit_confirmation_text_pluralizes() -> None:
     assert text(quit_confirmation_text(2)) == "2 active jobs will be abandoned. Quit PixelUp?"
 
 
+def test_quit_confirmation_names_model_installations_still_running() -> None:
+    text = english().of
+    assert text(quit_confirmation_text(0, installs=1, images_open=False)) == (
+        "1 model installation will be cancelled. Quit PixelUp?"
+    )
+    assert text(quit_confirmation_text(2, installs=2)) == (
+        "2 active jobs will be abandoned. 2 model installations will be cancelled. "
+        "Quit PixelUp?"
+    )
+    with localizer.speaking("ja"):
+        assert localizer.of(quit_confirmation_text(0, installs=1)) == (
+            "開いている画像は閉じられます。モデルのインストール 1 件が取り消されます。"
+            "PixelUp を終了しますか？"
+        )
+
+
 def _footer_button_labels(dialog: QDialog) -> list[str]:
     for layout in dialog.findChildren(QHBoxLayout):
         buttons = [

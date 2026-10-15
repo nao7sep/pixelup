@@ -248,11 +248,14 @@
   "queue.statusPending": "대기 중",
   "queue.statusRunning": "실행 중…",
   "queue.title": "대기열",
-  "quit.activeJobs": {
-    "other": "진행 중인 작업 {count}개가 중단됩니다. PixelUp을 종료하시겠습니까?"
+  "quit.jobsAbandoned": {
+    "other": "진행 중인 작업 {count}개가 중단됩니다."
   },
   "quit.cancel": "취소",
-  "quit.openImages": "열려 있는 이미지가 닫힙니다. PixelUp을 종료하시겠습니까?",
+  "quit.imagesClosed": "열려 있는 이미지가 닫힙니다.",
+  "quit.installsCancelled": {
+    "other": "모델 설치 {count}개가 취소됩니다."
+  },
   "quit.quit": "종료",
   "quit.quitAnyway": "저장하지 않고 종료",
   "quit.retry": "다시 시도",

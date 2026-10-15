@@ -261,12 +261,16 @@
   "queue.statusPending": "Pending",
   "queue.statusRunning": "Running…",
   "queue.title": "Queue",
-  "quit.activeJobs": {
-    "one": "{count} active job will be abandoned. Quit PixelUp?",
-    "other": "{count} active jobs will be abandoned. Quit PixelUp?"
+  "quit.jobsAbandoned": {
+    "one": "{count} active job will be abandoned.",
+    "other": "{count} active jobs will be abandoned."
   },
   "quit.cancel": "Cancel",
-  "quit.openImages": "Open images will be closed. Quit PixelUp?",
+  "quit.imagesClosed": "Open images will be closed.",
+  "quit.installsCancelled": {
+    "one": "{count} model installation will be cancelled.",
+    "other": "{count} model installations will be cancelled."
+  },
   "quit.quit": "Quit",
   "quit.quitAnyway": "Quit anyway",
   "quit.retry": "Retry",

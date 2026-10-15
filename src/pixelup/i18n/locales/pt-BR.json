@@ -274,13 +274,18 @@
   "queue.statusPending": "Pendente",
   "queue.statusRunning": "Em execução…",
   "queue.title": "Fila",
-  "quit.activeJobs": {
-    "many": "{count} de tarefas ativas serão abandonadas. Sair do PixelUp?",
-    "one": "{count} tarefa ativa será abandonada. Sair do PixelUp?",
-    "other": "{count} tarefas ativas serão abandonadas. Sair do PixelUp?"
+  "quit.jobsAbandoned": {
+    "many": "{count} de tarefas ativas serão abandonadas.",
+    "one": "{count} tarefa ativa será abandonada.",
+    "other": "{count} tarefas ativas serão abandonadas."
   },
   "quit.cancel": "Cancelar",
-  "quit.openImages": "As imagens abertas serão fechadas. Sair do PixelUp?",
+  "quit.imagesClosed": "As imagens abertas serão fechadas.",
+  "quit.installsCancelled": {
+    "many": "{count} de instalações de modelos serão canceladas.",
+    "one": "{count} instalação de modelo será cancelada.",
+    "other": "{count} instalações de modelos serão canceladas."
+  },
   "quit.quit": "Sair",
   "quit.quitAnyway": "Sair mesmo assim",
   "quit.retry": "Tentar novamente",

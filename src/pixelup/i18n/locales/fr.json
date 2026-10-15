@@ -274,13 +274,18 @@
   "queue.statusPending": "En attente",
   "queue.statusRunning": "En cours…",
   "queue.title": "File d’attente",
-  "quit.activeJobs": {
-    "many": "{count} de tâches actives seront abandonnées. Quitter PixelUp\u00a0?",
-    "one": "{count} tâche active sera abandonnée. Quitter PixelUp\u00a0?",
-    "other": "{count} tâches actives seront abandonnées. Quitter PixelUp\u00a0?"
+  "quit.jobsAbandoned": {
+    "many": "{count} de tâches actives seront abandonnées.",
+    "one": "{count} tâche active sera abandonnée.",
+    "other": "{count} tâches actives seront abandonnées."
   },
   "quit.cancel": "Annuler",
-  "quit.openImages": "Les images ouvertes seront fermées. Quitter PixelUp\u00a0?",
+  "quit.imagesClosed": "Les images ouvertes seront fermées.",
+  "quit.installsCancelled": {
+    "many": "{count} d’installations de modèles seront annulées.",
+    "one": "{count} installation de modèle sera annulée.",
+    "other": "{count} installations de modèles seront annulées."
+  },
   "quit.quit": "Quitter",
   "quit.quitAnyway": "Quitter quand même",
   "quit.retry": "Réessayer",

@@ -274,13 +274,18 @@
   "queue.statusPending": "Pendiente",
   "queue.statusRunning": "En curso…",
   "queue.title": "Cola",
-  "quit.activeJobs": {
-    "many": "Se abandonarán {count} de trabajos activos. ¿Salir de PixelUp?",
-    "one": "Se abandonará {count} trabajo activo. ¿Salir de PixelUp?",
-    "other": "Se abandonarán {count} trabajos activos. ¿Salir de PixelUp?"
+  "quit.jobsAbandoned": {
+    "many": "Se abandonarán {count} de trabajos activos.",
+    "one": "Se abandonará {count} trabajo activo.",
+    "other": "Se abandonarán {count} trabajos activos."
   },
   "quit.cancel": "Cancelar",
-  "quit.openImages": "Se cerrarán las imágenes abiertas. ¿Salir de PixelUp?",
+  "quit.imagesClosed": "Se cerrarán las imágenes abiertas.",
+  "quit.installsCancelled": {
+    "many": "Se cancelarán {count} de instalaciones de modelos.",
+    "one": "Se cancelará {count} instalación de modelo.",
+    "other": "Se cancelarán {count} instalaciones de modelos."
+  },
   "quit.quit": "Salir",
   "quit.quitAnyway": "Salir de todos modos",
   "quit.retry": "Reintentar",

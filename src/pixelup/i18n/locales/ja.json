@@ -248,11 +248,14 @@
   "queue.statusPending": "待機中",
   "queue.statusRunning": "実行中…",
   "queue.title": "キュー",
-  "quit.activeJobs": {
-    "other": "実行中のジョブ {count} 件が破棄されます。PixelUp を終了しますか？"
+  "quit.jobsAbandoned": {
+    "other": "実行中のジョブ {count} 件が破棄されます。"
   },
   "quit.cancel": "キャンセル",
-  "quit.openImages": "開いている画像は閉じられます。PixelUp を終了しますか？",
+  "quit.imagesClosed": "開いている画像は閉じられます。",
+  "quit.installsCancelled": {
+    "other": "モデルのインストール {count} 件が取り消されます。"
+  },
   "quit.quit": "終了",
   "quit.quitAnyway": "保存せずに終了",
   "quit.retry": "再試行",

@@ -274,13 +274,18 @@
   "queue.statusPending": "In attesa",
   "queue.statusRunning": "In corso…",
   "queue.title": "Coda",
-  "quit.activeJobs": {
-    "many": "{count} di lavori attivi verranno abbandonati. Uscire da PixelUp?",
-    "one": "{count} lavoro attivo verrà abbandonato. Uscire da PixelUp?",
-    "other": "{count} lavori attivi verranno abbandonati. Uscire da PixelUp?"
+  "quit.jobsAbandoned": {
+    "many": "{count} di lavori attivi verranno abbandonati.",
+    "one": "{count} lavoro attivo verrà abbandonato.",
+    "other": "{count} lavori attivi verranno abbandonati."
   },
   "quit.cancel": "Annulla",
-  "quit.openImages": "Le immagini aperte verranno chiuse. Uscire da PixelUp?",
+  "quit.imagesClosed": "Le immagini aperte verranno chiuse.",
+  "quit.installsCancelled": {
+    "many": "{count} di installazioni di modelli verranno annullate.",
+    "one": "{count} installazione di modello verrà annullata.",
+    "other": "{count} installazioni di modelli verranno annullate."
+  },
   "quit.quit": "Esci",
   "quit.quitAnyway": "Esci comunque",
   "quit.retry": "Riprova",

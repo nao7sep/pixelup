@@ -6,17 +6,25 @@ from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from pixelup.dialog_shell import NOTICE_WIDTH, DialogShell
 from pixelup.i18n.localized import localize
-from pixelup.i18n.message import Message
+from pixelup.i18n.message import Message, join
 
 
-def quit_confirmation_text(active: int) -> Message:
-    if not active:
-        return Message("quit.openImages")
-    return Message.of("quit.activeJobs", count=active)
+def quit_confirmation_text(active: int, *, installs: int = 0, images_open: bool = True) -> Message:
+    """What quitting stops, then the question: active jobs or the open images, and
+    model installations still running or waiting (unsaved-edits-conventions)."""
+    parts: list[Message] = []
+    if active:
+        parts.append(Message.of("quit.jobsAbandoned", count=active))
+    elif images_open:
+        parts.append(Message("quit.imagesClosed"))
+    if installs:
+        parts.append(Message.of("quit.installsCancelled", count=installs))
+    return join("common.sentences", [*parts, Message("quit.title")])
 
 
 class QuitConfirmDialog(DialogShell):
-    """Confirm quitting when images are open or work is in progress.
+    """Confirm quitting when images are open or work, a job or a model
+    installation, is in progress.
 
     A custom dialog rather than QMessageBox: QMessageBox lays its buttons out by
     role per platform, and on macOS that pushes a DestructiveRole button to the
@@ -25,10 +33,20 @@ class QuitConfirmDialog(DialogShell):
     ``exec()`` returns ``Accepted`` to quit, ``Rejected`` (Cancel, Escape) to stay.
     """
 
-    def __init__(self, active: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        active: int,
+        parent: QWidget | None = None,
+        *,
+        installs: int = 0,
+        images_open: bool = True,
+    ) -> None:
         super().__init__("quit.title", parent, width=NOTICE_WIDTH)
 
-        message = localize(QLabel(), text=quit_confirmation_text(active))
+        message = localize(
+            QLabel(),
+            text=quit_confirmation_text(active, installs=installs, images_open=images_open),
+        )
         message.setWordWrap(True)
         self.body_layout.addWidget(message)
 

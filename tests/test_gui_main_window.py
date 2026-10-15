@@ -1547,7 +1547,8 @@ def test_close_waits_for_worker_ownership_to_end(
     assert window._window_state.value(window._GEOMETRY_KEY) is None
     assert window._quit_when_workers_idle is True
     assert shutdown_calls == [True]
-    assert warnings == [window]
+    # No window is showing in this test, so the notice stands alone.
+    assert warnings == [None]
 
     second = QCloseEvent()
     window.closeEvent(second)
@@ -1683,18 +1684,20 @@ def test_a_user_quit_waits_for_running_work_only_until_the_bound(
     monkeypatch.setattr(
         gui,
         "QuitConfirmDialog",
-        lambda *_: SimpleNamespace(exec=lambda: QDialog.DialogCode.Accepted),
+        lambda *_args, **_kwargs: SimpleNamespace(exec=lambda: QDialog.DialogCode.Accepted),
     )
     notices: list[object] = []
     monkeypatch.setattr(gui, "warn_jobs_stopping", notices.append)
 
+    window.show()
     with monkeypatch.context() as running_work:
         running_work.setattr(window.runner, "cleanup_for_quit", lambda: False)
         event = QCloseEvent()
         window.closeEvent(event)
         _settle_config(window)
 
-        # The quit is under way and bounded; the window waits for the worker.
+        # The quit is under way and bounded; the shown window waits for the worker
+        # and carries the notice.
         assert event.isAccepted() is False
         assert window._quit_when_workers_idle is True
         assert notices == [window]
@@ -1816,7 +1819,7 @@ def test_close_claim_precedes_the_confirmation_and_os_can_take_it_over(
     monkeypatch.setattr(gui, "os_session_ending", lambda: shutdown)
 
     class Confirmation:
-        def __init__(self, *_args):
+        def __init__(self, *_args, **_kwargs):
             self.rejected = False
 
         def reject(self):
@@ -3185,7 +3188,7 @@ from PySide6.QtWidgets import QApplication
 from pixelup import gui
 
 class Asked:
-    def __init__(self, *_args):
+    def __init__(self, *_args, **_kwargs):
         print('asked', flush=True)
     def reject(self):
         pass
@@ -3785,7 +3788,7 @@ def test_cmd_or_ctrl_w_runs_the_main_windows_own_close(
     asked: list[int] = []
 
     class Confirm:
-        def __init__(self, active, _parent):
+        def __init__(self, active, _parent, **_kwargs):
             asked.append(active)
 
         def exec(self):
@@ -3856,3 +3859,43 @@ def test_quit_waits_for_the_auto_device_probe(make_window, monkeypatch, process_
     finally:
         release.set()
     process_until(window._workers_clean_for_quit, timeout_s=5, what="Probe settlement")
+
+
+def test_quit_asks_about_a_model_installation_with_no_images_open(
+    make_window, monkeypatch, quit_bound
+) -> None:
+    window = make_window()
+    asked: list[tuple[int, dict]] = []
+
+    class Confirm:
+        def __init__(self, active, _parent, **kwargs):
+            asked.append((active, kwargs))
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(gui, "QuitConfirmDialog", Confirm)
+    with monkeypatch.context() as installing:
+        installing.setattr(
+            type(window.model_manager), "in_progress_operations", property(lambda _self: ("op",))
+        )
+        window.closeEvent(QCloseEvent())
+        _settle_config(window)
+
+    assert asked == [(0, {"installs": 1, "images_open": False})]
+    assert not window._closing
+
+
+def test_a_question_attaches_only_to_a_window_that_is_showing(make_window, qapp) -> None:
+    window = make_window()
+    assert window._question_parent() is None
+    window.show()
+    assert window._question_parent() is window
+    window._open_records_window()
+    records = window._records_window
+    window.showMinimized()
+    qapp.processEvents()
+    assert window._question_parent() is records
+    records.close()
+    assert window._question_parent() is None
+    window.showNormal()

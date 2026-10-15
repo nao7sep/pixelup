@@ -261,12 +261,16 @@
   "queue.statusPending": "Wartend",
   "queue.statusRunning": "Läuft\u00a0…",
   "queue.title": "Warteschlange",
-  "quit.activeJobs": {
-    "one": "{count} aktiver Auftrag wird abgebrochen. PixelUp beenden?",
-    "other": "{count} aktive Aufträge werden abgebrochen. PixelUp beenden?"
+  "quit.jobsAbandoned": {
+    "one": "{count} aktiver Auftrag wird abgebrochen.",
+    "other": "{count} aktive Aufträge werden abgebrochen."
   },
   "quit.cancel": "Abbrechen",
-  "quit.openImages": "Geöffnete Bilder werden geschlossen. PixelUp beenden?",
+  "quit.imagesClosed": "Geöffnete Bilder werden geschlossen.",
+  "quit.installsCancelled": {
+    "one": "{count} Modellinstallation wird abgebrochen.",
+    "other": "{count} Modellinstallationen werden abgebrochen."
+  },
   "quit.quit": "Beenden",
   "quit.quitAnyway": "Trotzdem beenden",
   "quit.retry": "Erneut versuchen",
