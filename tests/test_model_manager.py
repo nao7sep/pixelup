@@ -344,3 +344,18 @@ def test_finished_install_workers_are_released_once_without_crashing(tmp_path: P
     assert result.returncode == 0, result.stderr[-2000:]
     # Several workers started, and each was deleted once, on the window thread.
     assert result.stdout.splitlines()[-1] == "True True"
+
+
+def test_a_scan_that_fails_unexpectedly_still_settles_readiness(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    def broken(_models_dir: Path) -> frozenset[str]:
+        if threading.current_thread() is threading.main_thread():
+            return frozenset()
+        raise ValueError("unexpected")
+
+    monkeypatch.setattr(model_manager, "read_ready_names", broken)
+    manager = ModelManager(tmp_path)
+    process_until(lambda: manager.readiness_known, timeout_s=10, what="Readiness after a failure")
+    assert manager.ready_names == frozenset()
+    manager.deleteLater()

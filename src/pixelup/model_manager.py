@@ -261,7 +261,7 @@ class ModelManager(QObject):
     def _scan(self, models_dir: Path, version: int) -> None:
         try:
             ready_names = read_ready_names(models_dir)
-        except OSError:
+        except Exception:  # noqa: BLE001 - a failed scan must still settle readiness.
             log.exception("models.scan_failed", models_dir=str(models_dir))
             ready_names = frozenset()
         try:
@@ -295,7 +295,7 @@ class ModelManager(QObject):
             ok = True
             try:
                 folder.mkdir(parents=True, exist_ok=True)
-            except OSError:
+            except Exception:  # noqa: BLE001 - the Reveal button waits on this answer.
                 log.exception("models.reveal_failed", models_dir=str(folder))
                 ok = False
             try:
@@ -447,6 +447,9 @@ class ModelManager(QObject):
         message: Message | None,
     ) -> None:
         self._install_results[operation_id] = (succeeded, cancelled, message)
+        thread = self._threads.get(operation_id)
+        if thread is not None:
+            thread.quit()
         log.info(
             "models.install_finished",
             operation_id=operation_id,
@@ -454,9 +457,6 @@ class ModelManager(QObject):
             cancelled=cancelled,
             reason=english().of(message) if message is not None else "",
         )
-        thread = self._threads.get(operation_id)
-        if thread is not None:
-            thread.quit()
 
     @Slot()
     def _thread_finished(self) -> None:

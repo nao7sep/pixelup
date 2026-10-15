@@ -22,6 +22,7 @@ from pixelup.jobs import Job, JobSettings, create_jobs, retry_failed_jobs
 from pixelup.model_management import UPSCALE_MODELS
 from pixelup.output_reservation import PublishedFile
 from pixelup.runner import (
+    FAILED_FALLBACK,
     JobRunner,
     JobSignals,
     JobWorker,
@@ -1142,3 +1143,26 @@ def test_finished_workers_are_released_once_without_crashing(tmp_path: Path) -> 
     )
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.splitlines()[-1] == "finished 10 10"
+
+
+def test_a_worker_that_ends_without_a_result_still_fails_its_job_and_frees_the_slot(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    # An unexpected error outside the job's own handling must not leave it running.
+    jobs = [_make_job(i, tmp_path) for i in (1, 2)]
+
+    def broken(self) -> None:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr("pixelup.runner.JobWorker._run", broken)
+    monkeypatch.setattr("sys.excepthook", lambda *_args: None)
+    runner = JobRunner(jobs)
+    outcomes: list[tuple[object, ...]] = []
+    runner.finished.connect(lambda *args: outcomes.append(args))
+    runner.schedule(1)
+    process_until(lambda: len(outcomes) == 2, timeout_s=10, what="Both jobs settled")
+
+    assert [(job_id, ok) for job_id, ok, *_rest in outcomes] == [(1, False), (2, False)]
+    assert outcomes[0][2] == FAILED_FALLBACK
+    assert runner._active_jobs == 0
+    assert runner._threads == {}

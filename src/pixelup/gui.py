@@ -771,32 +771,56 @@ class MainWindow(QMainWindow):
         return app is not None and app.isSavingSession()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # Qt accepts a close whose handler raised, which would end PixelUp with its
+        # workers still running; each path below accepts only on purpose.
+        event.ignore()
         if self._is_session_shutdown():
-            self._closing = True
-            self._quit_ready = True
-            self._os_close_accepted = True
-            self._bound_quit()
-            self._dismiss_session_question()
-            log.info("quit.session_shutdown")
-            if self._config_save is None:
-                self._flush_parameters_save(surface_failure=False)
-            self._finish_or_defer_close(event, session_shutdown=True)
+            try:
+                self._closing = True
+                self._quit_ready = True
+                self._os_close_accepted = True
+                self._bound_quit()
+                self._dismiss_session_question()
+                log.info("quit.session_shutdown")
+                if self._config_save is None:
+                    self._flush_parameters_save(surface_failure=False)
+                self._finish_or_defer_close(event, session_shutdown=True)
+            except Exception:
+                # The OS is ending the session: a failure here never refuses it.
+                log.exception("quit.session_shutdown_failed")
+                event.accept()
             return
         if self._quit_when_workers_idle or self._quit_ready:
             self._finish_or_defer_close(event, session_shutdown=False)
             return
-        event.ignore()
         if self._closing:
             return
         self._closing = True
-        self._flush_parameters_save(
-            finished=self._user_quit_save_finished,
-            waiting=lambda: self._user_quit_save_finished(False),
-        )
+        try:
+            self._flush_parameters_save(
+                finished=self._user_quit_save_finished,
+                waiting=lambda: self._user_quit_save_finished(False),
+            )
+        except Exception:
+            self._abandon_quit()
+            return
         if self._quit_ready:
             self._finish_or_defer_close(event, session_shutdown=False)
 
+    def _abandon_quit(self) -> None:
+        """A failure before the quit was confirmed leaves PixelUp open and able to
+        quit again, rather than stuck believing a quit is under way."""
+        log.exception("quit.failed")
+        self._closing = False
+        self._quit_dialog = None
+
     def _user_quit_save_finished(self, saved: bool) -> None:
+        try:
+            self._continue_user_quit(saved)
+        except Exception:
+            self._abandon_quit()
+
+    def _continue_user_quit(self, saved: bool) -> None:
         if self._quit_ready or not self._closing:
             return
         if self._is_session_shutdown():
@@ -1767,10 +1791,16 @@ class MainWindow(QMainWindow):
                 self.queue_action_result.show_result(planned, severity="error")
             else:
                 planned = [job for job in planned if job.input_path in retained]
-                if isinstance(request.work, PendingEnqueue):
-                    self._adopt_new_jobs(planned, request.runtime_dirs)
-                else:
-                    self._adopt_retried_jobs(planned, request.runtime_dirs)
+                try:
+                    if isinstance(request.work, PendingEnqueue):
+                        self._adopt_new_jobs(planned, request.runtime_dirs)
+                    else:
+                        self._adopt_retried_jobs(planned, request.runtime_dirs)
+                except Exception:
+                    log.exception("enqueue.adopt_failed")
+                    self.queue_action_result.show_result(
+                        Message("actions.queueFailed"), severity="error",
+                    )
         self._start_next_job_plan()
 
     def _present_pending_models_after_scan(self) -> None:
@@ -2144,6 +2174,7 @@ class MainWindow(QMainWindow):
             candidate,
             self.config,
             lambda candidate, previous: save_app_config(candidate, previous, file),
+            self,
         )
         self._config_save = operation
         self._config_save_callback = finished
@@ -2194,7 +2225,12 @@ class MainWindow(QMainWindow):
             self.config = outcome.result.config
             self._unsaved_config_changes.clear()
             if not self._quit_bounded:
-                self._apply_saved_settings(previous, self.config)
+                try:
+                    self._apply_saved_settings(previous, self.config)
+                except Exception:
+                    # The file landed; a failure to apply it here must not leave its
+                    # editor waiting or a quit behind it stalled.
+                    log.exception("settings.apply_failed")
         if operation.candidate.models_folder != operation.previous.models_folder:
             self.model_manager.folder_change_pending = False
         if self._parameter_edit_generation != self._saving_parameter_generation:

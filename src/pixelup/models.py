@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
@@ -206,7 +207,7 @@ def download_model_info(
                     reason=str(exc),
                 )
             raise
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        except (HTTPError, URLError, TimeoutError, OSError, HTTPException) as exc:
             log.warning(
                 "model.download_failed",
                 model=info.name,

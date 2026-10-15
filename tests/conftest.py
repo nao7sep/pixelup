@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -79,6 +80,7 @@ def _reset_pixelup_logging():
     the suite order-dependent.
     """
     saved_excepthook = sys.excepthook
+    saved_thread_excepthook = threading.excepthook
     yield
     logger = logging.getLogger(LOGGER_NAME)
     for handler in list(logger.handlers):
@@ -86,6 +88,7 @@ def _reset_pixelup_logging():
         logger.removeHandler(handler)
     logger.setLevel(logging.NOTSET)
     sys.excepthook = saved_excepthook
+    threading.excepthook = saved_thread_excepthook
 
 
 @pytest.fixture(autouse=True)

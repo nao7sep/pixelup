@@ -3899,3 +3899,90 @@ def test_a_question_attaches_only_to_a_window_that_is_showing(make_window, qapp)
     records.close()
     assert window._question_parent() is None
     window.showNormal()
+
+
+def test_a_failure_before_quit_is_confirmed_leaves_pixelup_able_to_quit_again(
+    make_window, monkeypatch, quit_bound
+) -> None:
+    window = make_window()
+
+    def broken(**_kwargs) -> None:
+        raise RuntimeError("save path broke")
+
+    monkeypatch.setattr(window, "_flush_parameters_save", broken)
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert not window._closing
+    assert quit_bound.started == []
+
+
+def test_a_failure_during_an_os_session_end_never_refuses_it(
+    make_window, monkeypatch, quit_bound
+) -> None:
+    window = make_window()
+    window._is_session_shutdown = lambda: True
+
+    def broken(*_args, **_kwargs) -> None:
+        raise RuntimeError("cleanup broke")
+
+    monkeypatch.setattr(window, "_finish_or_defer_close", broken)
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert event.isAccepted()
+
+
+def test_a_failure_applying_landed_settings_still_answers_their_editor(
+    make_window, monkeypatch
+) -> None:
+    from dataclasses import replace as replaced
+
+    window = make_window()
+
+    def broken(*_args) -> None:
+        raise RuntimeError("apply broke")
+
+    monkeypatch.setattr(window, "_apply_saved_settings", broken)
+    answers: list[object] = []
+    window._save_config_candidate(
+        replaced(window.config, max_concurrent_jobs=2), Message("settings.saveFailed"),
+        answers.append,
+    )
+    _settle_config(window)
+
+    assert answers == [None]
+    assert window.config.max_concurrent_jobs == 2
+    assert window._config_save is None
+
+
+def test_a_settings_save_has_one_owner_on_the_window_thread(make_window) -> None:
+    # Owned by the window, Qt alone deletes it; the save thread's reference never can.
+    window = make_window()
+    window.quality.setValue(window.quality.value() - 1)
+    window._flush_parameters_save(surface_failure=False)
+    operation = window._config_save
+    assert operation is not None
+    assert operation.parent() is window
+    _settle_config(window)
+
+
+def test_a_failed_queue_adoption_reports_and_keeps_planning(
+    make_window, tmp_path, monkeypatch
+) -> None:
+    window = make_window()
+    image = _png(tmp_path, "a.png")
+    _open(window, [image])
+
+    def broken(*_args) -> None:
+        raise RuntimeError("adoption broke")
+
+    monkeypatch.setattr(window, "_adopt_new_jobs", broken)
+    window._enqueue_jobs([image], ["realesr-general-x4v3"])
+    _settle_models(window)
+
+    assert window.queue_action_result.message_label.text() == english().of(
+        Message("actions.queueFailed")
+    )
+    assert window._active_job_plan is None

@@ -363,10 +363,19 @@ class ManagedModelsDialog(DialogShell):
             self.folder_edit.setText(str(self._manager.models_dir))
 
     def _choose_folder(self) -> None:
-        chosen = QFileDialog.getExistingDirectory(
+        # A picker this dialog owns, not Qt's static helper, whose stack-held dialog
+        # must not outlive a parent closed while it is open (an OS quit).
+        picker = QFileDialog(
             self, localizer.t("managedModels.folder"),
             self.folder_edit.text() or str(self._manager.models_dir),
         )
+        picker.setFileMode(QFileDialog.FileMode.Directory)
+        picker.setOption(QFileDialog.Option.ShowDirsOnly)
+        accepted = picker.exec() == QDialog.DialogCode.Accepted
+        if not isValid(self):
+            return
+        chosen = picker.selectedFiles()[0] if accepted and picker.selectedFiles() else ""
+        picker.deleteLater()
         if chosen:
             self.folder_edit.setText(chosen)
 

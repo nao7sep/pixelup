@@ -62,14 +62,14 @@ class ResultCloseButton(QToolButton):
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt override name
         super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(self.palette().color(QPalette.ColorRole.ButtonText))
-        pen.setWidthF(1.6)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.drawLine(QPointF(8, 8), QPointF(16, 16))
-        painter.drawLine(QPointF(16, 8), QPointF(8, 16))
+        with QPainter(self) as painter:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(self.palette().color(QPalette.ColorRole.ButtonText))
+            pen.setWidthF(1.6)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(QPointF(8, 8), QPointF(16, 16))
+            painter.drawLine(QPointF(16, 8), QPointF(8, 16))
 
 
 class OperationResult(QFrame):
@@ -373,18 +373,18 @@ class EmptyStateTableWidget(QTableWidget):
         if not self.empty_state_visible:
             return
 
-        painter = QPainter(self.viewport())
-        painter.setFont(self.font())
-        # Start from the table's guaranteed-readable theme foreground rather than
-        # relying on every host to correct PlaceholderText, then soften it to secondary.
-        color = self.palette().color(QPalette.ColorRole.Text)
-        color.setAlphaF(0.68)
-        painter.setPen(color)
-        painter.drawText(
-            self.viewport().rect().adjusted(16, 16, -16, -16),
-            Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
-            self.empty_text,
-        )
+        with QPainter(self.viewport()) as painter:
+            painter.setFont(self.font())
+            # Start from the table's guaranteed-readable theme foreground rather than
+            # relying on every host to correct PlaceholderText, then soften it to secondary.
+            color = self.palette().color(QPalette.ColorRole.Text)
+            color.setAlphaF(0.68)
+            painter.setPen(color)
+            painter.drawText(
+                self.viewport().rect().adjusted(16, 16, -16, -16),
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                self.empty_text,
+            )
 
 
 def choice_combo(choices: tuple[tuple[Message | str, object], ...]) -> NoWheelComboBox:

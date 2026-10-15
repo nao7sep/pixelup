@@ -582,3 +582,41 @@ def test_the_models_panel_separates_its_headings_with_the_sheets_line(
         assert lines[0].styleSheet() == ""
     finally:
         dialog.deleteLater()
+
+
+def test_the_folder_picker_is_owned_by_the_dialog(qapp, tmp_path, monkeypatch) -> None:
+    from pixelup import managed_models_dialog
+    from pixelup.model_manager import ModelManager
+
+    created = []
+
+    class Picker:
+        def __init__(self, parent, *_args):
+            created.append(parent)
+
+        def setFileMode(self, _mode):
+            pass
+
+        def setOption(self, _option):
+            pass
+
+        def exec(self):
+            return managed_models_dialog.QDialog.DialogCode.Accepted
+
+        def selectedFiles(self):
+            return [str(tmp_path / "chosen")]
+
+        def deleteLater(self):
+            pass
+
+    Picker.FileMode = managed_models_dialog.QFileDialog.FileMode
+    Picker.Option = managed_models_dialog.QFileDialog.Option
+    monkeypatch.setattr(managed_models_dialog, "QFileDialog", Picker)
+    dialog = managed_models_dialog.ManagedModelsDialog(ModelManager(tmp_path / "models"))
+    try:
+        dialog._choose_folder()
+        assert created == [dialog]
+        assert dialog.folder_edit.text() == str(tmp_path / "chosen")
+        dialog.folder_edit.setText("")
+    finally:
+        dialog.deleteLater()

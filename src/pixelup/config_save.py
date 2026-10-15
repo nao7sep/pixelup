@@ -28,8 +28,11 @@ class ConfigSave(QObject):
         candidate: AppConfig,
         previous: AppConfig,
         save: Callable[[AppConfig, AppConfig], ConfigSaveResult],
+        parent: QObject | None = None,
     ) -> None:
-        super().__init__()
+        # With a parent, Qt alone deletes this object: the save thread's reference
+        # can then never be the one that deletes it off the window thread.
+        super().__init__(parent)
         self.candidate = candidate
         self.previous = previous
         self._save = save

@@ -209,6 +209,8 @@ class RecordsHandler(logging.Handler):
                 self._write(entry)
                 if dropped:
                     self._write(_dropped_entry(dropped))
+            except Exception:  # noqa: BLE001 - the writer outlives one bad record.
+                traceback.print_exc(file=sys.stderr)
             finally:
                 with self._condition:
                     self._writing = False
@@ -433,4 +435,15 @@ def _install_excepthook() -> None:
         log.error("unhandled.exception", exc_info=(exc_type, exc, tb))
         _BASE_EXCEPTHOOK(exc_type, exc, tb)
 
+    def thread_hook(args: threading.ExceptHookArgs) -> None:
+        # A background thread's escaped exception is recorded, not only printed.
+        thread = args.thread.name if args.thread is not None else None
+        log.error(
+            "unhandled.thread_exception",
+            thread=thread,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+        threading.__excepthook__(args)
+
     sys.excepthook = hook
+    threading.excepthook = thread_hook

@@ -502,3 +502,19 @@ def test_a_field_changed_after_logging_is_recorded_as_it_was(
     values["items"].append(2)
 
     assert _records(database)[-1]["values"] == {"items": [1]}
+
+
+def test_an_escaped_background_thread_exception_is_recorded(monkeypatch) -> None:
+    database = configure_session_logging()
+    monkeypatch.setattr(threading, "__excepthook__", lambda _args: None)
+
+    def broken() -> None:
+        raise RuntimeError("background broke")
+
+    thread = threading.Thread(target=broken, name="pixelup-test-broken")
+    thread.start()
+    thread.join()
+
+    [entry] = [e for e in _records(database) if e["message"] == "unhandled.thread_exception"]
+    assert entry["thread"] == "pixelup-test-broken"
+    assert entry["error"]["type"] == "RuntimeError"

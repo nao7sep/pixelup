@@ -59,6 +59,16 @@ class JobWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        try:
+            self._run()
+        finally:
+            # The runner ends this thread when the result arrives; a run that ended
+            # without one ends it here, so the job and its slot are still released.
+            current = QThread.currentThread()
+            if current is not None:
+                current.quit()
+
+    def _run(self) -> None:
         warnings: list[Message] = []
         published_image: PublishedFile | None = None
         sidecar_claim: PublishedFile | None = None
@@ -74,8 +84,8 @@ class JobWorker(QObject):
                     if claim is not None:
                         remove_published_file(claim)
 
-        log.info("job.started", job_id=self.job.id, details=job_log_payload(self.job))
         try:
+            log.info("job.started", job_id=self.job.id, details=job_log_payload(self.job))
             options = options_for_job(self.job)
             runtime_dirs = self._runtime_dirs or resolve_runtime_dirs()
             # Fail fast, before a long inference, when the bundle is already taken.
@@ -297,6 +307,10 @@ class JobRunner(QObject):
         thread.wait()
         self._threads.pop(job_id, None)
         outcome = self._job_results.pop(job_id, None)
+        if outcome is None:
+            # The worker ended without reporting, so the job failed unexpectedly.
+            log.error("job.ended_without_result", job_id=job_id)
+            outcome = (False, FAILED_FALLBACK, {}, [])
         self._active_jobs = max(0, self._active_jobs - 1)
         thread.deleteLater()
         if outcome is not None:

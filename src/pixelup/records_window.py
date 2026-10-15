@@ -411,45 +411,50 @@ class _RecordDelegate(QStyledItemDelegate):
         )
         metrics = option.fontMetrics
         painter.save()
-        painter.setFont(option.font)
-        time = format_record_time(record.time, localizer.current().locale)
-        first = QRect(rect.left(), rect.top(), rect.width(), line)
-        painter.setPen(quiet)
-        painter.drawText(first, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, time)
-        level_left = first.left() + metrics.horizontalAdvance(time) + REGULAR_SPACING
-        painter.setPen(level_ink)
-        painter.drawText(
-            QRect(level_left, first.top(), max(0, first.right() - level_left), line),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            level_label(record.level),
-        )
-
-        bold = QFont(option.font)
-        bold.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(bold)
-        painter.setPen(ink)
-        second = first.translated(0, line + _ROW_LINE_GAP)
-        painter.drawText(
-            second,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            painter.fontMetrics().elidedText(
-                record.message, Qt.TextElideMode.ElideRight, second.width()
-            ),
-        )
-
-        fields = "" if record.fields in ("", "{}") else record.fields
-        if fields:
+        try:
             painter.setFont(option.font)
+            time = format_record_time(record.time, localizer.current().locale)
+            first = QRect(rect.left(), rect.top(), rect.width(), line)
             painter.setPen(quiet)
-            third = second.translated(0, line + _ROW_LINE_GAP)
             painter.drawText(
-                third,
+                first, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, time
+            )
+            level_left = first.left() + metrics.horizontalAdvance(time) + REGULAR_SPACING
+            painter.setPen(level_ink)
+            painter.drawText(
+                QRect(level_left, first.top(), max(0, first.right() - level_left), line),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                metrics.elidedText(
-                    " ".join(fields.split()), Qt.TextElideMode.ElideRight, third.width()
+                level_label(record.level),
+            )
+
+            bold = QFont(option.font)
+            bold.setWeight(QFont.Weight.DemiBold)
+            painter.setFont(bold)
+            painter.setPen(ink)
+            second = first.translated(0, line + _ROW_LINE_GAP)
+            painter.drawText(
+                second,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                painter.fontMetrics().elidedText(
+                    record.message, Qt.TextElideMode.ElideRight, second.width()
                 ),
             )
-        painter.restore()
+
+            fields = "" if record.fields in ("", "{}") else record.fields
+            if fields:
+                painter.setFont(option.font)
+                painter.setPen(quiet)
+                third = second.translated(0, line + _ROW_LINE_GAP)
+                painter.drawText(
+                    third,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    metrics.elidedText(
+                        " ".join(fields.split()), Qt.TextElideMode.ElideRight, third.width()
+                    ),
+                )
+        finally:
+            # A failed row never leaves the shared painter in its state.
+            painter.restore()
 
 
 class _RecordList(QListView):
@@ -491,19 +496,19 @@ class _RecordList(QListView):
         super().paintEvent(event)
         if self._note is None or (self.model() is not None and self.model().rowCount() > 0):
             return
-        painter = QPainter(self.viewport())
-        painter.setFont(self.font())
-        if self._note_failed:
-            colour = QColor(danger_colours(self.palette())["text"])
-        else:
-            colour = self.palette().color(QPalette.ColorRole.Text)
-            colour.setAlphaF(0.68)
-        painter.setPen(colour)
-        painter.drawText(
-            self.viewport().rect().adjusted(16, 16, -16, -16),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
-            localizer.of(self._note),
-        )
+        with QPainter(self.viewport()) as painter:
+            painter.setFont(self.font())
+            if self._note_failed:
+                colour = QColor(danger_colours(self.palette())["text"])
+            else:
+                colour = self.palette().color(QPalette.ColorRole.Text)
+                colour.setAlphaF(0.68)
+            painter.setPen(colour)
+            painter.drawText(
+                self.viewport().rect().adjusted(16, 16, -16, -16),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+                localizer.of(self._note),
+            )
 
 
 class _SplitterHandle(QSplitterHandle):
