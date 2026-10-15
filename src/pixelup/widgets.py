@@ -15,6 +15,7 @@ from PySide6.QtGui import (
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -37,7 +38,7 @@ from pixelup.i18n.localized import localize, unlocalize
 from pixelup.i18n.message import Message
 from pixelup.paths import OutputFormat
 from pixelup.session_log import log
-from pixelup.theme import INDICATOR_SIZE, _check_pixmap
+from pixelup.theme import BORDER_WIDTH, FIELD_TEXT_PADDING, INDICATOR_SIZE, _check_pixmap
 
 ResultSeverity = Literal["information", "warning", "error"]
 
@@ -290,7 +291,20 @@ class NoWheelComboBox(QComboBox):
         event.ignore()
 
 
+def inset_spin_text(box: QAbstractSpinBox) -> None:
+    """Start a spin box's text where a text field's starts.
+
+    Qt places a spin box's own edit at the box's edge and ignores style-sheet
+    padding there, so the digits would touch the border.
+    """
+    box.lineEdit().setTextMargins(BORDER_WIDTH + FIELD_TEXT_PADDING, 0, 0, 0)
+
+
 class NoWheelSpinBox(QSpinBox):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        inset_spin_text(self)
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
             super().wheelEvent(event)
@@ -299,6 +313,10 @@ class NoWheelSpinBox(QSpinBox):
 
 
 class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        inset_spin_text(self)
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
             super().wheelEvent(event)

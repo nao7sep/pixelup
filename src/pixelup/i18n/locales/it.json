@@ -236,7 +236,7 @@
   "parameters.outputFormat": "Formato di output",
   "parameters.profileDefault": "Predefinito",
   "parameters.quality": "Qualità",
-  "parameters.reset": "Ripristina parametri",
+  "parameters.reset": "Ripristina",
   "parameters.saveFailed": "PixelUp non è riuscito a salvare questi parametri. Le tue modifiche restano visibili; riprova.",
   "parameters.scale": "Fattore",
   "parameters.stripMetadata": "Rimuovi metadati",

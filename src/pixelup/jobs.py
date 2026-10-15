@@ -18,7 +18,7 @@ class JobSettings:
     """The image-processing parameters a job runs with — and, constructed bare, the
     single source of PixelUp's built-in parameter defaults.
 
-    ``JobSettings()`` *is* the built-ins: the Parameters panel's "Reset parameters"
+    ``JobSettings()`` *is* the built-ins: the Parameters panel's "Reset"
     restores exactly this, and the config loader uses it for an absent parameters set.
     There is deliberately no second defaults layer to drift against — the field
     defaults below are the only place a built-in parameter value is written.

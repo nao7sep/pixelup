@@ -77,6 +77,8 @@ ARROW_HEIGHT = 6
 # column of checkboxes and radios lines up on one edge.
 INDICATOR_SIZE = 14
 BORDER_WIDTH = 1
+# Room between a field's edge and its text.
+FIELD_TEXT_PADDING = 8
 # How far a rounded collection keeps its square contents (header, rows, scroll
 # bar) in from its border: a square corner clears a RADIUS curve drawn inside a
 # BORDER_WIDTH edge only once it sits (RADIUS - BORDER_WIDTH) * (1 - 1/sqrt 2)
@@ -344,7 +346,7 @@ QSpinBox, QDoubleSpinBox {{
     min-height: {_INNER_SPIN}px;
 }}
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
-    padding: 0 8px;
+    padding: 0 {FIELD_TEXT_PADDING}px;
     border: {BORDER_WIDTH}px solid {tone["field_edge"]};
     border-radius: {RADIUS}px;
     background-color: {tone["field"]};
@@ -362,7 +364,9 @@ QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabl
 }}
 QSpinBox, QDoubleSpinBox {{ padding-right: 22px; }}
 /* A spin box holds its own QLineEdit, which would otherwise take the field rule
-   above a second time and stack its height inside the box. */
+   above a second time and stack its height inside the box. Qt places that edit at
+   the box's own edge whatever the padding, so the widgets inset its text instead
+   (widgets.inset_spin_text). */
 QAbstractSpinBox QLineEdit {{
     min-height: 0;
     border: none;

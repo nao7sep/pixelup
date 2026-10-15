@@ -1193,7 +1193,7 @@ def test_retry_stays_failed_when_model_install_is_cancelled(
 
 def _reset_button(window: MainWindow) -> QPushButton:
     return next(
-        button for button in window.findChildren(QPushButton) if button.text() == "Reset parameters"
+        button for button in window.findChildren(QPushButton) if button.text() == "Reset"
     )
 
 

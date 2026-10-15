@@ -247,7 +247,7 @@
   "parameters.outputFormat": "Выходной формат",
   "parameters.profileDefault": "По умолчанию",
   "parameters.quality": "Качество",
-  "parameters.reset": "Сбросить параметры",
+  "parameters.reset": "Сбросить",
   "parameters.saveFailed": "PixelUp не удалось сохранить эти параметры. Ваши изменения по-прежнему показаны; повторите попытку.",
   "parameters.scale": "Масштаб",
   "parameters.stripMetadata": "Удалить метаданные",

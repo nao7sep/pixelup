@@ -1061,9 +1061,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(viewport)
 
     def _build_window_actions(self) -> QWidget:
-        row = QWidget()
-        layout = QGridLayout(row)
-        use_regular_spacing(layout, margins=False)
+        # PixelUp's own windows and information, a section like every other group
+        # in the window rather than loose buttons.
+        group = localize(QGroupBox(), title="app.name")
+        layout = QGridLayout(group)
+        use_regular_spacing(layout)
 
         self.records_button = localize(QPushButton(), text="main.records")
         self.records_button.clicked.connect(self._open_records_window)
@@ -1091,7 +1093,7 @@ class MainWindow(QMainWindow):
         # The two button columns take their content's width and the rest of the row
         # stays empty, so each pair sits together rather than across the panel.
         layout.setColumnStretch(2, 1)
-        return row
+        return group
 
     def _bind_shortcuts(self) -> None:
         self.shortcuts_shortcut = QShortcut(QKeySequence("Ctrl+/"), self)

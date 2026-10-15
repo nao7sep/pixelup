@@ -214,7 +214,7 @@
   "parameters.outputFormat": "输出格式",
   "parameters.profileDefault": "默认",
   "parameters.quality": "质量",
-  "parameters.reset": "重置参数",
+  "parameters.reset": "重置",
   "parameters.saveFailed": "PixelUp 无法保存这些参数。你的更改仍会显示；请重试。",
   "parameters.scale": "放大倍数",
   "parameters.stripMetadata": "移除元数据",

@@ -225,7 +225,7 @@
   "parameters.outputFormat": "Ausgabeformat",
   "parameters.profileDefault": "Standard",
   "parameters.quality": "Qualität",
-  "parameters.reset": "Parameter zurücksetzen",
+  "parameters.reset": "Zurücksetzen",
   "parameters.saveFailed": "PixelUp konnte diese Parameter nicht speichern. Ihre Änderungen werden weiter angezeigt; versuchen Sie es erneut.",
   "parameters.scale": "Faktor",
   "parameters.stripMetadata": "Metadaten entfernen",

@@ -131,9 +131,10 @@ class DialogShell(QDialog):
             DIALOG_MARGIN, _FOOTER_MARGIN_Y, DIALOG_MARGIN, _FOOTER_MARGIN_Y
         )
         self.footer_layout.setSpacing(REGULAR_SPACING)
-        # Everything a caller adds lands after this, so the action row is right
-        # aligned however many buttons it holds.
+        # Actions land after this stretch, so the action row is right aligned however
+        # many buttons it holds; auxiliary actions go before it, at the left end.
         self.footer_layout.addStretch()
+        self._leading_footer_count = 0
         outer.addWidget(self._footer)
 
     @property
@@ -144,6 +145,15 @@ class DialogShell(QDialog):
     def add_footer_widget(self, widget: QWidget) -> None:
         """Append an action to the footer band, left to right."""
         self.footer_layout.addWidget(widget)
+
+    def add_footer_leading_widget(self, widget: QWidget) -> None:
+        """Append an auxiliary action at the footer's left end, left to right.
+
+        For actions that serve the dialog's content rather than close it; the
+        dismiss and commit actions stay at the right end.
+        """
+        self.footer_layout.insertWidget(self._leading_footer_count, widget)
+        self._leading_footer_count += 1
 
     def set_initial_focus(self, widget: QWidget) -> None:
         """Name what the dialog opens with focus on.

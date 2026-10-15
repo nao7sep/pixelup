@@ -166,9 +166,10 @@ class ManagedModelsDialog(DialogShell):
         self.reveal_button.clicked.connect(self._reveal_models_folder)
         self.primary_button = QPushButton()
         self.primary_button.clicked.connect(self._install_all_or_cancel)
+        # Showing the folder and installing serve the list; Close ends the dialog.
+        self.add_footer_leading_widget(self.reveal_button)
+        self.add_footer_leading_widget(self.primary_button)
         self.add_footer_widget(self.dismiss_button)
-        self.add_footer_widget(self.reveal_button)
-        self.add_footer_widget(self.primary_button)
 
         self._manager.folder_available.connect(self._open_models_folder)
         self._manager.changed.connect(self._render)

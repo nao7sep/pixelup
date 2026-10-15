@@ -303,9 +303,11 @@ def test_manual_surface_has_independent_actions_and_truthful_columns(
         assert dialog.primary_button.text() == "Install all"
 
         footer = dialog.layout().itemAt(dialog.layout().count() - 1).widget().layout()
-        assert footer.itemAt(1).widget() is dialog.dismiss_button
-        assert footer.itemAt(2).widget() is dialog.reveal_button
-        assert footer.itemAt(3).widget() is dialog.primary_button
+        # Showing the folder and installing at the left end; Close at the right.
+        assert footer.itemAt(0).widget() is dialog.reveal_button
+        assert footer.itemAt(1).widget() is dialog.primary_button
+        assert footer.itemAt(2).spacerItem() is not None
+        assert footer.itemAt(3).widget() is dialog.dismiss_button
     finally:
         dialog.deleteLater()
 

@@ -214,7 +214,7 @@
   "parameters.outputFormat": "出力形式",
   "parameters.profileDefault": "デフォルト",
   "parameters.quality": "品質",
-  "parameters.reset": "パラメーターをリセット",
+  "parameters.reset": "リセット",
   "parameters.saveFailed": "PixelUp はこのパラメーターを保存できませんでした。変更内容は表示されたままです。もう一度お試しください。",
   "parameters.scale": "倍率",
   "parameters.stripMetadata": "メタデータを削除",

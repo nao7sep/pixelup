@@ -222,3 +222,11 @@ def test_result_close_button_keeps_the_platform_arrow_cursor(qapp: QApplication)
         assert button.cursor().shape() == Qt.CursorShape.ArrowCursor
     finally:
         button.deleteLater()
+
+
+def test_spin_box_text_starts_where_a_field_text_starts(qapp) -> None:
+    from pixelup.theme import BORDER_WIDTH, FIELD_TEXT_PADDING
+    from pixelup.widgets import NoWheelDoubleSpinBox, NoWheelSpinBox
+
+    for box in (NoWheelSpinBox(), NoWheelDoubleSpinBox()):
+        assert box.lineEdit().textMargins().left() == BORDER_WIDTH + FIELD_TEXT_PADDING
