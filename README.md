@@ -37,7 +37,7 @@ Photo orientation is applied to the pixels, including when metadata is removed. 
 ## Requirements
 
 - **macOS (Apple Silicon)** or **Windows (x64)** to run a prebuilt download — self-contained, nothing to install.
-- **Python 3.12 with [uv](https://docs.astral.sh/uv/)** only if you run or build from source. Python 3.13 and newer are not supported because a required Real-ESRGAN dependency does not build on them.
+- **Python 3.14 with [uv](https://docs.astral.sh/uv/)** only if you run or build from source. Python 3.15 is not supported yet because PyTorch publishes no builds for it.
 - Real-ESRGAN model weights — installed explicitly from their official GitHub releases and verified against a pinned SHA-256.
 - Optional: a GPU/MPS/CUDA backend for faster inference (CPU is the fallback).
 

@@ -10,9 +10,8 @@ name: Release
 #   - manual dispatch -> test + build + private one-day artifacts (no release),
 #     so the exact packages can be downloaded and inspected.
 #
-# Python is pinned to 3.12 (the developed/run-on version): setup-uv defaults to the
-# newest Python (3.14), on which the transitive basicsr 1.4.2 (via realesrgan) fails
-# to build its legacy setup.py.
+# Python is pinned to 3.14 (the developed/run-on version): setup-uv defaults to the
+# newest Python, and torch publishes no wheels for 3.15 yet.
 
 on:
   push:
@@ -35,7 +34,7 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
-          python-version: "3.12"
+          python-version: "3.14"
       - run: uv sync --extra dev
       - name: Verify release tag matches project version
         if: github.ref_type == 'tag'
@@ -61,7 +60,7 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
-          python-version: "3.12"
+          python-version: "3.14"
 
       # Each script freezes the app with PyInstaller and emits this platform's
       # installer + portable into dist/ (and self-tests the frozen bundle).

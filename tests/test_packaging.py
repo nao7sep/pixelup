@@ -7,11 +7,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_RUNTIME_PINS = {
-    "PySide6": "6.11.2",
+    "PySide6": "6.12.0",
     "Pillow": "12.3.0",
     "pillow-heif": "1.8.1",
     "numpy": "2.5.4",
-    "torch": "2.13.0",
+    "torch": "2.14.1",
     "opencv-python": "5.0.0.93",
 }
 
@@ -42,7 +42,7 @@ def test_script_starts_gui() -> None:
 def test_source_python_range_matches_the_supported_dependency_stack() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert pyproject["project"]["requires-python"] == ">=3.12,<3.13"
+    assert pyproject["project"]["requires-python"] == ">=3.14,<3.15"
 
 
 def test_windows_installer_configuration() -> None:

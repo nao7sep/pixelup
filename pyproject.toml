@@ -7,17 +7,17 @@ name = "pixelup"
 version = "0.1.0"
 description = "Upscale local images in batches with Real-ESRGAN, and run several models over the same images to compare."
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.14,<3.15"
 license = "GPL-3.0-or-later"
 authors = [
   { name = "Yoshinao Inoguchi", email = "yoshinao@inoguchi.com" },
 ]
 dependencies = [
-  "PySide6==6.11.2",
+  "PySide6==6.12.0",
   "Pillow==12.3.0",
   "pillow-heif==1.8.1",
   "numpy==2.5.4",
-  "torch==2.13.0",
+  "torch==2.14.1",
   "opencv-python==5.0.0.93",
 ]
 
@@ -25,7 +25,7 @@ dependencies = [
 dev = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "ruff==0.17.0",
+  "ruff==0.17.1",
 ]
 # Packaging-only: the freezer that builds the double-click .app/.exe. Kept out of the
 # runtime deps (test_packaging.py pins those) and out of dev so a normal test/dev sync
@@ -45,7 +45,7 @@ pixelup = ["resources/*.png", "i18n/locales/*.json"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
