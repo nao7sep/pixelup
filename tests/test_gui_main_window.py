@@ -594,9 +594,14 @@ def test_window_utilities_sit_below_queue_actions(make_window, qapp: QApplicatio
 
     utilities = window.records_button.parentWidget()
     queue_group = window.queue_selected_button.parentWidget()
+    column = queue_group.parentWidget()
 
-    assert utilities.parentWidget() is queue_group.parentWidget()
+    # A panel of their own beside the Queue section, below it and starting where its
+    # heading starts.
+    assert utilities.property("surface") == "panel"
+    assert utilities.parentWidget() is column
     assert utilities.geometry().top() >= queue_group.geometry().bottom()
+    assert utilities.geometry().left() == queue_group.geometry().left()
 
 
 def test_open_paths_ignores_non_files(make_window, tmp_path: Path) -> None:

@@ -1085,9 +1085,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(viewport)
 
     def _build_window_actions(self) -> QWidget:
-        # PixelUp's own windows and information, a section like every other group
-        # in the window rather than loose buttons.
-        group = localize(QGroupBox(), title="app.name")
+        # PixelUp's own windows and information, set apart from the queue buttons
+        # above by a panel of their own; a heading would only restate the buttons.
+        group = QFrame()
+        group.setProperty("surface", "panel")
         layout = QGridLayout(group)
         use_regular_spacing(layout)
 
@@ -1229,6 +1230,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(column)
         use_regular_spacing(layout, margins=False)
         layout.addWidget(self._build_actions_group())
+        # A sibling of the sections, so it starts where their headings start.
         layout.addWidget(self._build_window_actions())
         return column
 
