@@ -26,14 +26,6 @@ def use_regular_spacing(layout: QLayout, *, margins: bool = True) -> None:
     layout.setSpacing(REGULAR_SPACING)
 
 
-def use_section_spacing(layout: QLayout) -> None:
-    """A titled section's contents: indented under the heading and below it, and
-    nothing to the right or below, so every section's content ends at the window's
-    own margin and the gap to the next section is the one gap between sections."""
-    layout.setContentsMargins(REGULAR_SPACING, REGULAR_SPACING, 0, 0)
-    layout.setSpacing(REGULAR_SPACING)
-
-
 def title_label(text: str) -> QLabel:
     """A large, bold label for the product's own name on the about surface.
 
