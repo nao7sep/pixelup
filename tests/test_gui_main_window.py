@@ -3986,3 +3986,38 @@ def test_a_failed_queue_adoption_reports_and_keeps_planning(
         Message("actions.queueFailed")
     )
     assert window._active_job_plan is None
+
+
+def test_everyday_shortcuts_press_their_buttons_only_while_those_are_on(
+    make_window, tmp_path, monkeypatch, process_until
+) -> None:
+    from PySide6.QtTest import QTest
+
+    window = make_window()
+    pressed: list[str] = []
+    for button, name in (
+        (window.open_images_button, "open"),
+        (window.queue_selected_button, "queue"),
+        (window.remove_image_button, "remove"),
+    ):
+        button.clicked.disconnect()
+        button.clicked.connect(lambda _checked=False, name=name: pressed.append(name))
+    _open(window, [_png(tmp_path, "a.png")])
+    window.show()
+    window.activateWindow()
+    process_until(window.isActiveWindow, timeout_s=5, what="Main window becomes key")
+    ctrl = Qt.KeyboardModifier.ControlModifier
+
+    QTest.keyClick(window, Qt.Key.Key_O, ctrl)
+    window.queue_selected_button.setEnabled(False)
+    QTest.keyClick(window, Qt.Key.Key_Return, ctrl)
+    window.queue_selected_button.setEnabled(True)
+    QTest.keyClick(window, Qt.Key.Key_Return, ctrl)
+    window.queue_action_result.setFocus()
+    QTest.keyClick(window.queue_action_result, Qt.Key.Key_Backspace)
+    window.image_table.setFocus()
+    window.remove_image_button.setEnabled(True)
+    QTest.keyClick(window.image_table, Qt.Key.Key_Backspace)
+    QTest.keyClick(window.image_table, Qt.Key.Key_Delete)
+
+    assert pressed == ["open", "queue", "remove", "remove"]

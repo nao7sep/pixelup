@@ -335,6 +335,7 @@
   "shortcuts.groupGeneral": "Général",
   "shortcuts.introduction": "Ces raccourcis fonctionnent partout dans PixelUp.",
   "shortcuts.openSettings": "Ouvrir les réglages",
+  "shortcuts.removeImage": "Retirer l’image sélectionnée",
   "shortcuts.showShortcuts": "Afficher les raccourcis clavier",
   "shortcuts.title": "Raccourcis clavier",
   "startup.alreadyRunning": "Une autre fenêtre de PixelUp utilise le même dossier de données. Fermez cette fenêtre et réessayez.",

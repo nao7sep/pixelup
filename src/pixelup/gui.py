@@ -1126,6 +1126,25 @@ class MainWindow(QMainWindow):
         self.shortcuts_question_shortcut.activated.connect(self._shortcuts_dialog)
         # Closing the main window by keyboard runs its ordinary close, the quit.
         self.close_shortcut = bind_close_shortcut(self)
+        # Everyday commands press their own buttons, so a command that is off stays
+        # off from the keyboard too.
+        self.open_shortcut = _pressing(
+            self.open_images_button, self, QKeySequence(QKeySequence.StandardKey.Open)
+        )
+        self.queue_shortcut = _pressing(
+            self.queue_selected_button,
+            self,
+            QKeySequence("Ctrl+Return"),
+            QKeySequence("Ctrl+Enter"),
+        )
+        # Only while the Images list has focus, where Backspace has no other meaning.
+        self.remove_shortcut = _pressing(
+            self.remove_image_button,
+            self.image_table,
+            QKeySequence(Qt.Key.Key_Backspace),
+            QKeySequence(Qt.Key.Key_Delete),
+        )
+        self.remove_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
 
     def _build_image_panel(self) -> QWidget:
         panel = QWidget()
@@ -2607,6 +2626,14 @@ class _OpenProbe:
     size: tuple[int, int] | None = None
     rejected: Message | None = None
     failed: bool = False
+
+
+def _pressing(button: QPushButton, parent: QWidget, *keys: QKeySequence) -> QShortcut:
+    """A shortcut that clicks ``button``, which does nothing while it is disabled."""
+    shortcut = QShortcut(parent)
+    shortcut.setKeys(list(keys))
+    shortcut.activated.connect(button.click)
+    return shortcut
 
 
 def _resolve_auto_device() -> str:

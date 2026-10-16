@@ -49,6 +49,9 @@ class ShortcutsDialog(DialogShell):
         group_heading.setFont(group_font)
         group_layout.addWidget(group_heading)
 
+        group_layout.addWidget(_shortcut_row("images.openDialogTitle", shortcut_chord("O")))
+        group_layout.addWidget(_shortcut_row("shortcuts.removeImage", "Backspace/Delete"))
+        group_layout.addWidget(_shortcut_row("actions.queueSelected", shortcut_chord("Enter")))
         group_layout.addWidget(_shortcut_row("shortcuts.openSettings", shortcut_chord("Comma")))
         group_layout.addWidget(
             _shortcut_row("shortcuts.showShortcuts", shortcut_chord("Slash/Question"))

@@ -320,6 +320,7 @@
   "shortcuts.groupGeneral": "Allgemein",
   "shortcuts.introduction": "Diese Tastenkürzel funktionieren überall in PixelUp.",
   "shortcuts.openSettings": "Einstellungen öffnen",
+  "shortcuts.removeImage": "Ausgewähltes Bild entfernen",
   "shortcuts.showShortcuts": "Tastenkürzel anzeigen",
   "shortcuts.title": "Tastenkürzel",
   "startup.alreadyRunning": "Ein anderes PixelUp-Fenster verwendet denselben Datenordner. Schließen Sie dieses Fenster und versuchen Sie es erneut.",

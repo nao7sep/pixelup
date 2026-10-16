@@ -305,6 +305,7 @@
   "shortcuts.groupGeneral": "一般",
   "shortcuts.introduction": "これらのショートカットは PixelUp のどこでも使えます。",
   "shortcuts.openSettings": "設定を開く",
+  "shortcuts.removeImage": "選択した画像を取り除く",
   "shortcuts.showShortcuts": "キーボードショートカットを表示",
   "shortcuts.title": "キーボードショートカット",
   "startup.alreadyRunning": "別の PixelUp ウィンドウが同じデータフォルダーを使用しています。そのウィンドウを閉じて、もう一度お試しください。",

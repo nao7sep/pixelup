@@ -335,6 +335,7 @@
   "shortcuts.groupGeneral": "Generali",
   "shortcuts.introduction": "Queste scorciatoie funzionano ovunque in PixelUp.",
   "shortcuts.openSettings": "Apri le impostazioni",
+  "shortcuts.removeImage": "Rimuovi l'immagine selezionata",
   "shortcuts.showShortcuts": "Mostra le scorciatoie da tastiera",
   "shortcuts.title": "Scorciatoie da tastiera",
   "startup.alreadyRunning": "Un’altra finestra di PixelUp sta usando la stessa cartella di dati. Chiudi quella finestra e riprova.",

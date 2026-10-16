@@ -335,6 +335,7 @@
   "shortcuts.groupGeneral": "Geral",
   "shortcuts.introduction": "Estes atalhos funcionam em qualquer lugar do PixelUp.",
   "shortcuts.openSettings": "Abrir configurações",
+  "shortcuts.removeImage": "Remover a imagem selecionada",
   "shortcuts.showShortcuts": "Mostrar atalhos de teclado",
   "shortcuts.title": "Atalhos de teclado",
   "startup.alreadyRunning": "Outra janela do PixelUp está usando a mesma pasta de dados. Feche essa janela e tente novamente.",

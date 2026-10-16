@@ -23,7 +23,13 @@ def test_shortcuts_dialog_catalogues_every_bound_chord(qapp: QApplication) -> No
         assert f"{modifier}+Slash/Question" in text
         assert "Close window" in text
         assert f"{modifier}+W" in text
-        assert len(dialog.findChildren(QLabel, "shortcutKey")) == 3
+        assert "Open images" in text
+        assert f"{modifier}+O" in text
+        assert "Remove the selected image" in text
+        assert "Backspace/Delete" in text
+        assert "Queue selected image" in text
+        assert f"{modifier}+Enter" in text
+        assert len(dialog.findChildren(QLabel, "shortcutKey")) == 6
         assert dialog.findChild(QDialogButtonBox) is not None
     finally:
         dialog.deleteLater()

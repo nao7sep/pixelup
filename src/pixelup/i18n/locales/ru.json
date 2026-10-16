@@ -350,6 +350,7 @@
   "shortcuts.groupGeneral": "Общие",
   "shortcuts.introduction": "Эти сочетания клавиш работают в любом месте PixelUp.",
   "shortcuts.openSettings": "Открыть настройки",
+  "shortcuts.removeImage": "Убрать выбранное изображение",
   "shortcuts.showShortcuts": "Показать сочетания клавиш",
   "shortcuts.title": "Сочетания клавиш",
   "startup.alreadyRunning": "Другое окно PixelUp использует ту же папку данных. Закройте это окно и повторите попытку.",

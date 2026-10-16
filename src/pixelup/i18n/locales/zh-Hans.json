@@ -305,6 +305,7 @@
   "shortcuts.groupGeneral": "通用",
   "shortcuts.introduction": "这些快捷键在 PixelUp 的任何位置都可使用。",
   "shortcuts.openSettings": "打开设置",
+  "shortcuts.removeImage": "移除所选图像",
   "shortcuts.showShortcuts": "显示键盘快捷键",
   "shortcuts.title": "键盘快捷键",
   "startup.alreadyRunning": "另一个 PixelUp 窗口正在使用同一个数据文件夹。请关闭该窗口，然后重试。",
