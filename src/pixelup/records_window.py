@@ -511,6 +511,10 @@ class _RecordList(QListView):
             )
 
 
+_HANDLE_WIDTH = 16
+_HANDLE_FOCUS_WIDTH = 4
+
+
 class _SplitterHandle(QSplitterHandle):
     """The list pane's divider: dragged with the mouse, or focused and moved with
     the keyboard — arrows by ``KEY_RESIZE_STEP``, Home and End to the bounds. A drag
@@ -567,9 +571,12 @@ class _SplitterHandle(QSplitterHandle):
     def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
         super().paintEvent(event)
         if self.hasFocus():
-            painter = QPainter(self)
-            painter.fillRect(self.rect(), self.palette().color(QPalette.ColorRole.Highlight))
-            painter.end()
+            # A strip down the middle, where the grip is, rather than the whole gap.
+            strip = self.rect()
+            strip.setLeft(strip.center().x() - _HANDLE_FOCUS_WIDTH // 2)
+            strip.setWidth(_HANDLE_FOCUS_WIDTH)
+            with QPainter(self) as painter:
+                painter.fillRect(strip, self.palette().color(QPalette.ColorRole.Highlight))
 
     def _commit_keyed(self) -> None:
         splitter = self.splitter()
@@ -661,6 +668,8 @@ class RecordsWindow(QWidget):
         layout = QVBoxLayout(self)
         use_regular_spacing(layout)
         self.splitter = _ListSplitter(Qt.Orientation.Horizontal)
+        # Room on both sides of the grip, so neither pane's edge crowds it.
+        self.splitter.setHandleWidth(_HANDLE_WIDTH)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.resize_finished.connect(self._save_list_width)
 

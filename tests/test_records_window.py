@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QPalette
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -831,3 +831,19 @@ def test_a_landed_time_zone_redraws_the_open_records_window(make_main, monkeypat
 
     assert bytes(display_zone().id().data()).decode() == "Asia/Tokyo"
     assert redrawn == [True]
+
+
+def test_the_divider_keeps_room_around_its_grip_and_marks_focus_down_the_middle(
+    open_records, qapp: QApplication
+) -> None:
+    window = open_records()
+    handle = window.splitter.handle(1)
+    assert handle.width() >= 16
+    handle.setFocus()
+    qapp.processEvents()
+    image = handle.grab().toImage()
+    highlight = handle.palette().color(QPalette.ColorRole.Highlight)
+    middle = image.pixelColor(image.width() // 2, image.height() // 2)
+    edge = image.pixelColor(1, image.height() // 2)
+    assert middle == highlight
+    assert edge != highlight
