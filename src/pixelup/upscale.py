@@ -302,8 +302,6 @@ def _format_extension_mismatch(path: Path, output_format: OutputFormat) -> str |
 
 
 def count_tiles(input_size: tuple[int, int], tile: int) -> int:
-    if tile <= 0:
-        return 1
     width, height = input_size
     return max(1, math.ceil(width / tile) * math.ceil(height / tile))
 

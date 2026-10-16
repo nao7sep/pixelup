@@ -105,7 +105,7 @@
   "help.scale": "Cuánto se amplía la imagen: 2x o 4x. Los modelos disponibles están entrenados para 4x (el modelo x2 es la única excepción nativa de 2x); si la escala no coincide con el modelo, la cola muestra una advertencia, no un error.",
   "help.stripMetadata": "Quita de la salida los metadatos de la imagen de origen (EXIF y similares). Si el origen tenía un perfil de color, los colores se convierten a sRGB antes de descartar el perfil, para que se sigan viendo bien.",
   "help.targetProfile": "Convierte la salida al perfil de color elegido (sRGB, Display P3 o Adobe RGB). Predeterminado conserva sin cambios el perfil propio del origen.",
-  "help.tileSize": "Las imágenes se procesan por bloques; la memoria máxima crece con el área del bloque, así que los bloques más pequeños usan menos memoria. «Imagen completa» desactiva los bloques: es lo más rápido, pero puede agotar la memoria de la GPU con imágenes grandes.",
+  "help.tileSize": "Las imágenes se procesan por bloques; la memoria máxima crece con el área del bloque, así que los bloques más pequeños usan menos memoria.",
   "help.title": "Ayuda de parámetros",
   "images.added": {
     "many": "Se agregaron {count} de imágenes.",
@@ -242,7 +242,6 @@
   "parameters.stripMetadata": "Quitar metadatos",
   "parameters.targetProfile": "Perfil de destino",
   "parameters.tileSize": "Tamaño de bloque",
-  "parameters.tileWholeImage": "Imagen completa",
   "parameters.title": "Parámetros",
   "preview.none": "Ninguna imagen seleccionada",
   "preview.title": "Vista previa",

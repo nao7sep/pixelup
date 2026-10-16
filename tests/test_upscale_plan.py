@@ -16,7 +16,7 @@ def options(
     output_path: Path,
     *,
     model: str = "RealESRGAN_x4plus",
-    tile: int = 0,
+    tile: int = 256,
     scale: int = 4,
     output_format: OutputFormat = OutputFormat.PNG,
 ) -> UpscaleOptions:

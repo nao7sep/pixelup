@@ -103,7 +103,7 @@
   "help.scale": "图像放大的倍数：2x 或 4x。可用的模型都针对 4x 训练（x2 模型是唯一原生 2x 的例外）；倍数与模型不匹配时，会在队列中显示为警告，而不是错误。",
   "help.stripMetadata": "从输出中移除源图像的元数据（EXIF 等）。如果源图像带有颜色配置文件，会先将颜色转换为 sRGB 再移除配置文件，以确保颜色仍能正确显示。",
   "help.targetProfile": "将输出转换为所选的颜色配置文件（sRGB、Display P3 或 Adobe RGB）。“默认”保留源图像自身的配置文件不变。",
-  "help.tileSize": "图像按分块处理；峰值内存随分块面积增长，因此分块越小，占用内存越少。“整张图像”会关闭分块，这是最快的方式，但处理大图像时可能耗尽 GPU 内存。",
+  "help.tileSize": "图像按分块处理；峰值内存随分块面积增长，因此分块越小，占用内存越少。",
   "help.title": "参数帮助",
   "images.added": {
     "other": "已添加 {count} 张图像。"
@@ -220,7 +220,6 @@
   "parameters.stripMetadata": "移除元数据",
   "parameters.targetProfile": "目标配置文件",
   "parameters.tileSize": "分块大小",
-  "parameters.tileWholeImage": "整张图像",
   "parameters.title": "参数",
   "preview.none": "未选择图像",
   "preview.title": "预览",

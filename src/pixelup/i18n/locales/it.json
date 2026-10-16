@@ -105,7 +105,7 @@
   "help.scale": "Di quanto viene ingrandita l'immagine: 2x o 4x. I modelli disponibili sono addestrati per 4x (il modello x2 è l'unica eccezione nativa 2x); un fattore che non corrisponde al modello viene segnalato come avviso nella coda, non come errore.",
   "help.stripMetadata": "Rimuove dall'output i metadati dell'immagine di origine (EXIF e simili). Se l'origine aveva un profilo colore, i colori vengono convertiti in sRGB prima di eliminare il profilo, così continuano a essere visualizzati correttamente.",
   "help.targetProfile": "Converte l'output nel profilo colore scelto (sRGB, Display P3 o Adobe RGB). Predefinito lascia invariato il profilo dell'origine.",
-  "help.tileSize": "Le immagini vengono elaborate a riquadri; la memoria massima cresce con l'area del riquadro, quindi riquadri più piccoli usano meno memoria. «Immagine intera» disattiva i riquadri: è il percorso più veloce, ma può esaurire la memoria della GPU con immagini grandi.",
+  "help.tileSize": "Le immagini vengono elaborate a riquadri; la memoria massima cresce con l'area del riquadro, quindi riquadri più piccoli usano meno memoria.",
   "help.title": "Guida ai parametri",
   "images.added": {
     "many": "Aggiunte {count} di immagini.",
@@ -242,7 +242,6 @@
   "parameters.stripMetadata": "Rimuovi metadati",
   "parameters.targetProfile": "Profilo di destinazione",
   "parameters.tileSize": "Dimensione riquadro",
-  "parameters.tileWholeImage": "Immagine intera",
   "parameters.title": "Parametri",
   "preview.none": "Nessuna immagine selezionata",
   "preview.title": "Anteprima",

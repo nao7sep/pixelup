@@ -31,7 +31,7 @@ class RealESRGANer:
         model_path: str | list[str],
         dni_weight: list[float] | None = None,
         model: Any = None,
-        tile: int = 0,
+        tile: int = 256,
         tile_pad: int = 10,
         pre_pad: int = 10,
         half: bool = False,
@@ -102,10 +102,6 @@ class RealESRGANer:
                 (0, self.mod_pad_w, 0, self.mod_pad_h),
                 "reflect",
             )
-
-    def process(self) -> None:
-        self._begin_output()
-        self._place(self.model(self.img), 0, 0)
 
     def tile_process(self) -> None:
         _, _, height, width = self.img.shape
@@ -210,10 +206,7 @@ class RealESRGANer:
         self._finish = "gray" if image_mode == "L" else "rgb"
         self.pre_process(image)
         del image
-        if self.tile_size > 0:
-            self.tile_process()
-        else:
-            self.process()
+        self.tile_process()
         output = self.post_process()
         del self.img
 
@@ -221,10 +214,7 @@ class RealESRGANer:
             if alpha_upsampler == "realesrgan":
                 self._finish = "gray"
                 self.pre_process(alpha)
-                if self.tile_size > 0:
-                    self.tile_process()
-                else:
-                    self.process()
+                self.tile_process()
                 output_alpha = self.post_process()
                 del self.img
             else:

@@ -105,7 +105,7 @@
   "help.scale": "Facteur d’agrandissement de l’image\u00a0: 2x ou 4x. Les modèles disponibles sont entraînés pour 4x (le modèle x2 est la seule exception en 2x natif)\u00a0; un facteur qui ne correspond pas au modèle est signalé par un avertissement dans la file, pas par une erreur.",
   "help.stripMetadata": "Retire de la sortie les métadonnées de l’image source (EXIF et autres). Si la source avait un profil colorimétrique, les couleurs sont converties en sRGB avant la suppression du profil, pour rester correctement affichées.",
   "help.targetProfile": "Convertit la sortie dans le profil colorimétrique choisi (sRGB, Display P3 ou Adobe RGB). «\u00a0Par défaut\u00a0» conserve tel quel le profil de la source.",
-  "help.tileSize": "Les images sont traitées par tuiles\u00a0; la mémoire maximale croît avec la surface d’une tuile, donc des tuiles plus petites consomment moins de mémoire. «\u00a0Image entière\u00a0» désactive le découpage\u00a0: c’est le plus rapide, mais cela peut épuiser la mémoire du GPU sur de grandes images.",
+  "help.tileSize": "Les images sont traitées par tuiles\u00a0; la mémoire maximale croît avec la surface d’une tuile, donc des tuiles plus petites consomment moins de mémoire.",
   "help.title": "Aide sur les paramètres",
   "images.added": {
     "many": "{count} d’images ajoutées.",
@@ -242,7 +242,6 @@
   "parameters.stripMetadata": "Supprimer les métadonnées",
   "parameters.targetProfile": "Profil cible",
   "parameters.tileSize": "Taille des tuiles",
-  "parameters.tileWholeImage": "Image entière",
   "parameters.title": "Paramètres",
   "preview.none": "Aucune image sélectionnée",
   "preview.title": "Aperçu",

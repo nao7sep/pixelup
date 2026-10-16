@@ -104,11 +104,11 @@ def _image(kind: str) -> np.ndarray:
 
 @pytest.mark.parametrize("kind", ["rgb", "gray", "rgba", "gray16"])
 @pytest.mark.parametrize("alpha", ["realesrgan", "bicubic"])
-def test_tiles_written_one_by_one_match_the_whole_image(
+def test_tiles_written_one_by_one_match_a_single_tile(
     tmp_path: Path, kind: str, alpha: str
 ) -> None:
     # Each finished tile goes straight into the integer output image; with a model
-    # that reads no neighbours, any tiling must give exactly the whole-image result.
+    # that reads no neighbours, any tiling must give exactly the one-tile result.
     model_path = tmp_path / "nearest.pth"
     torch.save({"params": {}}, model_path)
 
@@ -121,7 +121,7 @@ def test_tiles_written_one_by_one_match_the_whole_image(
         assert upsampler.output is None  # the output image is handed over, not kept
         return output, mode
 
-    whole, whole_mode = run(0)
+    whole, whole_mode = run(64)  # one tile larger than the image
     for tile in (4, 5, 8):
         tiled, mode = run(tile)
         assert mode == whole_mode

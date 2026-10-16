@@ -30,7 +30,7 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
             output_path=output_path,
             model="realesr-general-x4v3",
             scale=4,
-            tile=0,
+            tile=256,
             tile_pad=10,
             pre_pad=0,
             fp32=False,

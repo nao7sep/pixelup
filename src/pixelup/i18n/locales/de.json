@@ -104,7 +104,7 @@
   "help.scale": "Wie stark das Bild vergrößert wird: 2x oder 4x. Die verfügbaren Modelle sind auf 4x trainiert (das x2-Modell ist die einzige Ausnahme mit nativem 2x); passen Faktor und Modell nicht zusammen, zeigt die Warteschlange eine Warnung, keinen Fehler.",
   "help.stripMetadata": "Entfernt die Metadaten des Quellbildes (EXIF und Ähnliches) aus der Ausgabe. Hatte die Quelle ein Farbprofil, werden die Farben vor dem Entfernen des Profils nach sRGB umgerechnet, damit sie weiterhin richtig angezeigt werden.",
   "help.targetProfile": "Wandelt die Ausgabe in das gewählte Farbprofil um (sRGB, Display P3 oder Adobe RGB). Standard behält das eigene Profil der Quelle unverändert bei.",
-  "help.tileSize": "Bilder werden in Kacheln verarbeitet; der Spitzenspeicher wächst mit der Fläche einer Kachel, kleinere Kacheln brauchen also weniger Speicher. „Ganzes Bild“ schaltet die Kacheln ab – der schnellste Weg, der bei großen Bildern aber den GPU-Speicher erschöpfen kann.",
+  "help.tileSize": "Bilder werden in Kacheln verarbeitet; der Spitzenspeicher wächst mit der Fläche einer Kachel, kleinere Kacheln brauchen also weniger Speicher.",
   "help.title": "Hilfe zu den Parametern",
   "images.added": {
     "one": "{count} Bild hinzugefügt.",
@@ -231,7 +231,6 @@
   "parameters.stripMetadata": "Metadaten entfernen",
   "parameters.targetProfile": "Zielprofil",
   "parameters.tileSize": "Kachelgröße",
-  "parameters.tileWholeImage": "Ganzes Bild",
   "parameters.title": "Parameter",
   "preview.none": "Kein Bild ausgewählt",
   "preview.title": "Vorschau",

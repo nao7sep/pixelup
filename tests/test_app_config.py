@@ -67,14 +67,11 @@ def test_app_config_round_trips_the_parameters_panel(tmp_path: Path) -> None:
     assert loaded.parameters != JobSettings()
 
 
-def test_app_config_round_trips_a_deliberate_zero_tile(tmp_path: Path) -> None:
-    # 0 is no longer the default but is still a real choice, and it is also falsy —
-    # so it is exactly the value a truthiness bug in the loader would quietly replace
-    # with 256. It must survive the round trip.
+def test_app_config_round_trips_a_non_default_tile(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    _save(AppConfig(parameters=JobSettings(tile=0)), AppConfig(), path)
+    _save(AppConfig(parameters=JobSettings(tile=2048)), AppConfig(), path)
 
-    assert load_app_config(path).parameters.tile == 0
+    assert load_app_config(path).parameters.tile == 2048
 
 
 def test_fresh_config_carries_the_built_in_parameters(tmp_path: Path) -> None:
@@ -675,7 +672,7 @@ def test_valid_parameter_boundaries_and_choices_are_preserved(tmp_path: Path) ->
         quality=0,
         denoise_strength=1.0,
         scale=2,
-        tile=0,
+        tile=128,
         device="cpu",
         output_format="webp",
         alpha_mode="bicubic",
@@ -687,7 +684,7 @@ def test_valid_parameter_boundaries_and_choices_are_preserved(tmp_path: Path) ->
     assert parameters.quality == 0
     assert parameters.denoise_strength == 1.0
     assert parameters.scale == 2
-    assert parameters.tile == 0
+    assert parameters.tile == 128
     assert parameters.device == "cpu"
     assert parameters.output_format == OutputFormat.WEBP
     assert parameters.alpha_mode == "bicubic"

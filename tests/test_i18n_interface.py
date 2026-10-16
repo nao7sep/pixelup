@@ -387,7 +387,7 @@ def test_a_language_change_rewrites_what_is_already_on_screen(
         assert window.open_images_button.text() == "Öffnen"
         assert window.findChild(QGroupBox).title() in {"Bilder", "Vorschau", "Modelle"}
         assert window.image_table.horizontalHeaderItem(0).text() == "Bild"
-        assert window.tile.itemText(window.tile.count() - 1) == "Ganzes Bild"
+        assert window.target_profile.itemText(0) == "Standard"
         assert window.device.itemText(0) == "Automatisch"
         assert "Fertig" in _status_cells(window)
         assert any(cell.startswith("1 fertig") for cell in _status_cells(window))

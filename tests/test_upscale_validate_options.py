@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from pixelup.errors import ErrorCode, PixelupError
+from pixelup.i18n.message import Message
 from pixelup.model_management import (
     DENOISE_NEUTRAL,
     effective_denoise_strength,
@@ -26,7 +27,7 @@ def make_options(**overrides: object) -> UpscaleOptions:
         output_path=Path("out.png"),
         model="RealESRGAN_x4plus",
         scale=4,
-        tile=0,
+        tile=256,
         tile_pad=10,
         pre_pad=0,
         fp32=False,
@@ -128,9 +129,11 @@ def test_model_supports_denoise_only_for_the_general_model() -> None:
     assert model_supports_denoise("RealESRGAN_x4plus") is False
 
 
-def test_count_tiles_returns_one_when_tiling_disabled() -> None:
-    assert count_tiles((1000, 800), 0) == 1
-    assert count_tiles((1000, 800), -5) == 1
+def test_an_untiled_pass_is_not_an_offered_tile() -> None:
+    # There is no "Whole image": 0 is refused like any size that is not offered.
+    with pytest.raises(PixelupError) as caught:
+        validate_options(make_options(tile=0))
+    assert caught.value.message == Message("error.tileInvalid")
 
 
 def test_count_tiles_uses_ceiling_grid() -> None:

@@ -170,9 +170,6 @@ def _create_upsampler(
         dni_weight = [config.denoise_strength, 1 - config.denoise_strength]
 
     spec = model_architecture_spec(config.model, requested_scale=config.scale)
-    # Installed independent of config.tile: "whole image" (tile=0) runs the single-shot
-    # process() path, which needs its own cancellation checkpoint just as much as the
-    # per-tile loop does (PU-1).
     needs_cancel_subclass = on_tile is not None or should_cancel is not None
     cls = _tile_reporting_upsampler_class(RealESRGANer) if needs_cancel_subclass else RealESRGANer
     upsampler = cls(
@@ -203,25 +200,8 @@ def _tile_reporting_upsampler_class(base: type) -> type:
     # If a future release breaks any of these, the override silently falls back
     # to plain super().tile_process() and emits no per-tile events. The actual
     # upscale always proceeds. Callback exceptions are swallowed.
-    #
-    # process() (the "whole image" / tile=0 path) has no per-tile loop to hook, so
-    # it cannot interrupt the single forward pass itself; it instead checks
-    # should_cancel immediately before and after that call, so a cancellation
-    # requested before the pass starts is honored without paying for it, and one
-    # that lands while it runs is caught the moment it returns rather than only
-    # after every remaining step (the second RGBA alpha pass, encode, publish).
-    class _TileReportingUpsampler(base):
-        def process(self) -> Any:
-            should_cancel: CancelCheck | None = getattr(self, "_pixelup_should_cancel", None)
-            if should_cancel is None:
-                return super().process()
-            if should_cancel():
-                raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
-            result = super().process()
-            if should_cancel():
-                raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
-            return result
 
+    class _TileReportingUpsampler(base):
         def tile_process(self) -> Any:
             callback: TileCallback | None = getattr(self, "_pixelup_on_tile", None)
             should_cancel: CancelCheck | None = getattr(self, "_pixelup_should_cancel", None)
@@ -330,7 +310,7 @@ def out_of_memory_error() -> PixelupError:
 
 
 # How MPS reports exhaustion: a plain RuntimeError, not torch.OutOfMemoryError,
-# once an allocation passes the high watermark or Metal's per-buffer limit.
+# once an allocation passes torch's MPS ceiling or Metal's per-buffer limit.
 _MPS_OUT_OF_MEMORY = ("MPS backend out of memory", "Invalid buffer size")
 
 
