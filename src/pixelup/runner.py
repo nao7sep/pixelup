@@ -9,6 +9,7 @@ from pixelup.config import RuntimeDirs, resolve_runtime_dirs
 from pixelup.errors import ErrorCode, PixelupError, user_text
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
+from pixelup.inference import out_of_memory_error
 from pixelup.jobs import Job, job_log_payload, options_for_job
 from pixelup.output_reservation import (
     PublishedFile,
@@ -161,6 +162,15 @@ class JobWorker(QObject):
                 details=job_log_payload(self.job),
             )
             self.signals.finished.emit(self.job.id, False, failure_message(exc), {}, warnings)
+        except MemoryError:
+            # Outside inference, such as while encoding a large output.
+            discard_uncommitted()
+            log.exception(
+                "job.out_of_memory", job_id=self.job.id, details=job_log_payload(self.job)
+            )
+            self.signals.finished.emit(
+                self.job.id, False, failure_message(out_of_memory_error()), {}, warnings
+            )
         except Exception:
             discard_uncommitted()
             log.exception(

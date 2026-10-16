@@ -74,13 +74,11 @@ def run_inference(
         )
     except PixelupError:
         raise
+    except MemoryError as exc:
+        raise out_of_memory_error() from exc
     except RuntimeError as exc:
         if _is_out_of_memory(exc):
-            raise PixelupError(
-                ErrorCode.OUT_OF_MEMORY,
-                Message("error.outOfMemory"),
-                hint=Message("error.hintSmallerTile"),
-            ) from exc
+            raise out_of_memory_error() from exc
         raise PixelupError(
             ErrorCode.INTERNAL_ERROR,
             "Inference failed.",
@@ -322,9 +320,26 @@ def _missing_inference_dependency(package: str, exc: ImportError) -> PixelupErro
     )
 
 
+def out_of_memory_error() -> PixelupError:
+    """A job stopped for lack of memory, with what the user can change."""
+    return PixelupError(
+        ErrorCode.OUT_OF_MEMORY,
+        Message("error.outOfMemory"),
+        hint=Message("error.hintOutOfMemory"),
+    )
+
+
+# How MPS reports exhaustion: a plain RuntimeError, not torch.OutOfMemoryError,
+# once an allocation passes the high watermark or Metal's per-buffer limit.
+_MPS_OUT_OF_MEMORY = ("MPS backend out of memory", "Invalid buffer size")
+
+
 def _is_out_of_memory(exc: RuntimeError) -> bool:
     torch = _import_torch()
-    return isinstance(exc, torch.OutOfMemoryError)
+    if isinstance(exc, torch.OutOfMemoryError):
+        return True
+    text = str(exc)
+    return any(marker in text for marker in _MPS_OUT_OF_MEMORY)
 
 
 def _emit(callback: ProgressCallback | None, phase: str) -> None:

@@ -202,3 +202,42 @@ def test_build_network_rejects_unknown_architecture() -> None:
 
     assert excinfo.value.code == "internal_error"
     assert excinfo.value.details == {"kind": "custom"}
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError(
+            "MPS backend out of memory (MPS allocated: 1024.00 MiB, other allocations: "
+            "480.00 KiB, max allowed: 909.31 MiB). Tried to allocate 256.00 MiB on shared pool."
+        ),
+        RuntimeError("Invalid buffer size: 52.00 GB"),
+        MemoryError(),
+    ],
+)
+def test_running_out_of_memory_is_reported_with_what_to_change(monkeypatch, failure) -> None:
+    from pixelup import inference
+    from pixelup.errors import ErrorCode
+    from pixelup.i18n.message import Message
+
+    def exhausted(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(inference, "_run_inference", exhausted)
+    with pytest.raises(PixelupError) as caught:
+        inference.run_inference(None, None)  # type: ignore[arg-type]
+    assert caught.value.code == ErrorCode.OUT_OF_MEMORY
+    assert caught.value.hint == Message("error.hintOutOfMemory")
+
+
+def test_another_runtime_failure_stays_an_inference_failure(monkeypatch) -> None:
+    from pixelup import inference
+    from pixelup.errors import ErrorCode
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("shape mismatch")
+
+    monkeypatch.setattr(inference, "_run_inference", broken)
+    with pytest.raises(PixelupError) as caught:
+        inference.run_inference(None, None)  # type: ignore[arg-type]
+    assert caught.value.code == ErrorCode.INTERNAL_ERROR

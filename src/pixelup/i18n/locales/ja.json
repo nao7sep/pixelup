@@ -54,7 +54,7 @@
   "error.hintInstallModel": "「モデル管理」を開いてインストールするか、.pth ファイルをモデルフォルダーに置いてください。",
   "error.hintRemoveExisting": "既存のファイルを削除してから、ジョブを再試行してください。",
   "error.hintRetryNewName": "ジョブを再試行すると、未使用の新しいファイル名が選ばれます。",
-  "error.hintSmallerTile": "512 など、より小さいタイルサイズをお試しください。",
+  "error.hintOutOfMemory": "より小さいタイルサイズにするか、同時に実行するジョブを減らしてください。",
   "error.homeUnusable": "{variable} を展開しても使用できるパスになりません。",
   "error.inputInvalidFormat": "入力は読み込める画像形式ではありません。",
   "error.inputMissing": "入力画像が存在しません。",

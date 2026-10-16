@@ -55,7 +55,7 @@
   "error.hintInstallModel": "Öffnen Sie „Verwaltete Modelle“, um es zu installieren, oder legen Sie die .pth-Datei in den Modellordner.",
   "error.hintRemoveExisting": "Entfernen Sie die vorhandene Datei und wiederholen Sie dann den Auftrag.",
   "error.hintRetryNewName": "Wiederholen Sie den Auftrag, um einen neuen, unbenutzten Dateinamen zu wählen.",
-  "error.hintSmallerTile": "Versuchen Sie eine kleinere Kachelgröße, etwa 512.",
+  "error.hintOutOfMemory": "Versuchen Sie eine kleinere Kachelgröße oder weniger gleichzeitige Aufträge.",
   "error.homeUnusable": "{variable} ergibt keinen nutzbaren Pfad.",
   "error.inputInvalidFormat": "Die Eingabe ist kein lesbares Bildformat.",
   "error.inputMissing": "Das Eingabebild existiert nicht.",

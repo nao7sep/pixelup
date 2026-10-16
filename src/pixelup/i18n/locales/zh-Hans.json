@@ -54,7 +54,7 @@
   "error.hintInstallModel": "请打开“模型管理”进行安装，或将 .pth 文件放入模型文件夹。",
   "error.hintRemoveExisting": "请删除现有文件，然后重试任务。",
   "error.hintRetryNewName": "重试任务即可选用一个未使用的新文件名。",
-  "error.hintSmallerTile": "请尝试更小的分块大小，例如 512。",
+  "error.hintOutOfMemory": "请尝试更小的分块大小，或减少同时运行的任务。",
   "error.homeUnusable": "{variable} 展开后不是可用的路径。",
   "error.inputInvalidFormat": "输入不是可读取的图像格式。",
   "error.inputMissing": "输入图像不存在。",

@@ -80,7 +80,7 @@ from pixelup.app_config import (
 from pixelup.backup_store import drain_backups
 from pixelup.config import MODELS_ENV, RuntimeDirs, resolve_runtime_dirs, saved_models_dir
 from pixelup.config_save import ConfigSave, ConfigSaveOutcome
-from pixelup.devices import DEVICE_CHOICES, resolve_device
+from pixelup.devices import DEVICE_CHOICES, limit_mps_memory, resolve_device
 from pixelup.errors import ErrorCode, PixelupError, user_text
 from pixelup.fonts import apply_ui_font
 from pixelup.i18n import localizer
@@ -2680,6 +2680,8 @@ def build_app(
     ``runtime_dirs`` is injectable so a test can point it at a temp location; it defaults to the
     real resolution.
     """
+    # Before anything can import torch, which reads its memory limits once.
+    limit_mps_memory()
     # Before the application object exists, so AppKit's own menu items and the
     # first frame are both already in the reader's language.
     settle_language()

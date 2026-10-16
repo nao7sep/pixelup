@@ -56,7 +56,7 @@
   "error.hintInstallModel": "Abra \"Modelos gerenciados\" para instalá-lo ou coloque o arquivo .pth na pasta de modelos.",
   "error.hintRemoveExisting": "Apague o arquivo existente e repita a tarefa.",
   "error.hintRetryNewName": "Repita a tarefa para escolher um novo nome de arquivo não usado.",
-  "error.hintSmallerTile": "Experimente um tamanho de bloco menor, como 512.",
+  "error.hintOutOfMemory": "Experimente um tamanho de bloco menor ou menos tarefas ao mesmo tempo.",
   "error.homeUnusable": "{variable} não resulta em um caminho utilizável.",
   "error.inputInvalidFormat": "A entrada não está em um formato de imagem legível.",
   "error.inputMissing": "A imagem de entrada não existe.",

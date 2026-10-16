@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from pixelup.errors import ErrorCode, PixelupError
@@ -22,6 +23,27 @@ DEVICE_VALUES: tuple[str, ...] = tuple(value for _label, value in DEVICE_CHOICES
 DEFAULT_DEVICE = "auto"
 
 _INVALID_DEVICE_MESSAGE = Message("error.deviceInvalid")
+
+
+# Torch's default MPS ceiling, 1.7 times the working set macOS recommends, lies
+# above physical memory on a unified-memory Mac, so an oversized job swaps the whole
+# system instead of failing. At the recommended size it fails with an error the job
+# reports (volume-handling-conventions, Contain what cannot be avoided). The low
+# watermark must not exceed the high one; torch's own default of 1.4 would.
+_MPS_WATERMARKS = {
+    "PYTORCH_MPS_HIGH_WATERMARK_RATIO": "1.0",
+    "PYTORCH_MPS_LOW_WATERMARK_RATIO": "0.8",
+}
+
+
+def limit_mps_memory() -> None:
+    """Bound MPS allocations to what macOS recommends; call before torch is imported.
+
+    Torch reads these once, so a value the user set for either is left alone.
+    """
+    if any(name in os.environ for name in _MPS_WATERMARKS):
+        return
+    os.environ.update(_MPS_WATERMARKS)
 
 
 def resolve_device(device: str, gpu_id: int | None = None) -> str:

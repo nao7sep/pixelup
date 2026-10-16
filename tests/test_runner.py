@@ -1166,3 +1166,26 @@ def test_a_worker_that_ends_without_a_result_still_fails_its_job_and_frees_the_s
     assert outcomes[0][2] == FAILED_FALLBACK
     assert runner._active_jobs == 0
     assert runner._threads == {}
+
+
+def test_running_out_of_memory_outside_inference_fails_the_job_with_its_advice(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+) -> None:
+    # Encoding a large output can exhaust memory after inference succeeded.
+    def exhausted(*_args, **_kwargs):
+        raise MemoryError
+
+    monkeypatch.setattr("pixelup.runner.run_upscale", exhausted)
+    jobs = [_make_job(1, tmp_path)]
+    runner = JobRunner(jobs)
+    outcomes: list[tuple[object, ...]] = []
+    runner.finished.connect(lambda *args: outcomes.append(args))
+    runner.schedule(1)
+    process_until(lambda: len(outcomes) == 1, timeout_s=10, what="Job settled")
+
+    job_id, ok, message, _result, _warnings = outcomes[0]
+    assert (job_id, ok) == (1, False)
+    text = english().of(message)
+    assert english().t("error.outOfMemory") in text
+    assert english().t("error.hintOutOfMemory") in text
+    assert list(tmp_path.glob("out-1*")) == []

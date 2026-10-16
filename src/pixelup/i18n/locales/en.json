@@ -55,7 +55,7 @@
   "error.hintInstallModel": "Open Managed models to install it, or place the .pth file in the models directory.",
   "error.hintRemoveExisting": "Remove the existing file, then retry the job.",
   "error.hintRetryNewName": "Retry the job to choose a new unused filename.",
-  "error.hintSmallerTile": "Try a smaller tile size, such as 512.",
+  "error.hintOutOfMemory": "Try a smaller tile size or fewer jobs at once.",
   "error.homeUnusable": "{variable} does not expand to a usable path.",
   "error.inputInvalidFormat": "Input is not a readable image format.",
   "error.inputMissing": "Input image does not exist.",

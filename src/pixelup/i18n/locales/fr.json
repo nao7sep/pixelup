@@ -56,7 +56,7 @@
   "error.hintInstallModel": "Ouvrez «\u00a0Modèles gérés\u00a0» pour l’installer, ou placez le fichier .pth dans le dossier des modèles.",
   "error.hintRemoveExisting": "Supprimez le fichier existant, puis relancez la tâche.",
   "error.hintRetryNewName": "Relancez la tâche pour choisir un nouveau nom de fichier inutilisé.",
-  "error.hintSmallerTile": "Essayez une taille de tuile plus petite, par exemple 512.",
+  "error.hintOutOfMemory": "Essayez une taille de tuile plus petite ou moins de tâches à la fois.",
   "error.homeUnusable": "{variable} ne donne pas un chemin utilisable.",
   "error.inputInvalidFormat": "La source n’est pas dans un format d’image lisible.",
   "error.inputMissing": "L’image source n’existe pas.",

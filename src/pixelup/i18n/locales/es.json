@@ -56,7 +56,7 @@
   "error.hintInstallModel": "Abre «Modelos administrados» para instalarlo, o coloca el archivo .pth en la carpeta de modelos.",
   "error.hintRemoveExisting": "Elimina el archivo existente y luego reintenta el trabajo.",
   "error.hintRetryNewName": "Reintenta el trabajo para elegir un nombre de archivo nuevo sin usar.",
-  "error.hintSmallerTile": "Prueba un tamaño de bloque más pequeño, como 512.",
+  "error.hintOutOfMemory": "Prueba un tamaño de bloque más pequeño o menos trabajos a la vez.",
   "error.homeUnusable": "{variable} no se expande a una ruta utilizable.",
   "error.inputInvalidFormat": "La entrada no tiene un formato de imagen legible.",
   "error.inputMissing": "La imagen de entrada no existe.",

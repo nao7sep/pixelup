@@ -56,7 +56,7 @@
   "error.hintInstallModel": "Apri «Modelli gestiti» per installarlo, oppure metti il file .pth nella cartella dei modelli.",
   "error.hintRemoveExisting": "Rimuovi il file esistente, poi riprova il lavoro.",
   "error.hintRetryNewName": "Riprova il lavoro per scegliere un nuovo nome di file non usato.",
-  "error.hintSmallerTile": "Prova una dimensione del riquadro più piccola, ad esempio 512.",
+  "error.hintOutOfMemory": "Prova una dimensione del riquadro più piccola o meno lavori contemporaneamente.",
   "error.homeUnusable": "{variable} non porta a un percorso utilizzabile.",
   "error.inputInvalidFormat": "L'origine non è in un formato di immagine leggibile.",
   "error.inputMissing": "L'immagine di origine non esiste.",
