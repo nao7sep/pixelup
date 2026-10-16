@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QCloseEvent, QPalette
+from PySide6.QtGui import QCloseEvent, QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -833,17 +833,37 @@ def test_a_landed_time_zone_redraws_the_open_records_window(make_main, monkeypat
     assert redrawn == [True]
 
 
-def test_the_divider_keeps_room_around_its_grip_and_marks_focus_down_the_middle(
-    open_records, qapp: QApplication
+def test_the_divider_is_a_slim_grip_lit_only_by_keyboard_focus(
+    open_records, qapp: QApplication, process_until
 ) -> None:
+    from pixelup.theme import accent_colours
+
     window = open_records()
+    window.activateWindow()
+    process_until(window.isActiveWindow, timeout_s=5, what="Records becomes key")
     handle = window.splitter.handle(1)
     assert handle.width() >= 16
-    handle.setFocus()
+
+    def centre_and_edge() -> tuple[QColor, QColor]:
+        qapp.processEvents()
+        image = handle.grab().toImage()
+        centre = image.pixelColor(image.width() // 2, image.height() // 2)
+        return centre, image.pixelColor(1, image.height() // 2)
+
+    accent = QColor(accent_colours(handle.palette())["fill"])
+    handle.setFocus(Qt.FocusReason.MouseFocusReason)
+    centre, edge = centre_and_edge()
+    assert centre != accent  # a click that focuses it leaves the grip quiet
+    window.search.setFocus(Qt.FocusReason.TabFocusReason)
+    handle.setFocus(Qt.FocusReason.TabFocusReason)
+    centre, edge = centre_and_edge()
+    assert centre == accent
+    assert edge != accent
+
+
+def test_the_list_never_scrolls_sideways(open_records, qapp: QApplication) -> None:
+    window = open_records()
+    window.splitter.set_list_width(LIST_WIDTH_MIN)
     qapp.processEvents()
-    image = handle.grab().toImage()
-    highlight = handle.palette().color(QPalette.ColorRole.Highlight)
-    middle = image.pixelColor(image.width() // 2, image.height() // 2)
-    edge = image.pixelColor(1, image.height() // 2)
-    assert middle == highlight
-    assert edge != highlight
+    assert window.list.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert not window.list.horizontalScrollBar().isVisible()

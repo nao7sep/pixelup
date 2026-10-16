@@ -19,11 +19,13 @@ from pathlib import Path
 from PySide6.QtCore import (
     QAbstractListModel,
     QDateTime,
+    QEvent,
     QLocale,
     QModelIndex,
     QObject,
     QPersistentModelIndex,
     QRect,
+    QRectF,
     QSize,
     Qt,
     QThread,
@@ -43,6 +45,7 @@ from PySide6.QtGui import (
     QPainter,
     QPaintEvent,
     QPalette,
+    QPen,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -80,7 +83,7 @@ from pixelup.records import (
     split_fields,
 )
 from pixelup.session_log import current_session, log
-from pixelup.theme import danger_colours, surfaces, warning_text
+from pixelup.theme import accent_colours, danger_colours, surfaces, warning_text
 from pixelup.time_zones import display_zone
 from pixelup.ui_common import REGULAR_SPACING, bind_close_shortcut, use_regular_spacing
 from pixelup.widgets import NoWheelComboBox, repolish
@@ -512,7 +515,11 @@ class _RecordList(QListView):
 
 
 _HANDLE_WIDTH = 16
-_HANDLE_FOCUS_WIDTH = 4
+# A slim grip centred in the gap, as the fleet's Electron Records windows draw it.
+_GRIP_WIDTH = 2
+_GRIP_HEIGHT = 40
+_GRIP_RING_GAP = 2
+_RESTORED_FOCUS = (Qt.FocusReason.ActiveWindowFocusReason, Qt.FocusReason.PopupFocusReason)
 
 
 class _SplitterHandle(QSplitterHandle):
@@ -524,7 +531,10 @@ class _SplitterHandle(QSplitterHandle):
     def __init__(self, orientation: Qt.Orientation, parent: QSplitter) -> None:
         super().__init__(orientation, parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._keyed = False
+        # Focus reached by keyboard shows its ring; a click that focuses it does not.
+        self._focus_visible = False
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
         super().mouseReleaseEvent(event)
@@ -561,22 +571,49 @@ class _SplitterHandle(QSplitterHandle):
 
     def focusInEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
         super().focusInEvent(event)
+        # Returning to the window or leaving a popup restores focus as it was.
+        if event.reason() not in _RESTORED_FOCUS:
+            self._focus_visible = event.reason() != Qt.FocusReason.MouseFocusReason
         self.update()
 
     def focusOutEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
         super().focusOutEvent(event)
+        if event.reason() not in _RESTORED_FOCUS:
+            self._focus_visible = False
         self._commit_keyed()
         self.update()
 
+    def keyed_focus(self) -> bool:
+        return self.hasFocus() and self._focus_visible
+
+    def event(self, event) -> bool:  # type: ignore[no-untyped-def]
+        if event.type() in (QEvent.Type.HoverEnter, QEvent.Type.HoverLeave):
+            self.update()
+        return super().event(event)
+
     def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]  # noqa: N802
-        super().paintEvent(event)
-        if self.hasFocus():
-            # A strip down the middle, where the grip is, rather than the whole gap.
-            strip = self.rect()
-            strip.setLeft(strip.center().x() - _HANDLE_FOCUS_WIDTH // 2)
-            strip.setWidth(_HANDLE_FOCUS_WIDTH)
-            with QPainter(self) as painter:
-                painter.fillRect(strip, self.palette().color(QPalette.ColorRole.Highlight))
+        # Only a grip, no frame or dots: the gap itself is the divider. It takes the
+        # accent while the pointer is over it or the keyboard is on it, and keyboard
+        # focus rings it.
+        grip = QRect(0, 0, _GRIP_WIDTH, min(_GRIP_HEIGHT, int(self.height() * 0.4)))
+        grip.moveCenter(self.rect().center())
+        palette = self.palette()
+        lit = self.underMouse() or self.keyed_focus()
+        colour = accent_colours(palette)["fill"] if lit else surfaces(palette)["field_edge"]
+        with QPainter(self) as painter:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(colour))
+            painter.drawRoundedRect(QRectF(grip), 1, 1)
+            if self.keyed_focus():
+                ring = QRectF(grip).adjusted(
+                    -_GRIP_RING_GAP - 1, -_GRIP_RING_GAP - 1, _GRIP_RING_GAP + 1, _GRIP_RING_GAP + 1
+                )
+                pen = QPen(QColor(accent_colours(palette)["fill"]))
+                pen.setWidthF(2)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(ring, 3, 3)
 
     def _commit_keyed(self) -> None:
         splitter = self.splitter()
@@ -713,6 +750,8 @@ class RecordsWindow(QWidget):
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        # Rows shorten their text to the list's width, so nothing lies to the side.
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setMinimumHeight(240)
         self.list.selectionModel().currentChanged.connect(self._current_changed)
         self.list.verticalScrollBar().valueChanged.connect(self._list_scrolled)
