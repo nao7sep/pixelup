@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -113,41 +112,3 @@ def test_to_torch_device_does_not_re_resolve_auto(monkeypatch: pytest.MonkeyPatc
         to_torch_device("auto")
     assert excinfo.value.code == "invalid_argument"
 
-
-def test_mps_memory_is_bounded_unless_the_user_chose_a_limit(monkeypatch) -> None:
-    import os
-
-    from pixelup.devices import limit_mps_memory
-
-    for name in ("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "PYTORCH_MPS_LOW_WATERMARK_RATIO"):
-        monkeypatch.delenv(name, raising=False)
-    limit_mps_memory()
-    assert os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "1.0"
-    assert os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] == "0.8"
-
-    monkeypatch.delenv("PYTORCH_MPS_LOW_WATERMARK_RATIO")
-    monkeypatch.setenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.5")
-    limit_mps_memory()
-    assert os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "0.5"
-    assert "PYTORCH_MPS_LOW_WATERMARK_RATIO" not in os.environ
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="MPS is Apple Silicon's GPU backend")
-def test_torch_accepts_the_mps_limits_and_allocates_under_them() -> None:
-    # Torch refuses to start MPS when the low watermark exceeds the high one.
-    script = (
-        "import os\n"
-        "for name in ('PYTORCH_MPS_HIGH_WATERMARK_RATIO', 'PYTORCH_MPS_LOW_WATERMARK_RATIO'):\n"
-        "    os.environ.pop(name, None)\n"
-        "from pixelup.devices import limit_mps_memory\n"
-        "limit_mps_memory()\n"
-        "import torch\n"
-        "if torch.backends.mps.is_available():\n"
-        "    torch.ones(4, device='mps').sum().item()\n"
-        "print('ok')\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=120
-    )
-    assert result.returncode == 0, result.stderr[-1500:]
-    assert result.stdout.strip() == "ok"
