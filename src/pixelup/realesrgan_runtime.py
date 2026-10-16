@@ -16,7 +16,14 @@ from torch.nn import functional as F
 
 
 class RealESRGANer:
-    """Load a Real-ESRGAN model and upscale complete images or tiles."""
+    """Load a Real-ESRGAN model and upscale complete images or tiles.
+
+    PixelUp's change to the upstream runtime: each finished tile is converted to the
+    output's integer type and written into an output image on the CPU, instead of
+    collecting the whole result as float on the device first. Every conversion is
+    per pixel, so the result is unchanged while the peak memory falls from about
+    48 bytes per output pixel to the output image itself (volume-handling-conventions).
+    """
 
     def __init__(
         self,
@@ -36,6 +43,11 @@ class RealESRGANer:
         self.tile_pad = tile_pad
         self.pre_pad = pre_pad
         self.mod_scale: int | None = None
+        self.mod_pad_h = 0
+        self.mod_pad_w = 0
+        # How finished pixels are written: "rgb" (BGR) or "gray", at max_range.
+        self._finish = "rgb"
+        self._max_range = 255
         self.half = half
         self.device = _resolve_device(device, gpu_id)
 
@@ -92,17 +104,12 @@ class RealESRGANer:
             )
 
     def process(self) -> None:
-        self.output = self.model(self.img)
+        self._begin_output()
+        self._place(self.model(self.img), 0, 0)
 
     def tile_process(self) -> None:
-        batch, channel, height, width = self.img.shape
-        output_shape = (
-            batch,
-            channel,
-            height * self.scale,
-            width * self.scale,
-        )
-        self.output = self.img.new_zeros(output_shape)
+        _, _, height, width = self.img.shape
+        self._begin_output()
         tiles_x = math.ceil(width / self.tile_size)
         tiles_y = math.ceil(height / self.tile_size)
 
@@ -130,42 +137,49 @@ class RealESRGANer:
                     output_tile = self.model(input_tile)
 
                 output_start_x = input_start_x * self.scale
-                output_end_x = input_end_x * self.scale
                 output_start_y = input_start_y * self.scale
-                output_end_y = input_end_y * self.scale
                 output_start_x_tile = (input_start_x - input_start_x_pad) * self.scale
                 output_end_x_tile = output_start_x_tile + input_tile_width * self.scale
                 output_start_y_tile = (input_start_y - input_start_y_pad) * self.scale
                 output_end_y_tile = output_start_y_tile + input_tile_height * self.scale
-                self.output[
-                    :,
-                    :,
-                    output_start_y:output_end_y,
-                    output_start_x:output_end_x,
-                ] = output_tile[
-                    :,
-                    :,
-                    output_start_y_tile:output_end_y_tile,
-                    output_start_x_tile:output_end_x_tile,
-                ]
+                self._place(
+                    output_tile[
+                        :,
+                        :,
+                        output_start_y_tile:output_end_y_tile,
+                        output_start_x_tile:output_end_x_tile,
+                    ],
+                    output_start_y,
+                    output_start_x,
+                )
+                del output_tile
 
-    def post_process(self) -> torch.Tensor:
-        if self.mod_scale is not None:
-            _, _, height, width = self.output.size()
-            self.output = self.output[
-                :,
-                :,
-                0 : height - self.mod_pad_h * self.scale,
-                0 : width - self.mod_pad_w * self.scale,
-            ]
-        if self.pre_pad != 0:
-            _, _, height, width = self.output.size()
-            self.output = self.output[
-                :,
-                :,
-                0 : height - self.pre_pad * self.scale,
-                0 : width - self.pre_pad * self.scale,
-            ]
+    def _begin_output(self) -> None:
+        """The output image at its final size: the padding added before inference
+        (``pre_pad`` and the mod padding, both right and bottom) is never written."""
+        _, _, height, width = self.img.shape
+        crop_h = self.pre_pad + (self.mod_pad_h if self.mod_scale is not None else 0)
+        crop_w = self.pre_pad + (self.mod_pad_w if self.mod_scale is not None else 0)
+        size = ((height - crop_h) * self.scale, (width - crop_w) * self.scale)
+        shape = size if self._finish == "gray" else (*size, 3)
+        dtype = np.uint16 if self._max_range == 65535 else np.uint8
+        self.output = np.zeros(shape, dtype=dtype)
+
+    def _place(self, tensor: torch.Tensor, top: int, left: int) -> None:
+        """Convert finished model output to the output's type and write the part that
+        falls inside the output image at (``top``, ``left``)."""
+        height = min(tensor.shape[2], self.output.shape[0] - top)
+        width = min(tensor.shape[3], self.output.shape[1] - left)
+        if height <= 0 or width <= 0:
+            return
+        pixels = _tensor_to_bgr(tensor[:, :, :height, :width])
+        if self._finish == "gray":
+            pixels = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        self.output[top : top + height, left : left + width] = _quantize(
+            pixels, self._max_range
+        )
+
+    def post_process(self) -> np.ndarray[Any, Any]:
         return self.output
 
     @torch.no_grad()
@@ -192,38 +206,41 @@ class RealESRGANer:
             image_mode = "RGB"
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
+        self._max_range = max_range
+        self._finish = "gray" if image_mode == "L" else "rgb"
         self.pre_process(image)
+        del image
         if self.tile_size > 0:
             self.tile_process()
         else:
             self.process()
-        output_image = _tensor_to_bgr(self.post_process())
-        if image_mode == "L":
-            output_image = cv2.cvtColor(output_image, cv2.COLOR_BGR2GRAY)
+        output = self.post_process()
+        del self.img
 
         if image_mode == "RGBA":
             if alpha_upsampler == "realesrgan":
+                self._finish = "gray"
                 self.pre_process(alpha)
                 if self.tile_size > 0:
                     self.tile_process()
                 else:
                     self.process()
-                output_alpha = _tensor_to_bgr(self.post_process())
-                output_alpha = cv2.cvtColor(output_alpha, cv2.COLOR_BGR2GRAY)
+                output_alpha = self.post_process()
+                del self.img
             else:
                 height, width = alpha.shape[0:2]
-                output_alpha = cv2.resize(
-                    alpha,
-                    (width * self.scale, height * self.scale),
-                    interpolation=cv2.INTER_LINEAR,
+                output_alpha = _quantize(
+                    cv2.resize(
+                        alpha,
+                        (width * self.scale, height * self.scale),
+                        interpolation=cv2.INTER_LINEAR,
+                    ),
+                    max_range,
                 )
-            output_image = cv2.cvtColor(output_image, cv2.COLOR_BGR2BGRA)
-            output_image[:, :, 3] = output_alpha
+            output = cv2.cvtColor(output, cv2.COLOR_BGR2BGRA)
+            output[:, :, 3] = output_alpha
+        self.output = None
 
-        if max_range == 65535:
-            output = (output_image * 65535.0).round().astype(np.uint16)
-        else:
-            output = (output_image * 255.0).round().astype(np.uint8)
         if outscale is not None and outscale != float(self.scale):
             output = cv2.resize(
                 output,
@@ -242,5 +259,11 @@ def _resolve_device(device: Any, gpu_id: int | None) -> Any:
 
 
 def _tensor_to_bgr(tensor: torch.Tensor) -> np.ndarray[Any, Any]:
-    array = tensor.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+    array = tensor.data[0].float().cpu().clamp_(0, 1).numpy()
     return np.transpose(array[[2, 1, 0], :, :], (1, 2, 0))
+
+
+def _quantize(pixels: np.ndarray[Any, Any], max_range: int) -> np.ndarray[Any, Any]:
+    if max_range == 65535:
+        return (pixels * 65535.0).round().astype(np.uint16)
+    return (pixels * 255.0).round().astype(np.uint8)
