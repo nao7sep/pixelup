@@ -7,6 +7,7 @@ from pixelup.config import RuntimeDirs
 from pixelup.errors import PixelupError
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
+from pixelup.imaging import image_from_bgr_array
 from pixelup.paths import OutputFormat
 from pixelup.upscale import UpscaleOptions, build_plan
 
@@ -44,11 +45,10 @@ def options(
 def _stub_successful_inference(monkeypatch: pytest.MonkeyPatch) -> None:
     from pixelup import upscale as upscale_module
 
-    monkeypatch.setattr(upscale_module, "run_inference", lambda *args, **kwargs: object())
     monkeypatch.setattr(
         upscale_module,
-        "image_from_bgr_array",
-        lambda array: Image.new("RGB", (8, 8), "red"),
+        "run_inference",
+        lambda *args, **kwargs: Image.new("RGB", (8, 8), "red"),
     )
 
 
@@ -271,7 +271,7 @@ def test_run_upscale_uses_one_source_capture_when_the_path_is_replaced(
 
     def enhance(pixels, **kwargs):
         enhanced.append(pixels.copy())
-        return np.repeat(np.repeat(pixels, 4, axis=0), 4, axis=1), None
+        return image_from_bgr_array(np.repeat(np.repeat(pixels, 4, axis=0), 4, axis=1)), None
 
     monkeypatch.setattr(inference, "_import_torch", lambda: None)
     monkeypatch.setattr(inference, "to_torch_device", lambda *args: "cpu")
@@ -352,7 +352,9 @@ def test_source_buffers_close_before_model_construction(
     def construct(*args, **kwargs):
         assert len(stream_refs) == 1
         assert all(reference() is None for reference in stream_refs + image_refs)
-        return SimpleNamespace(enhance=lambda pixels, **kwargs: (pixels, None))
+        return SimpleNamespace(
+            enhance=lambda pixels, **kwargs: (image_from_bgr_array(pixels), None)
+        )
 
     monkeypatch.setattr(Image, "open", observed_open)
     monkeypatch.setattr(imaging.ImageOps, "exif_transpose", observed_transpose)

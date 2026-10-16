@@ -115,8 +115,27 @@ def _run_inference(
 
     _check_cancelled(should_cancel)
     _emit(on_progress, "upscale")
-    output, _ = upsampler.enhance(pixels, outscale=config.scale, alpha_upsampler=config.alpha_mode)
+    try:
+        output, _ = upsampler.enhance(
+            pixels, outscale=config.scale, alpha_upsampler=config.alpha_mode
+        )
+    finally:
+        del upsampler
+        _release_device_cache(concrete_device)
     return output
+
+
+def _release_device_cache(concrete_device: str) -> None:
+    """Hand the GPU memory torch keeps cached back to the system once a job's model
+    work ends, so the long encode and the next job do not start with it held. On
+    Apple Silicon that memory is the system's own RAM."""
+    torch = _import_torch()
+    if torch is None:
+        return
+    if concrete_device == "mps":
+        torch.mps.empty_cache()
+    elif concrete_device == "cuda":
+        torch.cuda.empty_cache()
 
 
 def _rrdb_spec(*, scale: int, num_block: int) -> ModelArchitectureSpec:

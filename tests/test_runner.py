@@ -598,6 +598,7 @@ def _publish_fixture(path: Path, data: bytes) -> PublishedFile:
 
 def _worker_with_real_image_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> JobWorker:
     from pixelup import inference
+    from pixelup.imaging import image_from_bgr_array
 
     job = _make_job(81, tmp_path)
     job.model = "custom-model"
@@ -609,7 +610,9 @@ def _worker_with_real_image_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(inference, "_import_torch", lambda: None)
     monkeypatch.setattr(inference, "to_torch_device", lambda *args: "cpu")
     monkeypatch.setattr(inference, "_create_upsampler", lambda *args, **kwargs:
-                        SimpleNamespace(enhance=lambda pixels, **kwargs: (pixels.copy(), None)))
+                        SimpleNamespace(
+                            enhance=lambda pixels, **kwargs: (image_from_bgr_array(pixels), None)
+                        ))
     return JobWorker(job, RuntimeDirs(models, tmp_path / "temp"))
 
 

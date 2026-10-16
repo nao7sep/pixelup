@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from PIL import Image
 from torch.nn import functional as F
 
 from pixelup.realesrgan_models import RRDBNet, SRVGGNetCompact
@@ -57,7 +58,9 @@ def test_adapted_runtime_preserves_rgb_rescale_behavior(tmp_path: Path) -> None:
     output, mode = upsampler.enhance(image, outscale=2, alpha_upsampler="bicubic")
 
     assert mode == "RGB"
-    assert output.tolist() == [
+    assert output.mode == "RGB"
+    # The image is RGB; read it back in the BGR order the input was given in.
+    assert np.asarray(output)[:, :, ::-1].tolist() == [
         [[1, 2, 3], [1, 2, 3], [4, 5, 6], [4, 5, 6]],
         [[0, 1, 2], [0, 1, 2], [4, 5, 6], [3, 4, 5]],
         [[8, 9, 10], [7, 8, 9], [11, 12, 13], [11, 12, 13]],
@@ -89,30 +92,30 @@ def test_adapted_runtime_preserves_rgba_and_tile_behavior(tmp_path: Path) -> Non
     output, mode = upsampler.enhance(image, outscale=4, alpha_upsampler="bicubic")
 
     assert mode == "RGBA"
-    assert output.shape == (8, 8, 4)
-    assert output[0, 0].tolist() == [1, 2, 3, 0]
-    assert output[-1, -1].tolist() == [10, 11, 12, 255]
+    assert output.mode == "RGBA"
+    assert output.size == (8, 8)
+    # Input BGR (1, 2, 3) is RGB (3, 2, 1).
+    assert list(output.getpixel((0, 0))) == [3, 2, 1, 0]
+    assert list(output.getpixel((7, 7))) == [12, 11, 10, 255]
 
 
 def _image(kind: str) -> np.ndarray:
     rng = np.random.default_rng(7)
-    if kind == "gray16":
-        return rng.integers(300, 65536, (13, 19), dtype=np.uint16)
     shapes = {"rgb": (13, 19, 3), "gray": (17, 11), "rgba": (15, 21, 4)}
     return rng.integers(0, 256, shapes[kind], dtype=np.uint8)
 
 
-@pytest.mark.parametrize("kind", ["rgb", "gray", "rgba", "gray16"])
+@pytest.mark.parametrize("kind", ["rgb", "gray", "rgba"])
 @pytest.mark.parametrize("alpha", ["realesrgan", "bicubic"])
 def test_tiles_written_one_by_one_match_a_single_tile(
     tmp_path: Path, kind: str, alpha: str
 ) -> None:
-    # Each finished tile goes straight into the integer output image; with a model
-    # that reads no neighbours, any tiling must give exactly the one-tile result.
+    # Each finished tile goes straight into the output image; with a model that
+    # reads no neighbours, any tiling must give exactly the one-tile result.
     model_path = tmp_path / "nearest.pth"
     torch.save({"params": {}}, model_path)
 
-    def run(tile: int) -> tuple[np.ndarray, str]:
+    def run(tile: int) -> tuple[Image.Image, str]:
         upsampler = RealESRGANer(
             scale=4, model_path=str(model_path), model=_NearestModel(),
             tile=tile, tile_pad=3, pre_pad=10, device=torch.device("cpu"),
@@ -125,5 +128,16 @@ def test_tiles_written_one_by_one_match_a_single_tile(
     for tile in (4, 5, 8):
         tiled, mode = run(tile)
         assert mode == whole_mode
-        assert tiled.dtype == whole.dtype
-        assert np.array_equal(tiled, whole)
+        assert tiled.mode == whole.mode
+        assert np.array_equal(np.asarray(tiled), np.asarray(whole))
+
+
+def test_the_runtime_takes_only_8_bit_pixels(tmp_path: Path) -> None:
+    # PixelUp converts wider sources to 8-bit before inference (rgb_pixels).
+    model_path = tmp_path / "nearest.pth"
+    torch.save({"params": {}}, model_path)
+    upsampler = RealESRGANer(
+        scale=4, model_path=str(model_path), model=_NearestModel(), device=torch.device("cpu")
+    )
+    with pytest.raises(ValueError):
+        upsampler.enhance(np.zeros((4, 4), dtype=np.uint16))

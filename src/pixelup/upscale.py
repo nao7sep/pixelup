@@ -14,7 +14,6 @@ from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
 from pixelup.imaging import (
     PublishedCallback,
-    image_from_bgr_array,
     load_source_image,
     read_image_size,
     save_output_image,
@@ -161,7 +160,7 @@ def run_upscale(
     if should_cancel and should_cancel():
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
     inference_started = time.perf_counter()
-    output_array = run_inference(
+    output_image = run_inference(
         InferenceConfig(
             models_dir=runtime_dirs.models_dir,
             model=options.model,
@@ -191,7 +190,7 @@ def run_upscale(
     if on_progress:
         on_progress("encode")
     output_size = save_output_image(
-        image_from_bgr_array(output_array),
+        output_image,
         output_path=plan.output_path,
         output_format=plan.output_format,
         quality=options.quality,

@@ -12,17 +12,19 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from torch.nn import functional as F
 
 
 class RealESRGANer:
     """Load a Real-ESRGAN model and upscale complete images or tiles.
 
-    PixelUp's change to the upstream runtime: each finished tile is converted to the
-    output's integer type and written into an output image on the CPU, instead of
-    collecting the whole result as float on the device first. Every conversion is
-    per pixel, so the result is unchanged while the peak memory falls from about
-    48 bytes per output pixel to the output image itself (volume-handling-conventions).
+    PixelUp's change to the upstream runtime: each finished tile is converted to
+    8-bit and pasted into the Pillow image the encoder will save, instead of
+    collecting the whole result as float on the device and then copying it into
+    arrays. Every conversion is per pixel, so the result is unchanged while the
+    output exists only once, as that image (volume-handling-conventions). PixelUp
+    hands the runtime 8-bit pixels; wider sources are converted before inference.
     """
 
     def __init__(
@@ -45,9 +47,8 @@ class RealESRGANer:
         self.mod_scale: int | None = None
         self.mod_pad_h = 0
         self.mod_pad_w = 0
-        # How finished pixels are written: "rgb" (BGR) or "gray", at max_range.
+        # How finished pixels are written: "rgb" or "gray".
         self._finish = "rgb"
-        self._max_range = 255
         self.half = half
         self.device = _resolve_device(device, gpu_id)
 
@@ -156,26 +157,23 @@ class RealESRGANer:
         _, _, height, width = self.img.shape
         crop_h = self.pre_pad + (self.mod_pad_h if self.mod_scale is not None else 0)
         crop_w = self.pre_pad + (self.mod_pad_w if self.mod_scale is not None else 0)
-        size = ((height - crop_h) * self.scale, (width - crop_w) * self.scale)
-        shape = size if self._finish == "gray" else (*size, 3)
-        dtype = np.uint16 if self._max_range == 65535 else np.uint8
-        self.output = np.zeros(shape, dtype=dtype)
+        size = ((width - crop_w) * self.scale, (height - crop_h) * self.scale)
+        self.output = Image.new("L" if self._finish == "gray" else "RGB", size)
 
     def _place(self, tensor: torch.Tensor, top: int, left: int) -> None:
-        """Convert finished model output to the output's type and write the part that
-        falls inside the output image at (``top``, ``left``)."""
-        height = min(tensor.shape[2], self.output.shape[0] - top)
-        width = min(tensor.shape[3], self.output.shape[1] - left)
+        """Convert finished model output to 8-bit and paste the part that falls
+        inside the output image at (``top``, ``left``)."""
+        out_width, out_height = self.output.size
+        height = min(tensor.shape[2], out_height - top)
+        width = min(tensor.shape[3], out_width - left)
         if height <= 0 or width <= 0:
             return
-        pixels = _tensor_to_bgr(tensor[:, :, :height, :width])
+        pixels = _tensor_to_rgb(tensor[:, :, :height, :width])
         if self._finish == "gray":
-            pixels = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        self.output[top : top + height, left : left + width] = _quantize(
-            pixels, self._max_range
-        )
+            pixels = cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY)
+        self.output.paste(Image.fromarray(_quantize(pixels)), (left, top))
 
-    def post_process(self) -> np.ndarray[Any, Any]:
+    def post_process(self) -> Image.Image:
         return self.output
 
     @torch.no_grad()
@@ -184,25 +182,27 @@ class RealESRGANer:
         image: np.ndarray[Any, Any],
         outscale: float | None = None,
         alpha_upsampler: str = "realesrgan",
-    ) -> tuple[np.ndarray[Any, Any], str]:
+    ) -> tuple[Image.Image, str]:
+        """Upscale 8-bit BGR, BGRA or grayscale pixels into an RGB, RGBA or L image."""
+        if image.dtype != np.uint8:
+            raise ValueError("The runtime takes 8-bit pixels.")
         input_height, input_width = image.shape[0:2]
+        # One float copy of the input, scaled and reordered in place.
         image = image.astype(np.float32)
-        max_range = 65535 if np.max(image) > 256 else 255
-        image = image / max_range
+        np.divide(image, 255, out=image)
         if len(image.shape) == 2:
             image_mode = "L"
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
         elif image.shape[2] == 4:
             image_mode = "RGBA"
-            alpha = image[:, :, 3]
+            alpha = image[:, :, 3].copy()
             image = cv2.cvtColor(image[:, :, 0:3], cv2.COLOR_BGR2RGB)
             if alpha_upsampler == "realesrgan":
                 alpha = cv2.cvtColor(alpha, cv2.COLOR_GRAY2RGB)
         else:
             image_mode = "RGB"
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            cv2.cvtColor(image, cv2.COLOR_BGR2RGB, dst=image)
 
-        self._max_range = max_range
         self._finish = "gray" if image_mode == "L" else "rgb"
         self.pre_process(image)
         del image
@@ -219,23 +219,32 @@ class RealESRGANer:
                 del self.img
             else:
                 height, width = alpha.shape[0:2]
-                output_alpha = _quantize(
-                    cv2.resize(
-                        alpha,
-                        (width * self.scale, height * self.scale),
-                        interpolation=cv2.INTER_LINEAR,
-                    ),
-                    max_range,
+                output_alpha = Image.fromarray(
+                    _quantize(
+                        cv2.resize(
+                            alpha,
+                            (width * self.scale, height * self.scale),
+                            interpolation=cv2.INTER_LINEAR,
+                        )
+                    )
                 )
-            output = cv2.cvtColor(output, cv2.COLOR_BGR2BGRA)
-            output[:, :, 3] = output_alpha
+            output.putalpha(output_alpha)
+            del output_alpha
         self.output = None
 
         if outscale is not None and outscale != float(self.scale):
-            output = cv2.resize(
-                output,
-                (int(input_width * outscale), int(input_height * outscale)),
-                interpolation=cv2.INTER_LANCZOS4,
+            # Rare (a model's native scale above the chosen one): the resize needs an
+            # array, so this path briefly holds the image twice.
+            pixels = np.asarray(output)
+            mode = output.mode
+            output = None
+            output = Image.fromarray(
+                cv2.resize(
+                    pixels,
+                    (int(input_width * outscale), int(input_height * outscale)),
+                    interpolation=cv2.INTER_LANCZOS4,
+                ),
+                mode,
             )
         return output, image_mode
 
@@ -248,12 +257,10 @@ def _resolve_device(device: Any, gpu_id: int | None) -> Any:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _tensor_to_bgr(tensor: torch.Tensor) -> np.ndarray[Any, Any]:
+def _tensor_to_rgb(tensor: torch.Tensor) -> np.ndarray[Any, Any]:
     array = tensor.data[0].float().cpu().clamp_(0, 1).numpy()
-    return np.transpose(array[[2, 1, 0], :, :], (1, 2, 0))
+    return np.ascontiguousarray(np.transpose(array, (1, 2, 0)))
 
 
-def _quantize(pixels: np.ndarray[Any, Any], max_range: int) -> np.ndarray[Any, Any]:
-    if max_range == 65535:
-        return (pixels * 65535.0).round().astype(np.uint16)
+def _quantize(pixels: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
     return (pixels * 255.0).round().astype(np.uint8)
