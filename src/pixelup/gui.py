@@ -140,6 +140,7 @@ from pixelup.theme import PixelupStyle, apply_theme
 from pixelup.time_zones import set_display_zone
 from pixelup.ui_common import (
     NAMED_IN_MESSAGE,
+    REGULAR_SPACING,
     apply_palette_fixes,
     bind_close_shortcut,
     identifying_name,
@@ -1228,7 +1229,9 @@ class MainWindow(QMainWindow):
         use_regular_spacing(layout, margins=False)
         layout.addWidget(self._build_actions_group())
         # A sibling of the sections, so it starts where their headings start, and
-        # only as wide as its buttons: the queue buttons above are always wider.
+        # only as wide as its buttons: the queue buttons above are always wider. The
+        # extra space keeps it apart from the queue buttons it is not part of.
+        layout.addSpacing(REGULAR_SPACING)
         layout.addWidget(self._build_window_actions(), 0, Qt.AlignmentFlag.AlignLeft)
         return column
 
