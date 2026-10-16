@@ -4026,3 +4026,22 @@ def test_everyday_shortcuts_press_their_buttons_only_while_those_are_on(
     QTest.keyClick(window.image_table, Qt.Key.Key_Delete)
 
     assert pressed == ["open", "queue", "remove", "remove"]
+
+
+def test_section_content_ends_at_the_window_margin_like_the_panel(make_window, qapp) -> None:
+    from PySide6.QtWidgets import QGroupBox
+
+    window = make_window()
+    window.show()
+    qapp.processEvents()
+    for group in window.findChildren(QGroupBox):
+        margins = group.layout().contentsMargins()
+        # Indented under the heading; nothing to the right or below.
+        assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (10, 10, 0, 0)
+    # Content reaches its section's right edge, and the panel shares the Queue
+    # section's right edge, so both stop at the window's own margin.
+    queue_group = window.queue_table.parentWidget()
+    assert window.queue_table.geometry().right() == queue_group.contentsRect().right()
+    actions = window.queue_selected_button.parentWidget()
+    panel = window.records_button.parentWidget()
+    assert panel.geometry().right() == actions.geometry().right()

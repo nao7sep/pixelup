@@ -145,6 +145,7 @@ from pixelup.ui_common import (
     identifying_name,
     named_values,
     use_regular_spacing,
+    use_section_spacing,
 )
 from pixelup.widgets import (
     EmptyStateTableWidget,
@@ -1159,7 +1160,7 @@ class MainWindow(QMainWindow):
     def _build_images_group(self) -> QWidget:
         group = localize(QGroupBox(), title="images.title")
         layout = QVBoxLayout(group)
-        use_regular_spacing(layout)
+        use_section_spacing(layout)
 
         self.image_table = ImageDropTable(0, 3, empty_message=Message("images.empty"))
         self.image_table.paths_dropped.connect(self.open_paths)
@@ -1237,7 +1238,7 @@ class MainWindow(QMainWindow):
     def _build_selected_image_group(self) -> QWidget:
         group = localize(QGroupBox(), title="preview.title")
         layout = QVBoxLayout(group)
-        use_regular_spacing(layout)
+        use_section_spacing(layout)
         self.preview = ImagePreview()
         self.preview.reads.idle.connect(self._close_when_workers_stop)
         layout.addWidget(self.preview, 1)
@@ -1246,7 +1247,7 @@ class MainWindow(QMainWindow):
     def _build_models_group(self) -> QWidget:
         group = localize(QGroupBox(), title="models.title")
         layout = QVBoxLayout(group)
-        use_regular_spacing(layout)
+        use_section_spacing(layout)
         self.model_checks: dict[str, QCheckBox] = {}
         for model in UPSCALE_MODELS:
             checkbox = QCheckBox(model)
@@ -1268,7 +1269,7 @@ class MainWindow(QMainWindow):
     def _build_parameters_group(self) -> QWidget:
         group = localize(QGroupBox(), title="parameters.title")
         form = QFormLayout(group)
-        use_regular_spacing(form)
+        use_section_spacing(form)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
 
@@ -1357,7 +1358,7 @@ class MainWindow(QMainWindow):
     def _build_actions_group(self) -> QWidget:
         group = localize(QGroupBox(), title="actions.title")
         layout = QVBoxLayout(group)
-        use_regular_spacing(layout)
+        use_section_spacing(layout)
         self.queue_selected_button = localize(QPushButton(), text="actions.queueSelected")
         # The one action this window is for: queue what is selected, with the
         # parameters beside it. It is set apart by its label's weight, not an accent
@@ -1409,7 +1410,7 @@ class MainWindow(QMainWindow):
     def _build_queue_panel(self) -> QWidget:
         group = localize(QGroupBox(), title="queue.title")
         layout = QVBoxLayout(group)
-        use_regular_spacing(layout)
+        use_section_spacing(layout)
         self.queue_table = EmptyStateTableWidget(0, 5, empty_message=Message("queue.empty"))
         _set_headers(self.queue_table, _QUEUE_COLUMNS)
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
