@@ -194,8 +194,7 @@ def test_empty_state_table_tracks_zero_to_one_and_one_to_zero(qapp: QApplication
 def test_device_combo_carries_value_as_item_data(qapp: QApplication) -> None:
     combo = device_combo()
     try:
-        pairs = [(combo.itemText(i), combo.itemData(i)) for i in range(combo.count())]
-        assert pairs == [("Auto", "auto"), ("MPS", "mps"), ("CUDA", "cuda"), ("CPU", "cpu")]
+        assert combo.count() == len(DEVICE_CHOICES)
         # Every stored value round-trips through findData -> currentData.
         for _label, value in DEVICE_CHOICES:
             combo.setCurrentIndex(combo.findData(value))

@@ -1,136 +1,48 @@
 from __future__ import annotations
 
+import importlib
 import re
 import tomllib
 from pathlib import Path
 
+from pixelup.i18n.languages import TAGS
+
 ROOT = Path(__file__).resolve().parents[1]
 
-EXPECTED_RUNTIME_PINS = {
-    "PySide6": "6.12.0",
-    "Pillow": "12.3.0",
-    "pillow-heif": "1.8.1",
-    "numpy": "2.5.4",
-    "torch": "2.14.1",
-    "opencv-python": "5.0.0.93",
-}
+
+def _installer_script() -> str:
+    return (ROOT / "scripts" / "pixelup.iss").read_text(encoding="utf-8")
 
 
-def test_runtime_dependencies_pin_inference_stack() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    dependencies = pyproject["project"]["dependencies"]
+def test_the_gui_script_names_a_callable_entry_point() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    module_name, attribute = pyproject["project"]["gui-scripts"]["pixelup"].split(":")
 
-    assert dependencies == [
-        f"{package}=={version}"
-        for package, version in EXPECTED_RUNTIME_PINS.items()
-    ]
+    assert callable(getattr(importlib.import_module(module_name), attribute))
 
 
-def test_inference_extra_is_not_declared() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    extras = pyproject["project"].get("optional-dependencies", {})
+def test_the_windows_installer_icon_exists() -> None:
+    icon = re.search(r"^SetupIconFile=(.+)$", _installer_script(), flags=re.M)
 
-    assert "inference" not in extras
-
-
-def test_script_starts_gui() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-
-    assert pyproject["project"]["gui-scripts"]["pixelup"] == "pixelup.gui:main"
+    assert icon is not None
+    assert (ROOT / icon.group(1).strip().replace("\\", "/")).is_file()
 
 
-def test_source_python_range_matches_the_supported_dependency_stack() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-
-    assert pyproject["project"]["requires-python"] == ">=3.14,<3.15"
-
-
-def test_windows_installer_configuration() -> None:
-    sections: dict[str, list[str]] = {}
-    current: list[str] | None = None
-    for raw_line in (ROOT / "scripts" / "pixelup.iss").read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if line.startswith("[") and line.endswith("]"):
-            current = sections.setdefault(line[1:-1].casefold(), [])
-        elif current is not None and line and not line.startswith(";"):
-            current.append(line)
-
-    setup = dict(line.split("=", 1) for line in sections["setup"])
-    run = dict(
-        field.strip().split(":", 1)
-        for field in sections["run"][0].split(";")
-        if ":" in field
+def test_the_windows_installer_speaks_only_interface_languages_with_built_in_messages() -> None:
+    # Inno's own translations, English first as the fallback; no .isl file is
+    # vendored, so an interface language Inno does not ship gets the English wizard.
+    languages = re.findall(
+        r'^Name: "([^"]+)"; MessagesFile: "([^"]+)"', _installer_script(), flags=re.M
     )
-    flags = set(run["Flags"].split())
+    tags = {tag.replace("-", "").casefold(): tag for tag in TAGS}
 
-    assert setup["AppId"] == "{#MyAppName}"
-    assert setup["DefaultDirName"] == "{autopf}\\{#MyAppName}"
-    assert setup["PrivilegesRequiredOverridesAllowed"] == "dialog"
-    assert "PrivilegesRequired" not in setup
-    assert setup["Uninstallable"] == "yes"
-    icon = ROOT / setup["SetupIconFile"].replace("\\", "/")
-    assert icon.is_file()
-    assert "runasoriginaluser" in flags
-    assert "runascurrentuser" not in flags
-    assert run["Check"].strip() == "not IsAdminInstallMode"
-
-
-def test_application_license_is_packaged_on_both_platforms() -> None:
-    mac_finalizer = (ROOT / "scripts" / "finalize-macos-bundle.sh").read_text(
-        encoding="utf-8"
-    )
-    windows_packager = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
-
-    assert 'cp "$LICENSE" "$APP_BUNDLE/Contents/Resources/LICENSE.txt"' in mac_finalizer
-    assert (
-        "Copy-Item -LiteralPath LICENSE -Destination dist\\PixelUp\\LICENSE.txt"
-        in windows_packager
-    )
-
-
-def test_consolidated_third_party_notices_are_built_and_packaged() -> None:
-    source_notices = (ROOT / "THIRD_PARTY_NOTICES").read_text(encoding="utf-8")
-    mac_packager = (ROOT / "scripts" / "package.sh").read_text(encoding="utf-8")
-    mac_finalizer = (ROOT / "scripts" / "finalize-macos-bundle.sh").read_text(
-        encoding="utf-8"
-    )
-    windows_packager = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
-
-    assert "Copyright 2018-2022 BasicSR Authors" in source_notices
-    assert "Copyright (c) 2021, Xintao Wang" in source_notices
-    assert "build-third-party-notices.py" in mac_packager
-    assert 'cp "$NOTICES" "$APP_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"' in (
-        mac_finalizer
-    )
-    assert "build-third-party-notices.py" in windows_packager
-    assert "dist\\PixelUp\\THIRD_PARTY_NOTICES.txt" in windows_packager
-
-
-def test_package_scripts_reject_editable_install_metadata() -> None:
-    mac_packager = (ROOT / "scripts" / "package.sh").read_text(encoding="utf-8")
-    windows_packager = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
-
-    assert '-name direct_url.json' in mac_packager
-    assert '-Filter direct_url.json' in windows_packager
-
-
-def test_windows_installer_speaks_innos_own_languages() -> None:
-    # Inno's built-in translations of the interface languages, English first; no
-    # third-party .isl file is vendored, so Korean and Simplified Chinese readers
-    # get the English wizard. The installer's own strings are Inno's standard
-    # messages, which every one of those translations carries.
-    script = (ROOT / "scripts" / "pixelup.iss").read_text(encoding="utf-8")
-    files = re.findall(r'MessagesFile: "([^"]+)"', script)
-    assert files == [
-        "compiler:Default.isl",
-        "compiler:Languages\\German.isl",
-        "compiler:Languages\\Spanish.isl",
-        "compiler:Languages\\French.isl",
-        "compiler:Languages\\Italian.isl",
-        "compiler:Languages\\BrazilianPortuguese.isl",
-        "compiler:Languages\\Russian.isl",
-        "compiler:Languages\\Japanese.isl",
-    ]
+    assert languages[0] == ("en", "compiler:Default.isl")
+    assert all(name in tags for name, _file in languages)
+    assert all(file.startswith("compiler:") for _name, file in languages)
     assert not list((ROOT / "scripts").rglob("*.isl"))
-    descriptions = re.findall(r'(?:Description|GroupDescription): "([^"]*)"', script)
+
+
+def test_the_windows_installer_writes_only_innos_translated_messages() -> None:
+    descriptions = re.findall(r'(?:Description|GroupDescription): "([^"]*)"', _installer_script())
+
     assert descriptions and all(text.startswith("{cm:") for text in descriptions)

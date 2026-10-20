@@ -23,7 +23,7 @@ INSTALL_FAILED = Message("modelInstall.failedFallback")
 # the only path that can start several downloads in the same pass (a lone row
 # install is always one bundle at a time already), so a fixed small number is
 # enough to stop them saturating bandwidth and fighting each other's per-download
-# minimum-rate deadline (PU-2). Matches the plan's "two at a time" decision.
+# minimum-rate deadline.
 MAX_CONCURRENT_INSTALLS = 2
 
 
@@ -474,7 +474,7 @@ class ModelManager(QObject):
         if thread is not None:
             thread.deleteLater()
         # A freed slot goes straight to the next queued group rather than sitting
-        # idle until something else pokes the manager (PU-2).
+        # idle until something else pokes the manager.
         self._start_next_pending()
 
         # Concurrent operations publish disjoint artifacts atomically. Re-read the

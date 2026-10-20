@@ -16,13 +16,7 @@ from urllib.request import HTTPRedirectHandler, build_opener
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
-from pixelup.model_registry import (  # noqa: F401 - preserve the existing public imports
-    ALL_MODELS,
-    KNOWN_MODELS,
-    REAL_ESRGAN_RELEASES,
-    ModelInfo,
-    known_model,
-)
+from pixelup.model_registry import ModelInfo, model_info
 from pixelup.session_log import log
 
 DownloadCallback = Callable[[str, int, int | None], None]
@@ -50,9 +44,7 @@ class _ConnectionAttempt:
 
 
 def model_file(models_dir: Path, name: str) -> Path:
-    info = known_model(name)
-    filename = info.filename if info else f"{name}.pth"
-    return models_dir / filename
+    return models_dir / model_info(name).filename
 
 
 def require_model_present(
@@ -92,16 +84,9 @@ def download_model(
     should_cancel: CancelCheck | None = None,
     force: bool = False,
 ) -> dict[str, object]:
-    info = known_model(name)
-    if info is None or info.url is None:
-        raise PixelupError(
-            ErrorCode.MODEL_NOT_FOUND,
-            Message.of("error.modelUnknown", model=name),
-            details={"model": name},
-        )
     return download_model_info(
         models_dir,
-        info,
+        model_info(name),
         download_timeout=download_timeout,
         on_download=on_download,
         should_cancel=should_cancel,
@@ -128,13 +113,6 @@ def download_model_info(
     """
     if download_timeout <= 0:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.downloadTimeoutInvalid"))
-    if info.url is None:
-        raise PixelupError(
-            ErrorCode.MODEL_NOT_FOUND,
-            Message.of("error.modelNoUrl", model=info.name),
-            details={"model": info.name},
-        )
-
     try:
         models_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -164,8 +142,7 @@ def download_model_info(
             # publish) is met: the staged file is removed on every failure path
             # below, and same-directory staging is precisely what makes os.replace
             # an atomic same-filesystem rename — a cross-volume temp/ could degrade
-            # that to a copy. (Image-output staging uses temp/ in imaging.py; model
-            # publish needs the same-fs guarantee.)
+            # that to a copy.
             descriptor, temp_name = tempfile.mkstemp(
                 dir=models_dir, prefix=f"{target.stem}-", suffix=".tmp"
             )
@@ -229,7 +206,7 @@ def download_model_info(
 
 def verify_model_file(
     path: Path,
-    info: ModelInfo | None = None,
+    info: ModelInfo,
     *,
     deadline: float | None = None,
     should_cancel: CancelCheck | None = None,
@@ -242,34 +219,17 @@ def verify_model_file(
             details={"path": str(path)},
         )
     size = path.stat().st_size
-    # A model PixelUp knows how to download must carry a pinned SHA-256; otherwise
-    # verification would silently fall back to a size check, which cannot detect a
-    # substituted same-size file. A missing pin is a registry defect, not a soft pass.
-    if info is not None and info.url is not None and info.checksum_sha256 is None:
-        raise PixelupError(
-            ErrorCode.INTERNAL_ERROR,
-            f"Model '{info.name}' has no pinned checksum; refusing to trust it.",
-            details={"model": info.name, "path": str(path)},
-        )
-    checksum = (
-        _sha256(path, deadline=deadline, should_cancel=should_cancel)
-        if info and info.checksum_sha256
-        else None
-    )
-    ok = size > 0
-    if info and info.expected_size is not None:
-        ok = ok and size == info.expected_size
-    if info and info.checksum_sha256 is not None:
-        ok = ok and checksum == info.checksum_sha256
+    checksum = _sha256(path, deadline=deadline, should_cancel=should_cancel)
+    ok = size == info.expected_size and checksum == info.checksum_sha256
 
     result = {
-        "name": info.name if info else path.stem,
+        "name": info.name,
         "path": str(path),
         "ok": ok,
         "size_bytes": size,
-        "expected_size_bytes": info.expected_size if info else None,
+        "expected_size_bytes": info.expected_size,
         "checksum_sha256": checksum,
-        "expected_checksum_sha256": info.checksum_sha256 if info else None,
+        "expected_checksum_sha256": info.checksum_sha256,
     }
     if not ok:
         raise PixelupError(
@@ -288,17 +248,12 @@ def _download_to_temp(
     on_download: DownloadCallback | None,
     should_cancel: CancelCheck | None = None,
 ) -> None:
-    assert info.url is not None
     bytes_done = 0
     last_reported = 0
     last_percent = -1
     with _open_download_response(info.url, deadline, should_cancel) as response:
-        advertised_size = _response_size(response.headers.get("Content-Length"), None)
-        if (
-            info.expected_size is not None
-            and advertised_size is not None
-            and advertised_size > info.expected_size
-        ):
+        advertised_size = _advertised_size(response.headers.get("Content-Length"))
+        if advertised_size is not None and advertised_size > info.expected_size:
             raise PixelupError(
                 ErrorCode.MODEL_DOWNLOAD_FAILED,
                 Message("error.modelTooLarge"),
@@ -312,7 +267,7 @@ def _download_to_temp(
         with temp_path.open("wb") as output:
             while chunk := _read_download_chunk(response, deadline, should_cancel):
                 next_bytes_done = bytes_done + len(chunk)
-                if info.expected_size is not None and next_bytes_done > info.expected_size:
+                if next_bytes_done > info.expected_size:
                     raise PixelupError(
                         ErrorCode.MODEL_DOWNLOAD_FAILED,
                         Message("error.modelTooLargeStreaming"),
@@ -539,8 +494,6 @@ def _acquisition_timeout_seconds(info: ModelInfo, minimum_timeout: float) -> flo
     128 KiB/s is intentionally conservative for a healthy but slow connection. The
     same resulting bound covers transport, verification, durable staging, and publish.
     """
-    if info.expected_size is None:
-        return float(minimum_timeout)
     size_bound = info.expected_size / MIN_DOWNLOAD_RATE_BYTES_PER_SECOND
     if size_bound <= minimum_timeout:
         return float(minimum_timeout)
@@ -597,13 +550,13 @@ def _download_result(info: ModelInfo, path: Path, status: str) -> dict[str, obje
     }
 
 
-def _response_size(content_length: str | None, expected_size: int | None) -> int | None:
+def _advertised_size(content_length: str | None) -> int | None:
     if content_length:
         try:
             return int(content_length)
         except ValueError:
             pass
-    return expected_size
+    return None
 
 
 def _should_report_download(

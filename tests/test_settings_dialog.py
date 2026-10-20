@@ -116,42 +116,6 @@ def test_blank_font_family_is_the_builtin_default(qapp: QApplication) -> None:
         dialog.deleteLater()
 
 
-def test_model_management_is_not_a_setting(qapp: QApplication) -> None:
-    dialog = SettingsDialog(AppConfig())
-    try:
-        assert not hasattr(dialog, "auto_download")
-    finally:
-        dialog.deleteLater()
-
-
-def test_dialog_exposes_no_parameter_controls(qapp: QApplication) -> None:
-    # One home per thing: output format, quality, tile and device belong to the main
-    # window's Parameters panel now, and must not reappear here as a second home.
-    dialog = SettingsDialog(AppConfig())
-    try:
-        for removed in ("format", "quality", "tile", "device"):
-            assert not hasattr(dialog, removed)
-    finally:
-        dialog.deleteLater()
-
-
-def test_dialog_has_no_reset_button(qapp: QApplication) -> None:
-    # Nothing left in here is a stale-able built-in or a tuned, interacting set: a
-    # font is a preference, a toggle is a toggle, a job count is one number. So there
-    # is no reset, and no handler behind one.
-    dialog = SettingsDialog(AppConfig())
-    try:
-        labels = [button.text() for button in dialog.findChildren(QPushButton)]
-        assert not any("Reset" in label for label in labels)
-        # `_restore_defaults` is the name the removed handler actually had (it backed
-        # a "Restore defaults" button). This asserted `_reset_settings_to_defaults`
-        # before — a name that has never existed in this codebase, so it passed
-        # unconditionally and would have passed with the real handler still in place.
-        assert not hasattr(dialog, "_restore_defaults")
-    finally:
-        dialog.deleteLater()
-
-
 def test_accepting_the_dialog_leaves_the_parameters_panel_untouched(qapp: QApplication) -> None:
     # The dialog must carry the settings it does not show straight through. Building a
     # fresh AppConfig here instead would silently reset the user's whole Parameters

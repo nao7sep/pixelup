@@ -4,20 +4,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from pixelup.i18n.message import Message
-from pixelup.model_registry import ModelInfo, known_model
-
-GENERAL_MODEL = "realesr-general-x4v3"
-GENERAL_DENOISE_MODEL = "realesr-general-wdn-x4v3"
-DENOISE_NEUTRAL = 1.0
-
-UPSCALE_MODELS = (
+from pixelup.model_registry import (
+    GENERAL_DENOISE_MODEL,
     GENERAL_MODEL,
-    "RealESRGAN_x4plus",
-    "RealESRNet_x4plus",
-    "RealESRGAN_x2plus",
-    "RealESRGAN_x4plus_anime_6B",
-    "realesr-animevideov3",
+    UPSCALE_MODELS,
+    model_info,
 )
+
+DENOISE_NEUTRAL = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,16 +63,9 @@ def required_artifact_names(
     return tuple(dict.fromkeys(required))
 
 
-def artifact_info(name: str) -> ModelInfo:
-    info = known_model(name)
-    if info is None or info.url is None or info.expected_size is None:
-        raise ValueError(f"Managed model artifact is incomplete: {name}")
-    return info
-
-
 def bundle_size_bytes(bundle: ManagedModelBundle) -> int:
-    return sum(artifact_info(name).expected_size or 0 for name in bundle.artifact_names)
+    return artifact_size_bytes(bundle.artifact_names)
 
 
 def artifact_size_bytes(artifact_names: Iterable[str]) -> int:
-    return sum(artifact_info(name).expected_size or 0 for name in artifact_names)
+    return sum(model_info(name).expected_size for name in artifact_names)

@@ -24,10 +24,8 @@ from pixelup.i18n.message import Message, join
 from pixelup.i18n.translator import Translator
 
 
-def test_names_are_each_language_in_its_own_words() -> None:
-    assert languages.name_of("de") == "Deutsch"
-    assert languages.name_of("zh-Hans") == "中文"
-    assert languages.name_of("pt-BR") == "Português"
+def test_a_tag_outside_the_set_is_shown_as_itself() -> None:
+    assert languages.name_of("xx-Unknown") == "xx-Unknown"
 
 
 @pytest.mark.parametrize(

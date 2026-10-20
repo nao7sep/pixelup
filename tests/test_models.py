@@ -9,18 +9,31 @@ import pytest
 
 import pixelup.models as models_module
 from pixelup.errors import PixelupError
-from pixelup.models import ModelInfo, download_model_info, require_model_present, verify_model_file
+from pixelup.model_registry import GENERAL_MODEL, ModelInfo, model_info
+from pixelup.models import download_model_info, require_model_present, verify_model_file
 
 
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def test_require_model_present_accepts_custom_model_file(tmp_path: Path) -> None:
-    custom_file = tmp_path / "custom-model.pth"
-    custom_file.write_bytes(b"weights")
-
-    assert require_model_present(tmp_path, "custom-model") == custom_file
+def _info(
+    name: str,
+    filename: str,
+    url: str = "https://example.com/model.pth",
+    *,
+    expected_size: int,
+    checksum_sha256: str = _sha256_hex(b""),
+) -> ModelInfo:
+    return ModelInfo(
+        name=name,
+        filename=filename,
+        url=url,
+        expected_size=expected_size,
+        checksum_sha256=checksum_sha256,
+        architecture=model_info(GENERAL_MODEL).architecture,
+        upscaler=True,
+    )
 
 
 def test_require_model_present_returns_known_model_without_rehashing(tmp_path: Path) -> None:
@@ -54,7 +67,7 @@ def test_require_model_present_treats_empty_file_as_missing(tmp_path: Path) -> N
 def test_verify_model_file_rejects_wrong_size(tmp_path: Path) -> None:
     model_file = tmp_path / "model.pth"
     model_file.write_bytes(b"small")
-    info = ModelInfo("model", "model.pth", None, expected_size=10)
+    info = _info("model", "model.pth", expected_size=10)
 
     with pytest.raises(PixelupError) as excinfo:
         verify_model_file(model_file, info)
@@ -68,10 +81,9 @@ def test_verify_model_file_rejects_checksum_mismatch(tmp_path: Path) -> None:
     content = b"the real weights"
     model_file = tmp_path / "model.pth"
     model_file.write_bytes(content)
-    info = ModelInfo(
+    info = _info(
         "model",
         "model.pth",
-        None,
         expected_size=len(content),
         checksum_sha256=_sha256_hex(b"a different blob of the same length!!"),
     )
@@ -82,31 +94,12 @@ def test_verify_model_file_rejects_checksum_mismatch(tmp_path: Path) -> None:
     assert excinfo.value.code == "model_corrupt"
 
 
-def test_verify_model_file_requires_pinned_checksum_for_downloadable(tmp_path: Path) -> None:
-    # A model PixelUp knows how to download (it has a url) must carry a pinned
-    # checksum; without one, verification must not fall back to a size-only pass.
-    model_file = tmp_path / "model.pth"
-    model_file.write_bytes(b"weights")
-    info = ModelInfo(
-        "downloadable",
-        "model.pth",
-        "https://example.com/model.pth",
-        expected_size=7,
-        checksum_sha256=None,
-    )
-
-    with pytest.raises(PixelupError) as excinfo:
-        verify_model_file(model_file, info)
-
-    assert excinfo.value.code == "internal_error"
-
-
 def test_download_model_info_uses_temp_file_and_validates_size(tmp_path: Path) -> None:
     content = b"downloaded weights"
     source = tmp_path / "source.pth"
     source.write_bytes(content)
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         source.resolve().as_uri(),
@@ -137,7 +130,7 @@ def test_download_model_info_temp_file_uses_the_stem_shape_beside_the_target(
     source = tmp_path / "source.pth"
     source.write_bytes(content)
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         source.resolve().as_uri(),
@@ -172,7 +165,7 @@ def test_download_model_info_skips_present_file_without_rehashing(tmp_path: Path
     target.write_bytes(b"whatever is already on disk")
     source = tmp_path / "source.pth"
     source.write_bytes(b"different")
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         source.resolve().as_uri(),
@@ -197,7 +190,7 @@ def test_forced_download_replaces_present_file_only_after_verification(tmp_path:
     target.write_bytes(b"old verified model")
     source = tmp_path / "source.pth"
     source.write_bytes(b"new verified model")
-    info = ModelInfo(
+    info = _info(
         "local-model",
         target.name,
         source.resolve().as_uri(),
@@ -223,7 +216,7 @@ def test_failed_forced_download_preserves_the_present_file(tmp_path: Path) -> No
     target.write_bytes(b"old verified model")
     source = tmp_path / "source.pth"
     source.write_bytes(b"untrusted replacement")
-    info = ModelInfo(
+    info = _info(
         "local-model",
         target.name,
         source.resolve().as_uri(),
@@ -254,7 +247,7 @@ def test_download_model_info_removes_temp_on_verification_failure(tmp_path: Path
     source = tmp_path / "source.pth"
     source.write_bytes(content)
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         source.resolve().as_uri(),
@@ -290,7 +283,7 @@ def test_download_model_info_refuses_https_redirect_to_http(
     opener = RedirectingOpener()
     monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: opener)
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         "https://example.com/start",
@@ -340,7 +333,7 @@ def test_download_model_info_enforces_total_download_deadline(
     monkeypatch.setattr(models_module.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: SlowOpener())
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         "https://example.com/model.pth",
@@ -385,7 +378,7 @@ def test_download_model_info_rejects_advertised_size_above_pin(
 
     monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: OversizedOpener())
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         "https://example.com/model.pth",
@@ -433,7 +426,7 @@ def test_download_model_info_aborts_stream_above_pin_and_cleans_temp(
         lambda *_handlers: OversizedStreamOpener(),
     )
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         "https://example.com/model.pth",
@@ -472,7 +465,7 @@ def test_download_model_info_cancels_during_blocking_connection_setup(
     monkeypatch.setattr(models_module, "DOWNLOAD_POLL_SECONDS", 0.01)
     monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: BlockingOpener())
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         "https://example.com/model.pth",
@@ -517,7 +510,7 @@ def test_download_model_info_deadline_abandons_blocking_connection_setup(
     monkeypatch.setattr(models_module, "DOWNLOAD_POLL_SECONDS", 0.01)
     monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: BlockingOpener())
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         "https://example.com/model.pth",
@@ -542,10 +535,9 @@ def test_verify_model_file_honors_cancellation_during_hash(tmp_path: Path) -> No
     content = b"x" * (2 * 1024 * 1024)
     path = tmp_path / "model.pth"
     path.write_bytes(content)
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "model.pth",
-        None,
         expected_size=len(content),
         checksum_sha256=_sha256_hex(content),
     )
@@ -655,7 +647,7 @@ def test_download_model_info_checks_cancellation_immediately_before_publish(
     source = tmp_path / "source.pth"
     source.write_bytes(content)
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         source.resolve().as_uri(),
@@ -667,7 +659,7 @@ def test_download_model_info_checks_cancellation_immediately_before_publish(
 
     def verify_then_cancel(
         path: Path,
-        model_info: ModelInfo | None = None,
+        info: ModelInfo,
         *,
         deadline: float | None = None,
         should_cancel: models_module.CancelCheck | None = None,
@@ -676,7 +668,7 @@ def test_download_model_info_checks_cancellation_immediately_before_publish(
         assert deadline is not None
         result = original_verify(
             path,
-            model_info,
+            info,
             deadline=deadline,
             should_cancel=should_cancel,
         )
@@ -699,8 +691,8 @@ def test_download_model_info_checks_cancellation_immediately_before_publish(
 
 
 def test_large_model_extends_the_whole_acquisition_timeout() -> None:
-    small = ModelInfo("small", "small.pth", None, expected_size=1)
-    large = ModelInfo("large", "large.pth", None, expected_size=348_632_874)
+    small = _info("small", "small.pth", expected_size=1)
+    large = _info("large", "large.pth", expected_size=348_632_874)
 
     assert models_module._acquisition_timeout_seconds(small, 600) == 600
     assert models_module._acquisition_timeout_seconds(large, 600) > 2_600
@@ -710,10 +702,9 @@ def test_verification_honors_the_acquisition_deadline(tmp_path: Path) -> None:
     content = b"weights"
     path = tmp_path / "model.pth"
     path.write_bytes(content)
-    info = ModelInfo(
+    info = _info(
         "model",
         "model.pth",
-        None,
         expected_size=len(content),
         checksum_sha256=_sha256_hex(content),
     )
@@ -730,7 +721,7 @@ def test_download_syncs_stage_before_publish_and_directory_after(
     source.write_bytes(content)
     models_dir = tmp_path / "models"
     target = models_dir / "local-model.pth"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         target.name,
         source.resolve().as_uri(),
@@ -788,7 +779,7 @@ def test_download_model_info_cleans_temp_after_unexpected_progress_failure(tmp_p
     source = tmp_path / "source.pth"
     source.write_bytes(content)
     models_dir = tmp_path / "models"
-    info = ModelInfo(
+    info = _info(
         "local-model",
         "local-model.pth",
         source.resolve().as_uri(),

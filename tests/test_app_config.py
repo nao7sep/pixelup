@@ -87,16 +87,6 @@ def test_missing_app_config_uses_defaults(tmp_path: Path) -> None:
     assert not path.exists()
 
 
-def test_obsolete_auto_download_key_is_ignored(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    path.write_text(json.dumps({"format_version": 1, "auto_download": True}), encoding="utf-8")
-
-    result = load_app_config_result(path)
-
-    assert result.config == AppConfig()
-    assert result.quarantined_to is None
-
-
 def test_unchanged_defaults_write_no_file(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     assert _save(AppConfig(), AppConfig(), path).config == AppConfig()
@@ -647,24 +637,6 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
     assert result.config.parameters.quality == JobSettings().quality
 
 
-def test_obsolete_face_enhance_field_is_ignored(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    path.write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "parameters": _parameter_map(face_enhance=True, strip_metadata=False),
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    config = load_app_config(path)
-
-    assert config.parameters.strip_metadata is False
-    assert not hasattr(config.parameters, "face_enhance")
-
-
 def test_valid_parameter_boundaries_and_choices_are_preserved(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     _write(
@@ -696,28 +668,6 @@ def test_null_target_profile_is_a_valid_choice(tmp_path: Path) -> None:
     _write(path, target_profile=None)
 
     assert load_app_config(path).parameters.target_profile is None
-
-
-def test_old_flat_keys_are_inert(tmp_path: Path) -> None:
-    # Pre-release, deliberately un-migrated: the four keys AppConfig used to hold flat
-    # are simply not read any more, and must not leak back in as parameters.
-    path = tmp_path / "config.json"
-    path.write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "output_format": "webp",
-                "quality": 10,
-                "tile": 1024,
-                "device": "cpu",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    config = load_app_config(path)
-
-    assert config.parameters == JobSettings()
 
 
 def test_a_save_that_changes_nothing_writes_nothing(tmp_path: Path) -> None:

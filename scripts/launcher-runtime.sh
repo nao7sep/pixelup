@@ -23,7 +23,7 @@ release_launcher_runtime() {
 }
 
 owned_runtime_pids() {
-  local kind="$1" repo_dir="$2" project_file="$3" executable_name="$4" built_executable="$5"
+  local repo_dir="$1" executable_name="$2" built_executable="$3"
   local pid command
   ps -axo pid=,command= | while read -r pid command; do
     [[ "$pid" == "$$" || "$pid" == "$PPID" ]] && continue
@@ -33,33 +33,18 @@ owned_runtime_pids() {
       printf '%s\n' "$pid"
       continue
     fi
-    case "$kind" in
-      dotnet)
-        if [[ "$command" == "$built_executable" || "$command" == "$built_executable "* ]] ||
-           [[ "$command" == "$repo_dir/"*"/bin/"*"/$executable_name" || "$command" == "$repo_dir/"*"/bin/"*"/$executable_name "* ]] ||
-           [[ -n "$project_file" && "$command" == *"dotnet"* && "$command" == *"$project_file"* ]]; then
-          printf '%s\n' "$pid"
-        fi
-        ;;
-      python)
-        if [[ "$command" == "$built_executable" || "$command" == "$built_executable "* ]] ||
-           [[ "$command" == *"$repo_dir/.venv/"* && "$command" == *"$executable_name"* ]] ||
-           [[ "$command" == *"$repo_dir"* && "$command" == *"uv run"* && "$command" == *"$executable_name"* ]]; then
-          printf '%s\n' "$pid"
-        fi
-        ;;
-      *)
-        echo "Unknown launcher runtime kind: $kind" >&2
-        return 2
-        ;;
-    esac
+    if [[ "$command" == "$built_executable" || "$command" == "$built_executable "* ]] ||
+       [[ "$command" == *"$repo_dir/.venv/"* && "$command" == *"$executable_name"* ]] ||
+       [[ "$command" == *"$repo_dir"* && "$command" == *"uv run"* && "$command" == *"$executable_name"* ]]; then
+      printf '%s\n' "$pid"
+    fi
   done
 }
 
 stop_owned_runtime() {
-  local kind="$1" label="$2" repo_dir="$3" project_file="$4" executable_name="$5" built_executable="$6"
+  local label="$1" repo_dir="$2" executable_name="$3" built_executable="$4"
   local pids pid deadline remaining current_owned
-  pids="$(owned_runtime_pids "$kind" "$repo_dir" "$project_file" "$executable_name" "$built_executable")"
+  pids="$(owned_runtime_pids "$repo_dir" "$executable_name" "$built_executable")"
   [[ -z "$pids" ]] && return 0
 
   echo "Stopping the existing $label runtime (pid $(echo "$pids" | tr '\n' ' '))."
@@ -79,7 +64,7 @@ stop_owned_runtime() {
     sleep 0.1
   done
 
-  current_owned="$(owned_runtime_pids "$kind" "$repo_dir" "$project_file" "$executable_name" "$built_executable")"
+  current_owned="$(owned_runtime_pids "$repo_dir" "$executable_name" "$built_executable")"
   while read -r pid; do
     if [[ -n "$pid" ]] && grep -qx "$pid" <<< "$current_owned"; then
       kill -KILL "$pid" 2>/dev/null || true
@@ -88,33 +73,23 @@ stop_owned_runtime() {
 }
 
 ready_runtime_pids() {
-  local kind="$1" repo_dir="$2" executable_name="$3" built_executable="$4"
+  local repo_dir="$1" executable_name="$2" built_executable="$3"
   local pid command
   ps -axo pid=,command= | while read -r pid command; do
     [[ "$pid" == "$$" || "$pid" == "$PPID" ]] && continue
-    case "$kind" in
-      dotnet)
-        if [[ "$command" == "$built_executable" || "$command" == "$built_executable "* ]] ||
-           [[ "$command" == "$repo_dir/"*"/bin/"*"/$executable_name" || "$command" == "$repo_dir/"*"/bin/"*"/$executable_name "* ]]; then
-          printf '%s\n' "$pid"
-        fi
-        ;;
-      python)
-        if [[ "$command" == "$built_executable" || "$command" == "$built_executable "* ]] ||
-           [[ "$command" == *"$repo_dir/.venv/"* && "$command" == *"$executable_name"* && "$command" != *"uv run"* ]]; then
-          printf '%s\n' "$pid"
-        fi
-        ;;
-    esac
+    if [[ "$command" == "$built_executable" || "$command" == "$built_executable "* ]] ||
+       [[ "$command" == *"$repo_dir/.venv/"* && "$command" == *"$executable_name"* && "$command" != *"uv run"* ]]; then
+      printf '%s\n' "$pid"
+    fi
   done
 }
 
 wait_for_owned_runtime() {
-  local kind="$1" label="$2" repo_dir="$3" project_file="$4" executable_name="$5" built_executable="$6" timeout_seconds="$7"
+  local label="$1" repo_dir="$2" executable_name="$3" built_executable="$4" timeout_seconds="$5"
   local deadline pids
   deadline=$((SECONDS + timeout_seconds))
   while (( SECONDS < deadline )); do
-    pids="$(ready_runtime_pids "$kind" "$repo_dir" "$executable_name" "$built_executable")"
+    pids="$(ready_runtime_pids "$repo_dir" "$executable_name" "$built_executable")"
     [[ -n "$pids" ]] && return 0
     sleep 0.1
   done

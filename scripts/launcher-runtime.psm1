@@ -36,9 +36,7 @@ function Release-LauncherRuntime {
 
 function Get-OwnedRuntimeProcess {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('dotnet', 'python')][string]$Kind,
         [Parameter(Mandatory = $true)][string]$RepoDir,
-        [string]$ProjectFile,
         [Parameter(Mandatory = $true)][string]$ExecutableName,
         [Parameter(Mandatory = $true)][string]$BuiltExecutable
     )
@@ -56,12 +54,6 @@ function Get-OwnedRuntimeProcess {
             }
         }
 
-        if ($Kind -eq 'dotnet') {
-            return (($path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
-                    [System.IO.Path]::GetFileName($path) -ieq "$ExecutableName.exe") -or
-                    ($ProjectFile -and $command.IndexOf($ProjectFile, [System.StringComparison]::OrdinalIgnoreCase) -ge 0))
-        }
-
         $venvPrefix = Join-Path $repoPrefix '.venv'
         return (($path.StartsWith($venvPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
                 $command.IndexOf($ExecutableName, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
@@ -73,15 +65,13 @@ function Get-OwnedRuntimeProcess {
 
 function Stop-OwnedRuntime {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('dotnet', 'python')][string]$Kind,
         [Parameter(Mandatory = $true)][string]$Label,
         [Parameter(Mandatory = $true)][string]$RepoDir,
-        [string]$ProjectFile,
         [Parameter(Mandatory = $true)][string]$ExecutableName,
         [Parameter(Mandatory = $true)][string]$BuiltExecutable
     )
 
-    $owned = @(Get-OwnedRuntimeProcess -Kind $Kind -RepoDir $RepoDir -ProjectFile $ProjectFile -ExecutableName $ExecutableName -BuiltExecutable $BuiltExecutable |
+    $owned = @(Get-OwnedRuntimeProcess -RepoDir $RepoDir -ExecutableName $ExecutableName -BuiltExecutable $BuiltExecutable |
         Where-Object { $_.ProcessId -ne $PID })
     if ($owned.Count -eq 0) { return }
     $originalProcessIds = @($owned.ProcessId)
@@ -102,7 +92,7 @@ function Stop-OwnedRuntime {
         })
     } while ($remainingProcessIds.Count -gt 0 -and [DateTime]::UtcNow -lt $deadline)
 
-    $owned = @(Get-OwnedRuntimeProcess -Kind $Kind -RepoDir $RepoDir -ProjectFile $ProjectFile -ExecutableName $ExecutableName -BuiltExecutable $BuiltExecutable |
+    $owned = @(Get-OwnedRuntimeProcess -RepoDir $RepoDir -ExecutableName $ExecutableName -BuiltExecutable $BuiltExecutable |
         Where-Object { $originalProcessIds -contains $_.ProcessId })
     foreach ($item in $owned) {
         Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue
@@ -111,10 +101,8 @@ function Stop-OwnedRuntime {
 
 function Wait-OwnedRuntime {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('dotnet', 'python')][string]$Kind,
         [Parameter(Mandatory = $true)][string]$Label,
         [Parameter(Mandatory = $true)][string]$RepoDir,
-        [string]$ProjectFile,
         [Parameter(Mandatory = $true)][string]$ExecutableName,
         [Parameter(Mandatory = $true)][string]$BuiltExecutable,
         [int]$TimeoutSeconds = 30
@@ -124,15 +112,11 @@ function Wait-OwnedRuntime {
     do {
         $repoPrefix = [System.IO.Path]::GetFullPath($RepoDir).TrimEnd('\') + '\'
         $builtPath = [System.IO.Path]::GetFullPath($BuiltExecutable)
-        $owned = @(Get-OwnedRuntimeProcess -Kind $Kind -RepoDir $RepoDir -ProjectFile $ProjectFile -ExecutableName $ExecutableName -BuiltExecutable $BuiltExecutable |
+        $owned = @(Get-OwnedRuntimeProcess -RepoDir $RepoDir -ExecutableName $ExecutableName -BuiltExecutable $BuiltExecutable |
             Where-Object {
                 if ($_.ProcessId -eq $PID) { return $false }
                 $path = if ($_.ExecutablePath) { [System.IO.Path]::GetFullPath($_.ExecutablePath) } else { '' }
                 if ($path -eq $builtPath) { return $true }
-                if ($Kind -eq 'dotnet') {
-                    return $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
-                        [System.IO.Path]::GetFileName($path) -ieq "$ExecutableName.exe"
-                }
                 $command = if ($_.CommandLine) { $_.CommandLine } else { '' }
                 return $path.StartsWith((Join-Path $repoPrefix '.venv'), [System.StringComparison]::OrdinalIgnoreCase) -and
                     $command.IndexOf($ExecutableName, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and

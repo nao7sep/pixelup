@@ -72,8 +72,8 @@ def test_a_launch_replaces_only_this_repositorys_pixelup(repo: Path) -> None:
         f"""
 repo="$1"
 ps() {{ cat "{listing}"; echo "$$ {repo}/scripts/run-dev.command"; }}
-echo "owned: $(owned_runtime_pids python "$repo" "" pixelup "{built}" | tr '\\n' ' ')"
-echo "ready: $(ready_runtime_pids python "$repo" pixelup "{built}" | tr '\\n' ' ')"
+echo "owned: $(owned_runtime_pids "$repo" pixelup "{built}" | tr '\\n' ' ')"
+echo "ready: $(ready_runtime_pids "$repo" pixelup "{built}" | tr '\\n' ' ')"
 """,
         repo,
     )

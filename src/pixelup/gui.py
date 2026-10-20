@@ -528,7 +528,7 @@ class MainWindow(QMainWindow):
         # updating where jobs are adopted (_adopt_new_jobs); every other job-state
         # change mutates an existing Job in place. They turn _find_job and an image
         # row's status summary from an O(jobs) scan into an O(1) lookup, which matters
-        # because both run on every per-tile progress tick and job completion (PU-5).
+        # because both run on every per-tile progress tick and job completion.
         self._jobs_by_id: dict[int, Job] = {}
         self._jobs_by_input_path: dict[Path, list[Job]] = defaultdict(list)
         self.runner = JobRunner(self.jobs, self, runtime_dirs=self.runtime_dirs)
@@ -2495,7 +2495,7 @@ class MainWindow(QMainWindow):
         self.queue_table.item(row, 4).setToolTip(tooltip)
 
     def _refresh_image_job_summaries_for(self, paths: Iterable[Path]) -> None:
-        """Recompute only the given images' summaries (PU-5).
+        """Recompute only the given images' summaries.
 
         A job status change never affects an image other than its own, so redoing
         every row on every job event costs more the larger the batch gets. Duplicate

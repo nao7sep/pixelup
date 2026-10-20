@@ -601,12 +601,12 @@ def _worker_with_real_image_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyP
     from pixelup.imaging import image_from_bgr_array
 
     job = _make_job(81, tmp_path)
-    job.model = "custom-model"
+    job.model = "RealESRGAN_x4plus"
     job.settings = JobSettings(device="cpu")
     Image.new("RGB", (3, 2), (20, 40, 60)).save(job.input_path)
     models = tmp_path / "models"
     models.mkdir()
-    (models / "custom-model.pth").write_bytes(b"weights")
+    (models / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     monkeypatch.setattr(inference, "_import_torch", lambda: None)
     monkeypatch.setattr(inference, "to_torch_device", lambda *args: "cpu")
     monkeypatch.setattr(inference, "_create_upsampler", lambda *args, **kwargs:

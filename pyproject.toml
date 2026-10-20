@@ -28,8 +28,8 @@ dev = [
   "ruff==0.17.1",
 ]
 # Packaging-only: the freezer that builds the double-click .app/.exe. Kept out of the
-# runtime deps (test_packaging.py pins those) and out of dev so a normal test/dev sync
-# stays lean — `uv sync --extra build` is only needed by scripts/package.* and CI.
+# runtime deps and out of dev so a normal test/dev sync stays lean; only packaging
+# and rebuilding need `--extra build`.
 build = [
   "pyinstaller==6.22.3",
 ]
@@ -45,7 +45,6 @@ pixelup = ["resources/*.png", "i18n/locales/*.json"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

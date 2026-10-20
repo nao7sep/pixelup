@@ -45,13 +45,13 @@ def test_save_output_image_writes_atomically_and_flattens_jpg_alpha(tmp_path: Pa
     assert list(tmp_path.glob("*.tmp")) == []
 
 
-def test_save_output_image_temp_file_uses_stem_nanoid_shape_beside_output(
+def test_save_output_image_stages_a_random_name_beside_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The staged temp name is <stem>-<nanoid>.tmp, derived from the target
-    # output's stem, and it is staged in the output's own directory so the
-    # final no-clobber publication always stays on one volume.
+    # The staged file is named after the output's stem and staged in the
+    # output's own directory, so the final no-clobber publication always stays
+    # on one volume.
     output_dir = tmp_path / "output-volume"
     output_dir.mkdir()
     output = output_dir / "photo-x4plus-4x.png"
@@ -77,7 +77,7 @@ def test_save_output_image_temp_file_uses_stem_nanoid_shape_beside_output(
     monkeypatch.setattr(os, "open", original_open)
 
     assert len(captured) == 1
-    assert re.fullmatch(r"photo-x4plus-4x-[A-Za-z0-9_-]{21}\.tmp", captured[0].name)
+    assert re.fullmatch(r"photo-x4plus-4x-[0-9a-f]{16}\.tmp", captured[0].name)
     assert captured[0].parent == output.parent
 
 

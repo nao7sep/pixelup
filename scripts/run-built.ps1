@@ -45,13 +45,13 @@ try {
 
     $builtAt = (Get-Item $exePath).LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
     Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
-    Stop-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $exePath
+    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $exePath
     Write-Step "Launching the existing build (built: $builtAt)"
     Write-Host "If you changed source since then, run rebuild instead."
 
     # GUI app: launch non-blocking via Start-Process.
     Start-Process -FilePath $exePath | Out-Null
-    Wait-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $exePath -TimeoutSeconds 30
+    Wait-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $exePath -TimeoutSeconds 30
 }
 catch {
     Write-Host ""

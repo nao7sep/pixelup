@@ -18,8 +18,9 @@ from pixelup.imaging import (
     read_image_size,
     save_output_image,
 )
-from pixelup.inference import InferenceConfig, model_architecture_spec, run_inference
+from pixelup.inference import InferenceConfig, run_inference
 from pixelup.model_management import required_artifact_names
+from pixelup.model_registry import model_info
 from pixelup.models import require_model_present
 from pixelup.parameters import (
     ALPHA_MODE_VALUES,
@@ -219,6 +220,7 @@ def validate_options(options: UpscaleOptions) -> None:
     # Every domain below comes from pixelup.parameters, the same leaf the Parameters
     # panel and the config loader read. Hardcoding them here (as this once did) let
     # the panel offer a value this function would reject at runtime.
+    model_info(options.model)  # a model PixelUp does not offer fails here
     if options.scale not in SCALE_VALUES:
         raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("error.scaleInvalid"))
     if options.tile not in TILE_VALUES:
@@ -276,7 +278,7 @@ def plan_warnings(options: UpscaleOptions, plan: UpscalePlan) -> list[Message]:
                 format=plan.output_format.value,
             )
         )
-    native_scale = model_architecture_spec(options.model, requested_scale=options.scale).netscale
+    native_scale = model_info(options.model).architecture.netscale
     if native_scale != options.scale:
         # The scales are passed as text: "4x" is a factor, not a quantity to group.
         warnings.append(

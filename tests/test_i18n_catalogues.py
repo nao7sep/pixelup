@@ -18,10 +18,9 @@ import pytest
 
 from pixelup.i18n import plural
 from pixelup.i18n.catalogue import LOCALES_DIR, catalogue, locale_file
-from pixelup.i18n.languages import LANGUAGES, TAGS
+from pixelup.i18n.languages import TAGS
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_TAGS = ("en", "de", "es", "fr", "it", "pt-BR", "ru", "ja", "ko", "zh-Hans")
 
 # Keys whose whole value is a name or a symbol, the same in every language: the
 # product and brand names, and "4000 x 3000", whose x is a multiplication sign.
@@ -118,23 +117,17 @@ def _placeholders(text: str) -> list[str]:
     return sorted(set(_PLACEHOLDER.findall(text)))
 
 
-def test_the_set_is_exactly_the_ten_interface_languages() -> None:
+def test_every_interface_language_has_exactly_one_catalogue() -> None:
     files = sorted(path.stem for path in LOCALES_DIR.glob("*.json"))
-    assert files == sorted(EXPECTED_TAGS)
-    assert sorted(TAGS) == sorted(EXPECTED_TAGS)
-    # The picker's order: Latin-script languages by their own names, then
-    # Cyrillic, then Chinese, Japanese and Korean.
-    assert [tag for tag, _name in LANGUAGES] == [
-        "de", "en", "es", "fr", "it", "pt-BR", "ru", "zh-Hans", "ja", "ko",
-    ]
+    assert files == sorted(TAGS)
 
 
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+@pytest.mark.parametrize("tag", TAGS)
 def test_every_language_has_exactly_english_keys(tag: str) -> None:
     assert sorted(_raw(tag)) == sorted(_raw("en"))
 
 
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+@pytest.mark.parametrize("tag", TAGS)
 def test_every_value_is_present_and_trimmed(tag: str) -> None:
     for key, entry in _raw(tag).items():
         for form, text in _forms(entry):
@@ -142,7 +135,7 @@ def test_every_value_is_present_and_trimmed(tag: str) -> None:
             assert text == text.strip(), f"{tag}: {key} {form} has surrounding space"
 
 
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+@pytest.mark.parametrize("tag", TAGS)
 def test_plural_entries_use_exactly_their_language_categories(tag: str) -> None:
     english = _raw("en")
     expected = sorted(plural.categories_of(tag))
@@ -154,7 +147,7 @@ def test_plural_entries_use_exactly_their_language_categories(tag: str) -> None:
             assert isinstance(entry, str), f"{tag}: {key} should be a sentence"
 
 
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+@pytest.mark.parametrize("tag", TAGS)
 def test_every_form_keeps_english_placeholders(tag: str) -> None:
     english = _raw("en")
     for key, entry in _raw(tag).items():
@@ -165,7 +158,7 @@ def test_every_form_keeps_english_placeholders(tag: str) -> None:
             assert _placeholders(text) == expected, f"{tag}: {key} {form}"
 
 
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+@pytest.mark.parametrize("tag", TAGS)
 def test_every_form_has_an_ellipsis_exactly_when_english_does(tag: str) -> None:
     # The ellipsis carries meaning, so a translation never adds or drops one; only
     # its spacing follows the language: German puts a no-break space before it
@@ -187,7 +180,7 @@ def test_every_form_has_an_ellipsis_exactly_when_english_does(tag: str) -> None:
         assert written not in raw, f"{tag}.json writes the ellipsis as {written}"
 
 
-@pytest.mark.parametrize("tag", [tag for tag in EXPECTED_TAGS if tag != "en"])
+@pytest.mark.parametrize("tag", [tag for tag in TAGS if tag != "en"])
 def test_no_language_copies_english(tag: str) -> None:
     english = _raw("en")
     allowed = SAME_AS_ENGLISH[tag]
@@ -209,7 +202,7 @@ def test_no_language_copies_english(tag: str) -> None:
     assert sorted(matched) == sorted(set(allowed))
 
 
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+@pytest.mark.parametrize("tag", TAGS)
 def test_no_file_holds_a_character_the_reader_cannot_see(tag: str) -> None:
     text = locale_file(tag).read_text(encoding="utf-8")
     found = _HIDDEN.search(text)
@@ -220,13 +213,13 @@ def test_no_file_holds_a_character_the_reader_cannot_see(tag: str) -> None:
     assert text.endswith("\n")
 
 
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+@pytest.mark.parametrize("tag", TAGS)
 def test_the_shipped_catalogue_parses(tag: str) -> None:
     # The app reads the catalogues through its own loader; this is that path.
     assert catalogue(tag).keys() == _raw("en").keys()
 
 
-@pytest.mark.parametrize("tag", EXPECTED_TAGS)
+@pytest.mark.parametrize("tag", TAGS)
 def test_the_in_window_about_button_matches_the_about_dialogs_own_title(tag: str) -> None:
     # Every control that opens About reads exactly "About <App>" in the
     # interface language — here, the same string as the About dialog's own
@@ -241,7 +234,7 @@ def test_the_macos_bundle_declares_every_language() -> None:
     declared = re.findall(r'"CFBundleLocalizations":\s*\[(.*?)\]', spec, flags=re.S)
     assert len(declared) == 1
     listed = re.findall(r'"([^"]+)"', declared[0])
-    assert sorted(listed) == sorted(EXPECTED_TAGS)
+    assert sorted(listed) == sorted(TAGS)
 
 
 def test_the_catalogues_ship_in_the_package_and_the_frozen_app() -> None:

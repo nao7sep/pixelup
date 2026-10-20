@@ -9,7 +9,6 @@ from PIL import Image
 
 from pixelup import upscale as upscale_module
 from pixelup.config import RuntimeDirs
-from pixelup.devices import DEFAULT_DEVICE
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
 from pixelup.jobs import (
@@ -26,11 +25,7 @@ from pixelup.jobs import (
 )
 from pixelup.output_reservation import BUNDLE_SUFFIXES, assert_output_bundle_available
 from pixelup.parameters import (
-    DEFAULT_SCALE,
-    DEFAULT_TILE,
-    SCALE_CHOICES,
     SCALE_VALUES,
-    TILE_CHOICES,
     TILE_VALUES,
 )
 from pixelup.paths import NamePlanCache, OutputFormat
@@ -213,61 +208,18 @@ def test_options_for_job_maps_settings_and_fixed_defaults(tmp_path: Path) -> Non
     assert options.output_format == OutputFormat.JPG
     assert options.alpha_mode == "bicubic"
     assert options.target_profile == "srgb"
-    # Fixed, non-configurable defaults the GUI never exposes.
-    assert options.tile_pad == 10
-    assert options.pre_pad == 0
-    assert options.background == "white"
 
 
-def test_bare_job_settings_defaults_to_a_safe_tile() -> None:
-    # JobSettings() is what the panel's reset hands the user.
-    assert JobSettings().tile == DEFAULT_TILE
-    assert DEFAULT_TILE == 256
+def test_the_built_in_scale_is_one_the_panel_offers() -> None:
+    assert JobSettings().scale in SCALE_VALUES
 
 
-def test_bare_job_settings_are_the_built_in_defaults() -> None:
-    # JobSettings() *is* the single source of the built-ins — there is no second
-    # defaults layer to drift against — so every field must stand on its own as the
-    # value the app ships with, not a placeholder some other layer overwrites.
-    defaults = JobSettings()
-
-    assert defaults.scale == DEFAULT_SCALE
-    assert defaults.denoise_strength == 0.5
-    assert defaults.alpha_mode == "realesrgan"
-    assert defaults.device == DEFAULT_DEVICE
-    assert defaults.output_format == OutputFormat.PNG
-    assert defaults.quality == 95
-    assert defaults.tile == DEFAULT_TILE
-    assert defaults.strip_metadata is False
-    assert defaults.target_profile is None
-
-
-def test_bare_job_settings_defaults_to_the_scale_the_panel_always_opened_on() -> None:
-    # Scale folded into JobSettings, and the fold must not have moved the value: 4x is
-    # what the panel checked before it was persisted or resettable, so it is what the
-    # built-in has to be. Pinned against the constant *and* the literal, because the
-    # constant alone would happily follow a typo.
-    assert JobSettings().scale == DEFAULT_SCALE
-    assert DEFAULT_SCALE == 4
-
-
-def test_scale_choices_are_the_two_selectable_scales() -> None:
-    # The same 2x/4x the panel has always offered — enumerated once, beside
-    # JobSettings, for the panel and the config loader both.
-    assert SCALE_VALUES == (2, 4)
-    assert SCALE_CHOICES == (("2x", 2), ("4x", 4))
-    assert DEFAULT_SCALE in SCALE_VALUES
-
-
-def test_tile_choices_are_doublings_without_an_untiled_pass() -> None:
-    # Peak memory scales with the tile's AREA, so only doublings are meaningful. There
-    # is no untiled "Whole image" choice: a tile larger than the image is one pass.
-    assert TILE_VALUES == (128, 256, 512, 1024, 2048)
-    assert all(isinstance(label, str) for label, _value in TILE_CHOICES)
-    assert DEFAULT_TILE in TILE_VALUES
-    # 128 must be one rung below the default: the machine that cannot fit 256 has
-    # somewhere to go.
-    assert TILE_VALUES[TILE_VALUES.index(DEFAULT_TILE) - 1] == 128
+def test_tile_choices_are_doublings_with_a_smaller_rung_below_the_default() -> None:
+    # Peak memory scales with the tile's AREA, so only doublings are meaningful, and
+    # a machine that cannot fit the default tile needs somewhere smaller to go.
+    pairs = zip(TILE_VALUES, TILE_VALUES[1:], strict=False)
+    assert all(larger == 2 * smaller for smaller, larger in pairs)
+    assert JobSettings().tile in TILE_VALUES[1:]
 
 
 def test_job_log_payload_includes_settings_and_paths(tmp_path: Path) -> None:

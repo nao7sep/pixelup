@@ -59,18 +59,18 @@ def test_build_plan_validates_input_output_and_model(tmp_path: Path) -> None:
     temp_dir = tmp_path / "temp"
     models_dir.mkdir()
     temp_dir.mkdir()
-    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     Image.new("RGB", (3, 2), "white").save(input_path)
 
     plan = build_plan(
-        options(input_path, output_path, model="custom-model"),
+        options(input_path, output_path, model="RealESRGAN_x4plus"),
         RuntimeDirs(models_dir, temp_dir),
     )
 
     assert plan.input_size == (3, 2)
     assert plan.output_size == (12, 8)
     assert plan.output_path == output_path
-    assert plan.model == "custom-model"
+    assert plan.model == "RealESRGAN_x4plus"
 
 
 
@@ -90,11 +90,11 @@ def test_build_plan_keeps_literal_input_and_uses_resolved_path_only_for_reads(
     Image.new("RGB", (3, 2), "white").save(target)
     chosen = chosen_dir / "dropped-link.png"
     chosen.symlink_to(target)
-    (models_dir / "custom-model.pth").write_bytes(b"weights")
-    output = chosen_dir / "dropped-link-custom-model-4x.png"
+    (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
+    output = chosen_dir / "dropped-link-realesrgan-x4plus-4x.png"
 
     plan = build_plan(
-        options(chosen, output, model="custom-model"),
+        options(chosen, output, model="RealESRGAN_x4plus"),
         RuntimeDirs(models_dir, temp_dir),
     )
 
@@ -103,7 +103,7 @@ def test_build_plan_keeps_literal_input_and_uses_resolved_path_only_for_reads(
     assert plan.output_path == output
 
 
-def test_build_plan_rejects_missing_unknown_model(tmp_path: Path) -> None:
+def test_build_plan_rejects_a_model_pixelup_does_not_offer(tmp_path: Path) -> None:
     input_path = tmp_path / "input.png"
     Image.new("RGB", (1, 1), "white").save(input_path)
     models_dir = tmp_path / "models"
@@ -113,7 +113,7 @@ def test_build_plan_rejects_missing_unknown_model(tmp_path: Path) -> None:
 
     with pytest.raises(PixelupError) as excinfo:
         build_plan(
-            options(input_path, tmp_path / "output.png", model="custom-model"),
+            options(input_path, tmp_path / "output.png", model="not-a-pixelup-model"),
             RuntimeDirs(models_dir, temp_dir),
         )
 
@@ -132,7 +132,7 @@ def test_run_upscale_calls_inference_and_writes_output(
     temp_dir = tmp_path / "temp"
     models_dir.mkdir()
     temp_dir.mkdir()
-    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     # 300px at the smallest offered tile (128) is genuinely tiled: ceil(300/128) = 3
     # per axis, so on_start must report 9. This used to be a 2x2 image at tile=1 —
     # a size no longer in the domain, since tile is now a choice among doublings.
@@ -141,7 +141,7 @@ def test_run_upscale_calls_inference_and_writes_output(
     _stub_successful_inference(monkeypatch)
 
     result = run_upscale(
-        options(input_path, output_path, model="custom-model", tile=128),
+        options(input_path, output_path, model="RealESRGAN_x4plus", tile=128),
         RuntimeDirs(models_dir, temp_dir),
         on_start=lambda plan, tiles: events.append(("start", tiles)),
         on_progress=lambda phase: events.append(("progress", phase)),
@@ -186,7 +186,7 @@ def test_run_upscale_warns_for_forced_format_extension_mismatch(
     temp_dir = tmp_path / "temp"
     models_dir.mkdir()
     temp_dir.mkdir()
-    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     Image.new("RGB", (1, 1), "white").save(input_path)
     warnings: list[Message] = []
     _stub_successful_inference(monkeypatch)
@@ -195,7 +195,7 @@ def test_run_upscale_warns_for_forced_format_extension_mismatch(
         options(
             input_path,
             tmp_path / "output.png",
-            model="custom-model",
+            model="RealESRGAN_x4plus",
             output_format=OutputFormat.JPG,
         ),
         RuntimeDirs(models_dir, temp_dir),
@@ -260,7 +260,7 @@ def test_run_upscale_uses_one_source_capture_when_the_path_is_replaced(
     output = tmp_path / "output.png"
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     exif = Image.Exif()
     exif[0x8769] = {0x9003: "2020:01:02 03:04:05", 0xA002: 3, 0xA003: 2}
     original_pixels = Image.new("RGB", (3, 2), (20, 40, 60))
@@ -287,7 +287,7 @@ def test_run_upscale_uses_one_source_capture_when_the_path_is_replaced(
         )
         replacement.replace(source)
 
-    opts = options(source, output, model="custom-model")
+    opts = options(source, output, model="RealESRGAN_x4plus")
     result = run_upscale(opts, RuntimeDirs(models_dir, tmp_path / "temp"),
                          on_start=replace_after_capture)
     write_sidecar(input_path=source, output_path=output, options=opts,
@@ -323,7 +323,7 @@ def test_source_buffers_close_before_model_construction(
     output = tmp_path / "output.png"
     models = tmp_path / "models"
     models.mkdir()
-    (models / "custom-model.pth").write_bytes(b"weights")
+    (models / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     exif = Image.Exif()
     exif[0x0112] = 6
     Image.new("L", (3, 2), 120).save(source, exif=exif)
@@ -362,7 +362,7 @@ def test_source_buffers_close_before_model_construction(
     monkeypatch.setattr(inference, "_import_torch", lambda: None)
     monkeypatch.setattr(inference, "to_torch_device", lambda *args: "cpu")
     monkeypatch.setattr(inference, "_create_upsampler", construct)
-    run_upscale(options(source, output, model="custom-model"),
+    run_upscale(options(source, output, model="RealESRGAN_x4plus"),
                 RuntimeDirs(models, tmp_path / "temp"))
 
 
@@ -385,7 +385,7 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
     temp_dir = tmp_path / "temp"
     models_dir.mkdir(exist_ok=True)
     temp_dir.mkdir(exist_ok=True)
-    (models_dir / "custom-model.pth").write_bytes(b"weights")
+    (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     Image.new("RGB", (4, 4), "white").save(input_path)
     original = input_path.read_bytes()
 
@@ -397,7 +397,7 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
 
     with pytest.raises(PixelupError):
         run_upscale(
-            options(input_path, tmp_path / "output.png", model="custom-model"),
+            options(input_path, tmp_path / "output.png", model="RealESRGAN_x4plus"),
             RuntimeDirs(models_dir, temp_dir),
         )
 

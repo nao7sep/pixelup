@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
@@ -12,6 +12,13 @@ from typing import Any
 from pixelup.devices import resolve_device, to_torch_device
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
+from pixelup.model_management import (
+    DENOISE_NEUTRAL,
+    GENERAL_DENOISE_MODEL,
+    GENERAL_MODEL,
+    model_supports_denoise,
+)
+from pixelup.model_registry import ModelArchitecture, model_info
 from pixelup.models import model_file
 
 ProgressCallback = Callable[[str], None]
@@ -31,29 +38,6 @@ class InferenceConfig:
     alpha_mode: str
     gpu_id: int | None
     device: str
-
-
-@dataclass(frozen=True, slots=True)
-class ModelArchitectureSpec:
-    kind: str
-    netscale: int
-    params: Mapping[str, int | str]
-
-
-def model_architecture_spec(model: str, *, requested_scale: int = 4) -> ModelArchitectureSpec:
-    match model:
-        case "RealESRGAN_x4plus" | "RealESRNet_x4plus":
-            return _rrdb_spec(scale=4, num_block=23)
-        case "RealESRGAN_x2plus":
-            return _rrdb_spec(scale=2, num_block=23)
-        case "RealESRGAN_x4plus_anime_6B":
-            return _rrdb_spec(scale=4, num_block=6)
-        case "realesr-animevideov3":
-            return _srvgg_spec(scale=4, num_conv=16)
-        case "realesr-general-x4v3":
-            return _srvgg_spec(scale=4, num_conv=32)
-        case _:
-            return _rrdb_spec(scale=requested_scale, num_block=23)
 
 
 def run_inference(
@@ -102,7 +86,7 @@ def _run_inference(
 ) -> Any:
     _check_cancelled(should_cancel)
     _emit(on_progress, "load_model")
-    _import_torch()  # surface a friendly error if torch is not installed
+    _import_torch()  # refuses a torch that would load weights unsafely
     concrete_device = resolve_device(config.device, config.gpu_id)
     torch_device = to_torch_device(concrete_device, config.gpu_id)
     upsampler = _create_upsampler(
@@ -129,43 +113,10 @@ def _release_device_cache(concrete_device: str) -> None:
     """Hand the GPU memory torch keeps cached back to the system once a job's model
     work ends, so the long encode and the next job do not start with it held. On
     Apple Silicon that memory is the system's own RAM."""
-    torch = _import_torch()
-    if torch is None:
-        return
     if concrete_device == "mps":
-        torch.mps.empty_cache()
+        _import_torch().mps.empty_cache()
     elif concrete_device == "cuda":
-        torch.cuda.empty_cache()
-
-
-def _rrdb_spec(*, scale: int, num_block: int) -> ModelArchitectureSpec:
-    return ModelArchitectureSpec(
-        kind="rrdb",
-        netscale=scale,
-        params={
-            "num_in_ch": 3,
-            "num_out_ch": 3,
-            "num_feat": 64,
-            "num_block": num_block,
-            "num_grow_ch": 32,
-            "scale": scale,
-        },
-    )
-
-
-def _srvgg_spec(*, scale: int, num_conv: int) -> ModelArchitectureSpec:
-    return ModelArchitectureSpec(
-        kind="srvgg",
-        netscale=scale,
-        params={
-            "num_in_ch": 3,
-            "num_out_ch": 3,
-            "num_feat": 64,
-            "num_conv": num_conv,
-            "upscale": scale,
-            "act_type": "prelu",
-        },
-    )
+        _import_torch().cuda.empty_cache()
 
 
 def _create_upsampler(
@@ -181,14 +132,14 @@ def _create_upsampler(
 
     model_paths: str | list[str] = str(model_file(config.models_dir, config.model))
     dni_weight = None
-    if config.model == "realesr-general-x4v3" and config.denoise_strength != 1.0:
+    if model_supports_denoise(config.model) and config.denoise_strength != DENOISE_NEUTRAL:
         model_paths = [
-            str(model_file(config.models_dir, "realesr-general-x4v3")),
-            str(model_file(config.models_dir, "realesr-general-wdn-x4v3")),
+            str(model_file(config.models_dir, GENERAL_MODEL)),
+            str(model_file(config.models_dir, GENERAL_DENOISE_MODEL)),
         ]
         dni_weight = [config.denoise_strength, 1 - config.denoise_strength]
 
-    spec = model_architecture_spec(config.model, requested_scale=config.scale)
+    spec = model_info(config.model).architecture
     needs_cancel_subclass = on_tile is not None or should_cancel is not None
     cls = _tile_reporting_upsampler_class(RealESRGANer) if needs_cancel_subclass else RealESRGANer
     upsampler = cls(
@@ -260,18 +211,11 @@ def _tile_reporting_upsampler_class(base: type) -> type:
     return _TileReportingUpsampler
 
 
-def _build_network(spec: ModelArchitectureSpec) -> Any:
+def _build_network(spec: ModelArchitecture) -> Any:
     from pixelup.realesrgan_models import RRDBNet, SRVGGNetCompact
 
-    if spec.kind == "rrdb":
-        return RRDBNet(**spec.params)
-    if spec.kind == "srvgg":
-        return SRVGGNetCompact(**spec.params)
-    raise PixelupError(
-        ErrorCode.INTERNAL_ERROR,
-        "Unsupported Real-ESRGAN model architecture.",
-        details={"kind": spec.kind},
-    )
+    network = RRDBNet if spec.kind == "rrdb" else SRVGGNetCompact
+    return network(**spec.params)
 
 
 # PixelUp's adapted RealESRGANer calls torch.load without a weights_only argument.
@@ -289,10 +233,8 @@ _MIN_SAFE_TORCH = (2, 6)
 
 
 def _import_torch() -> Any:
-    try:
-        import torch
-    except ImportError as exc:
-        raise _missing_inference_dependency("torch", exc) from exc
+    import torch
+
     _assert_safe_torch_load(torch)
     return torch
 
@@ -309,14 +251,6 @@ def _assert_safe_torch_load(torch_module: Any) -> None:
             "weights with full unpickling.",
             details={"torch_version": str(torch_module.__version__)},
         )
-
-
-def _missing_inference_dependency(package: str, exc: ImportError) -> PixelupError:
-    return PixelupError(
-        ErrorCode.INTERNAL_ERROR,
-        f"Inference dependency '{package}' is not installed.",
-        details={"dependency": package, "reason": str(exc)},
-    )
 
 
 def out_of_memory_error() -> PixelupError:

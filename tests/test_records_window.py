@@ -15,7 +15,7 @@ import pytest
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QCloseEvent, QColor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication
 
 from pixelup import gui, records_window
 from pixelup.app_config import AppConfig, ConfigLoadResult, SettingsFile, config_path
@@ -246,10 +246,6 @@ def test_offers_needs_attention_first_among_the_levels_with_every_filter_off(
     assert window.launch_filter.currentText() == "All launches"
     assert window.search.text() == ""
     assert window._query == RecordsQuery()
-
-
-def test_has_no_refresh_button(open_records) -> None:
-    assert open_records().findChildren(QPushButton) == []
 
 
 def test_reads_again_with_each_filter_and_searches_once_typing_pauses(

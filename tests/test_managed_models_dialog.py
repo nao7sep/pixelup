@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QProgressBar, QRadioButton
+from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
 from pixelup.dialog_shell import TABLE_WIDTH
 from pixelup.errors import ErrorCode, PixelupError
@@ -295,9 +295,6 @@ def test_manual_surface_has_independent_actions_and_truthful_columns(
         # Named by its title bar, not again inside the body.
         assert "Managed models" not in labels
         assert "Size" in labels
-        assert "Download" not in labels
-        assert dialog.findChildren(QRadioButton) == []
-        assert dialog.findChildren(QProgressBar) == []
         assert len(dialog.row_action_buttons) == len(MANAGED_MODEL_BUNDLES)
         assert {button.text() for button in dialog.row_action_buttons} == {"Install"}
         assert dialog.primary_button.text() == "Install all"

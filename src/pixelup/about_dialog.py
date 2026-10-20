@@ -18,7 +18,7 @@ from pixelup.ui_common import open_url, secondary_label, title_label, use_regula
 from pixelup.widgets import OperationResult
 
 PROJECT_URL = "https://github.com/nao7sep/pixelup"
-ISSUES_URL = "https://github.com/nao7sep/pixelup/issues"
+ISSUES_URL = f"{PROJECT_URL}/issues"
 
 
 class AboutDialog(DialogShell):

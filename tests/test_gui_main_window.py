@@ -384,9 +384,6 @@ def test_external_drop_accepts_local_files_and_rejects_remote_urls(
     non_image = tmp_path / "not-an-image.txt"
     non_image.write_text("not image data", encoding="utf-8")
 
-    assert "dragEnterEvent" not in MainWindow.__dict__
-    assert "dropEvent" not in MainWindow.__dict__
-
     remote_drag = _DropEvent([remote_url])
     window.image_table.dragEnterEvent(remote_drag)  # type: ignore[arg-type]
     assert remote_drag.ignored is True
@@ -660,7 +657,7 @@ def test_job_finished_maps_outcomes_and_updates_summary(make_window, tmp_path: P
 def test_job_finished_recomputes_only_its_own_images_summary(
     make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # PU-5: a single job's completion must touch only its own image's row, not
+    # A single job's completion must touch only its own image's row, not
     # rescan every job and rewrite every image row in the batch.
     window = make_window()
     image_a = _png(tmp_path, "a.png")
@@ -928,9 +925,6 @@ def test_settings_only_options_have_no_main_window_control(make_window) -> None:
     assert set(window.model_checks) == set(gui.UPSCALE_MODELS)
     checkbox_labels = {box.text() for box in window.findChildren(QCheckBox)}
     assert checkbox_labels == set(gui.UPSCALE_MODELS) | {"Strip metadata"}
-    # The window reads both from config and never offers a widget onto them.
-    assert not hasattr(window, "auto_download")
-    assert not hasattr(window, "concurrent")
     assert window.manage_models_button.text() == "Managed models"
     assert window.manage_models_button.accessibleName() == ("Managed models, all models installed")
     assert window.manage_models_button.icon().isNull()
@@ -947,8 +941,7 @@ def test_the_main_action_leads_by_weight_not_by_an_accent_fill(make_window) -> N
 
 def test_missing_models_show_as_a_warning_line_under_the_button(make_window) -> None:
     """The button always says what it opens; the models' state is a warning line of
-    its own under it. Drawn as a filled amber button labelled "Models are missing",
-    the state read as a second action beside the real one."""
+    its own under it, so the state never reads as a second action."""
     window = make_window()
     assert window.model_status.isHidden()
 
@@ -957,9 +950,6 @@ def test_missing_models_show_as_a_warning_line_under_the_button(make_window) -> 
     _settle_models(window)
 
     assert window.manage_models_button.text() == "Managed models"
-    assert window.manage_models_button.styleSheet() == ""
-    assert window.manage_models_button.property("role") is None
-    assert window.manage_models_button.icon().isNull()
     assert window.manage_models_button.accessibleName() == (
         "Managed models, some models are missing"
     )

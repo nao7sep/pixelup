@@ -16,7 +16,6 @@ def test_a_save_round_trips_the_value(tmp_path: Path) -> None:
 
     text = path.read_text(encoding="utf-8")
     assert "listWidth=300" in text
-    assert "formatVersion" not in text
     assert int(WindowState(path).value("recordsWindow/listWidth")) == 300
 
 

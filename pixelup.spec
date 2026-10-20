@@ -144,9 +144,7 @@ if is_mac:
             "NSHighResolutionCapable": True,
             # Dual-key icon: CFBundleIconFile (the classic .icns, set by icon= above) is read by
             # macOS < 26; CFBundleIconName points macOS 26 (Tahoe) at the Liquid Glass Assets.car
-            # that the shared macOS bundle finalizer copies into Contents/Resources/ after
-            # the freeze (see the liquid-glass-icon-workflow). The catalog is generated from
-            # company/assets by company/tools/liquid-glass-icon/apps/pixelup.mjs.
+            # that the macOS bundle finalizer copies into Contents/Resources/ after the freeze.
             "CFBundleIconName": "pixel-butterfly-paper",
             # Every interface language, so AppKit agrees to draw its own menu items
             # (Services, Emoji & Symbols, Start Dictation) in the language the app

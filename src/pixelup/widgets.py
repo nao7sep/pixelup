@@ -132,8 +132,7 @@ class OperationResult(QFrame):
         flush against the label's top instead, and the still-AlignTop button
         is left centered on the whole block rather than the first line.
         Rather than resize anything to fix that, the button is nudged by the
-        leftover half-difference so it overlaps into the row's own margin
-        (matching the reference Qt guidance in scratchpad/xalign.md); only if
+        leftover half-difference so it overlaps into the row's own margin; only if
         it would not fit inside that margin does this widen the margin, and
         it says so, since a caller relying on a fixed banner height may want
         to know.

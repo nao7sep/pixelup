@@ -40,9 +40,9 @@ fi
 
 built_at="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S %Z' "$APP_BUNDLE/Contents/MacOS/PixelUp" 2>/dev/null || echo 'unknown')"
 claim_launcher_runtime "$RUNTIME_TOKEN" "$REPO_DIR"
-stop_owned_runtime python PixelUp "$REPO_DIR" "" pixelup "$APP_EXECUTABLE"
+stop_owned_runtime PixelUp "$REPO_DIR" pixelup "$APP_EXECUTABLE"
 log_step "Launching the existing build (built: $built_at)"
 echo "If you changed source since then, run rebuild instead."
 
 open -n "$APP_BUNDLE"
-wait_for_owned_runtime python PixelUp "$REPO_DIR" "" pixelup "$APP_EXECUTABLE" 30
+wait_for_owned_runtime PixelUp "$REPO_DIR" pixelup "$APP_EXECUTABLE" 30

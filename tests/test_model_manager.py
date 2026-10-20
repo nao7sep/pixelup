@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 from pixelup import model_manager
 from pixelup.model_management import MANAGED_ARTIFACT_NAMES
 from pixelup.model_manager import ModelManager, ModelOperation
-from pixelup.model_registry import known_model
+from pixelup.model_registry import model_info
 from pixelup.models import model_file, verify_model_file
 
 
@@ -202,7 +202,7 @@ def test_every_managed_model_is_installed_and_matches_its_pin(
     assert manager.ready_count() == (total, total)
     for name in MANAGED_ARTIFACT_NAMES:
         # Raises unless the file's size and SHA-256 match the registry's pin.
-        verify_model_file(model_file(heavy_models_dir, name), known_model(name))
+        verify_model_file(model_file(heavy_models_dir, name), model_info(name))
     manager.deleteLater()
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import secrets
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -22,7 +23,6 @@ from pixelup.derived_metadata import (
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
-from pixelup.nanoid import nanoid
 from pixelup.output_cleanup import open_output_handle, output_cleanup
 from pixelup.output_reservation import (
     PublishedFile,
@@ -551,10 +551,10 @@ def _save_kwargs(
 def _temp_output_path(output_path: Path) -> Path:
     # Staged beside output_path, not in a central temp directory: the atomic
     # hard-link publication requires one filesystem volume, and output_path may
-    # be on a USB stick or second disk rather than ~/.pixelup/temp/. The name
-    # still follows the house <stem>-<discriminator>.tmp shape, derived from the
-    # target's own stem.
-    return output_path.parent / f"{output_path.stem}-{nanoid()}.tmp"
+    # be on a USB stick or second disk rather than ~/.pixelup/temp/. Only the name
+    # comes from here: tempfile's own functions would create the file through the
+    # C runtime, whose Windows handle quit could not delete (open_output_handle).
+    return output_path.parent / f"{output_path.stem}-{secrets.token_hex(8)}.tmp"
 
 
 @contextmanager

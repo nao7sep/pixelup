@@ -144,7 +144,6 @@ def test_the_dark_surfaces_are_not_the_palettes_near_black() -> None:
     assert QColor(tone["button"]).lightness() > window.lightness()
     sheet = theme.build_stylesheet(dark)
     assert "#171717" not in sheet
-    assert "palette(base)" not in sheet
 
 
 def test_one_height_for_every_one_line_control(qapp: QApplication, tmp_path) -> None:

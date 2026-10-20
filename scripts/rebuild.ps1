@@ -63,7 +63,7 @@ try {
     # happen before removing the distribution directory.
     Write-Step "Replacing any existing PixelUp runtime"
     Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
-    Stop-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $exePath
+    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $exePath
 
     Write-Step "Removing stale build output"
     # Clear output first so a build that fails to emit a file cannot be masked by a
@@ -73,15 +73,10 @@ try {
 
     Write-Step "Freezing PixelUp.exe (uv installs the build deps, then PyInstaller runs)"
     Invoke-Native -FilePath "uv" -ArgumentList @(
-        "run", "python", "scripts/build-third-party-notices.py",
-        "build/THIRD_PARTY_NOTICES.txt"
-    )
-    Invoke-Native -FilePath "uv" -ArgumentList @(
         "run", "--extra", "build", "pyinstaller", "pixelup.spec",
         "--workpath", "build-pyinstaller", "--distpath", "dist", "--noconfirm"
     )
     Copy-Item -LiteralPath LICENSE -Destination dist\PixelUp\LICENSE.txt
-    Copy-Item -LiteralPath build\THIRD_PARTY_NOTICES.txt -Destination dist\PixelUp\THIRD_PARTY_NOTICES.txt
 
     # Fail fast if freezing dropped a lazily-imported dependency (see gui._selftest).
     # The exe is windowed, so wait on it to read the exit code; PIXELUP_SELFTEST=1
@@ -96,7 +91,7 @@ try {
     # GUI app: launch non-blocking via Start-Process (the Windows counterpart to
     # macOS `open`), so the console does not wait on the app's lifetime.
     Start-Process -FilePath $exePath | Out-Null
-    Wait-OwnedRuntime -Kind python -Label "PixelUp" -RepoDir $repoDir -ProjectFile "" -ExecutableName "pixelup" -BuiltExecutable $exePath -TimeoutSeconds 30
+    Wait-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $exePath -TimeoutSeconds 30
 }
 catch {
     Write-Host ""

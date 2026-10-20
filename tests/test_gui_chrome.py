@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QStyle, QStyleFactory
 
 from pixelup.app_config import AppConfig, ConfigLoadResult, SettingsFile, config_path
 from pixelup.fonts import DEFAULT_UI_FONT_SIZE
-from pixelup.gui import ImagePreview, MainWindow
+from pixelup.gui import MainWindow
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
 from pixelup.ui_common import title_label
@@ -51,23 +51,11 @@ def make_window(
     qapp.processEvents()
 
 
-def test_image_preview_floor_is_deliberate(qapp: QApplication) -> None:
-    """The preview floor is the deliberate 320x240, not the old 160x120 stub."""
-    preview = ImagePreview()
-    assert preview.minimumSize().width() == 320
-    assert preview.minimumSize().height() == 240
-
-
-def test_window_minimum_is_derived_not_the_old_constant(make_window) -> None:
-    """The window minimum is derived from the layout, not a hand-typed number.
-
-    It must equal (or exceed) the central widget's size hint and clearly differ
-    from the old preview-stub value of 160x120.
-    """
+def test_window_minimum_covers_the_central_widgets_size_hint(make_window) -> None:
+    """The window minimum is derived from the layout, not a hand-typed number."""
     window = make_window()
     hint = window.centralWidget().sizeHint()
 
-    assert window.minimumSize() != (160, 120)
     assert window.minimumWidth() >= hint.width()
     assert window.minimumHeight() >= hint.height()
 
