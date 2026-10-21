@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
+from pixelup.config import saved_models_dir
 from pixelup.dialog_shell import TABLE_WIDTH, DialogShell
 from pixelup.i18n import localizer
 from pixelup.i18n.localized import localize
@@ -367,7 +368,7 @@ class ManagedModelsDialog(DialogShell):
         # must not outlive a parent closed while it is open (an OS quit).
         picker = QFileDialog(
             self, localizer.t("managedModels.folder"),
-            self.folder_edit.text() or str(self._manager.models_dir),
+            str(saved_models_dir(self.folder_edit.text(), self._manager.models_dir)),
         )
         picker.setFileMode(QFileDialog.FileMode.Directory)
         picker.setOption(QFileDialog.Option.ShowDirsOnly)

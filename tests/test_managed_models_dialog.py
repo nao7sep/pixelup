@@ -4,6 +4,7 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
@@ -581,15 +582,32 @@ def test_the_models_panel_separates_its_headings_with_the_sheets_line(
         dialog.deleteLater()
 
 
-def test_the_folder_picker_is_owned_by_the_dialog(qapp, tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("draft", ["", "~/draft models", "relative/models", "absolute"])
+def test_folder_picker_uses_effective_draft_and_keeps_selection_until_apply(
+    qapp, tmp_path, monkeypatch, draft
+) -> None:
     from pixelup import managed_models_dialog
     from pixelup.model_manager import ModelManager
 
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("MODEL_NAME", "expanded")
+    models_dir = tmp_path / "models"
+    chosen = str(tmp_path / " literal $MODEL_NAME %MODEL_NAME% ")
+    if draft == "absolute":
+        draft = str(tmp_path / "absolute draft")
+    expected = {
+        "": models_dir,
+        "~/draft models": home / "draft models",
+        "relative/models": home / "relative/models",
+    }.get(draft, Path(draft))
     created = []
+    saved = []
+    accepted = True
 
     class Picker:
-        def __init__(self, parent, *_args):
-            created.append(parent)
+        def __init__(self, parent, _title, directory):
+            created.append((parent, directory))
 
         def setFileMode(self, _mode):
             pass
@@ -598,10 +616,10 @@ def test_the_folder_picker_is_owned_by_the_dialog(qapp, tmp_path, monkeypatch) -
             pass
 
         def exec(self):
-            return managed_models_dialog.QDialog.DialogCode.Accepted
+            return QDialog.DialogCode.Accepted if accepted else QDialog.DialogCode.Rejected
 
         def selectedFiles(self):
-            return [str(tmp_path / "chosen")]
+            return [chosen]
 
         def deleteLater(self):
             pass
@@ -609,11 +627,25 @@ def test_the_folder_picker_is_owned_by_the_dialog(qapp, tmp_path, monkeypatch) -
     Picker.FileMode = managed_models_dialog.QFileDialog.FileMode
     Picker.Option = managed_models_dialog.QFileDialog.Option
     monkeypatch.setattr(managed_models_dialog, "QFileDialog", Picker)
-    dialog = managed_models_dialog.ManagedModelsDialog(ModelManager(tmp_path / "models"))
+    manager = ModelManager(models_dir)
+    _ready(manager, qapp)
+    dialog = managed_models_dialog.ManagedModelsDialog(
+        manager, models_folder="saved/models", save_folder=lambda value, done: saved.append(value)
+    )
     try:
+        dialog.folder_edit.setText(draft)
         dialog._choose_folder()
-        assert created == [dialog]
-        assert dialog.folder_edit.text() == str(tmp_path / "chosen")
-        dialog.folder_edit.setText("")
+        assert created == [(dialog, str(expected))]
+        assert dialog.folder_edit.text() == chosen
+        assert saved == []
+
+        accepted = False
+        dialog._choose_folder()
+        assert created[-1] == (dialog, chosen)
+        assert dialog.folder_edit.text() == chosen
+        assert saved == []
+
+        dialog.apply_folder_button.click()
+        assert saved == [chosen]
     finally:
         dialog.deleteLater()
