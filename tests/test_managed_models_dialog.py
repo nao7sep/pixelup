@@ -593,11 +593,12 @@ def test_folder_picker_uses_effective_draft_and_keeps_selection_until_apply(
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setenv("MODEL_NAME", "expanded")
     models_dir = tmp_path / "models"
+    default_models_dir = tmp_path / "default models"
     chosen = str(tmp_path / " literal $MODEL_NAME %MODEL_NAME% ")
     if draft == "absolute":
         draft = str(tmp_path / "absolute draft")
     expected = {
-        "": models_dir,
+        "": default_models_dir,
         "~/draft models": home / "draft models",
         "relative/models": home / "relative/models",
     }.get(draft, Path(draft))
@@ -630,7 +631,10 @@ def test_folder_picker_uses_effective_draft_and_keeps_selection_until_apply(
     manager = ModelManager(models_dir)
     _ready(manager, qapp)
     dialog = managed_models_dialog.ManagedModelsDialog(
-        manager, models_folder="saved/models", save_folder=lambda value, done: saved.append(value)
+        manager,
+        models_folder=str(models_dir),
+        default_models_dir=default_models_dir,
+        save_folder=lambda value, done: saved.append(value),
     )
     try:
         dialog.folder_edit.setText(draft)

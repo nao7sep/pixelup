@@ -67,6 +67,7 @@ class ManagedModelsDialog(DialogShell):
         # focus of its own — the buttons are the keyboard owners.
         super().__init__("managedModels.title", parent, width=TABLE_WIDTH)
         self._manager = manager
+        self._default_models_dir = default_models_dir or manager.models_dir
         self._required_artifacts = tuple(dict.fromkeys(required_artifacts))
         self._pending_job_count = pending_job_count
         self._session_shutdown = session_shutdown
@@ -81,7 +82,7 @@ class ManagedModelsDialog(DialogShell):
 
         folder_label = localize(QLabel(), text="managedModels.folder")
         self.folder_edit = QLineEdit(models_folder)
-        self.folder_edit.setPlaceholderText(str(default_models_dir or manager.models_dir))
+        self.folder_edit.setPlaceholderText(str(self._default_models_dir))
         folder_label.setBuddy(self.folder_edit)
         self.body_layout.addWidget(folder_label)
         folder_row = QHBoxLayout()
@@ -368,7 +369,7 @@ class ManagedModelsDialog(DialogShell):
         # must not outlive a parent closed while it is open (an OS quit).
         picker = QFileDialog(
             self, localizer.t("managedModels.folder"),
-            str(saved_models_dir(self.folder_edit.text(), self._manager.models_dir)),
+            str(saved_models_dir(self.folder_edit.text(), self._default_models_dir)),
         )
         picker.setFileMode(QFileDialog.FileMode.Directory)
         picker.setOption(QFileDialog.Option.ShowDirsOnly)
