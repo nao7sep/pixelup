@@ -1680,16 +1680,30 @@ class MainWindow(QMainWindow):
     def _models_dialog_finished(self, dialog: ManagedModelsDialog) -> None:
         if self._active_models_dialog is dialog:
             self._active_models_dialog = None
+        # Closing ends only what the user never authorized. A queue action that
+        # needs missing models waits here as an offer to "Install and queue";
+        # dismissing that offer declines it, so it creates no jobs. A request whose
+        # every missing model is already installing needs nothing more from the
+        # user: it keeps waiting and queues once those installs succeed.
         retained = [
             pending for pending in self._pending_model_work
-            if self.model_manager.in_progress_for(pending.required_artifacts)
+            if self._installs_cover(pending.required_artifacts)
         ]
         if len(retained) != len(self._pending_model_work):
-            log.info("models.pending_work_abandoned")
+            log.info("models.pending_work_declined")
         self._pending_model_work = retained
         self._refresh_model_rollup()
         log.info("models.dialog_closed")
         dialog.deleteLater()
+
+    def _installs_cover(self, artifact_names: tuple[str, ...]) -> bool:
+        missing = self.model_manager.missing(artifact_names)
+        installing = {
+            name
+            for operation in self.model_manager.in_progress_for(missing)
+            for name in operation.artifact_names
+        }
+        return set(missing) <= installing
 
     def _model_manager_changed(self) -> None:
         if self._quit_bounded:

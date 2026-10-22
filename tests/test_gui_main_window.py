@@ -2730,21 +2730,112 @@ def test_cancelled_model_preserves_requests_for_other_models(make_window, tmp_pa
     assert [job.model for job in window.jobs] == [second]
 
 
-def test_dismissal_keeps_only_requests_with_active_downloads(make_window, tmp_path, monkeypatch):
+def _blocking_downloads(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, list[str]]:
+    release = threading.Event()
+    started: list[str] = []
+
+    def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
+        started.append(name)
+        assert release.wait(3)
+        model_file(models_dir, name).write_bytes(b"ready")
+        return {"status": "downloaded"}
+
+    monkeypatch.setattr("pixelup.model_manager.download_model", install)
+    return release, started
+
+
+def _finish_downloads(window, qapp: QApplication, release: threading.Event) -> None:
+    release.set()
+    deadline = time.monotonic() + 3
+    while not window.model_manager.cleanup_for_quit() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.001)
+    qapp.processEvents()
+    _settle_models(window)
+
+
+def _wait_for(qapp: QApplication, condition) -> None:
+    deadline = time.monotonic() + 2
+    while not condition() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.001)
+    assert condition()
+
+
+def test_closing_declines_only_requests_nobody_authorized(
+    make_window, qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     window = make_window()
     image = _png(tmp_path, "image.png")
     _open(window, [image])
     first, second = "RealESRGAN_x4plus", "RealESRGAN_x4plus_anime_6B"
     for model in (first, second):
         model_file(window.runtime_dirs.models_dir, model).unlink()
-        window._enqueue_jobs([image], [model])
-        _settle_models(window)
-    monkeypatch.setattr(
-        window.model_manager, "in_progress_for", lambda names: (object(),) if first in names else ()
-    )
-    window._active_models_dialog.reject()
-    assert len(window._pending_model_work) == 1
-    assert window._pending_model_work[0].required_artifacts == (first,)
+    release, started = _blocking_downloads(monkeypatch)
+    window._enqueue_jobs([image], [first])
+    _settle_models(window)
+    window._active_models_dialog._install_all_or_cancel()
+    _wait_for(qapp, lambda: started == [first])
+    # A second request needs a model nobody is installing: the footer offers to
+    # authorize it even while the first install runs, and closing declines it.
+    window._enqueue_jobs([image], [second])
+    _settle_models(window)
+    dialog = window._active_models_dialog
+    assert dialog.primary_button.text() == "Install and queue 2 jobs"
+    assert dialog.primary_button.isEnabled()
+
+    dialog.reject()
+    qapp.processEvents()
+    assert [pending.required_artifacts for pending in window._pending_model_work] == [(first,)]
+
+    _finish_downloads(window, qapp, release)
+    assert [job.model for job in window.jobs] == [first]
+    assert started == [first]
+
+
+def test_closing_keeps_requests_whose_installs_already_run(
+    make_window, qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = make_window()
+    first_image, second_image = _png(tmp_path, "a.png"), _png(tmp_path, "b.png")
+    _open(window, [first_image, second_image])
+    first, second = "RealESRGAN_x4plus", "RealESRGAN_x4plus_anime_6B"
+    for model in (first, second):
+        model_file(window.runtime_dirs.models_dir, model).unlink()
+    release, started = _blocking_downloads(monkeypatch)
+    window._enqueue_jobs([first_image], [first])
+    _settle_models(window)
+    window._active_models_dialog._install_all_or_cancel()
+    _wait_for(qapp, lambda: started == [first])
+    # The same model again needs nothing more from the user.
+    window._enqueue_jobs([second_image], [first])
+    _settle_models(window)
+    # A request for another model is authorized from the same footer.
+    window._enqueue_jobs([first_image], [second])
+    _settle_models(window)
+    dialog = window._active_models_dialog
+    dialog._install_all_or_cancel()
+    _wait_for(qapp, lambda: sorted(started) == sorted([first, second]))
+    assert dialog.primary_button.text() == "Cancel installation"
+    # Each running row offers its own Cancel on the preflight surface too.
+    running_rows = [
+        button for button in dialog.row_action_buttons if button.text() == "Cancel"
+    ]
+    assert len(running_rows) == 2
+    assert all(button.isEnabled() for button in running_rows)
+
+    dialog.reject()
+    qapp.processEvents()
+    assert window._active_models_dialog is None
+    assert len(window._pending_model_work) == 3
+    assert window.jobs == []
+    assert window.model_manager.in_progress_operations
+
+    _finish_downloads(window, qapp, release)
+    assert not window._pending_model_work
+    assert sorted((job.input_path.name, job.model) for job in window.jobs) == sorted([
+        ("a.png", first), ("b.png", first), ("a.png", second),
+    ])
 
 
 def test_hard_quit_bounds_a_native_qthread_wait() -> None:

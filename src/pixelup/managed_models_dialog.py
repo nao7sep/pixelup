@@ -246,14 +246,15 @@ class ManagedModelsDialog(DialogShell):
                     if in_progress.cancelling
                     else "managedModels.cancel",
                 )
-                action.setEnabled(not in_progress.cancelling and not self._required_artifacts)
+                action.setEnabled(not in_progress.cancelling)
             else:
                 localize(
                     action,
                     text="managedModels.reinstall" if ready == total else "managedModels.install",
                 )
                 # A queue-preflight surface has one exact authorization action in
-                # its footer. Its row actions remain visible only for orientation.
+                # its footer. Its row installs remain visible only for orientation;
+                # a running row still offers its own Cancel.
                 action.setEnabled(not self._required_artifacts)
             if self._required_artifacts:
                 localize(action, tooltip="managedModels.rowTooltipBatch")
@@ -290,7 +291,9 @@ class ManagedModelsDialog(DialogShell):
     def _render_primary_action(self) -> None:
         if self._required_artifacts:
             active = self._manager.in_progress_for(self._required_artifacts)
-            if active:
+            # A later request can need a model nobody is installing yet while an
+            # earlier request's install runs; the footer authorizes that first.
+            if active and not self._installable_required():
                 localize(
                     self.primary_button,
                     text="managedModels.cancelling"
@@ -303,23 +306,25 @@ class ManagedModelsDialog(DialogShell):
                 self.primary_button,
                 text=Message.of("managedModels.installAndQueue", count=self._pending_job_count),
             )
-            missing = self._manager.missing(self._required_artifacts)
-            self.primary_button.setEnabled(
-                bool(self._manager.available_to_install(missing))
-            )
+            self.primary_button.setEnabled(bool(self._installable_required()))
             return
 
         localize(self.primary_button, text="managedModels.installAll")
         missing = self._manager.missing(MANAGED_ARTIFACT_NAMES)
         self.primary_button.setEnabled(bool(self._manager.available_to_install(missing)))
 
+    def _installable_required(self) -> tuple[str, ...]:
+        return self._manager.available_to_install(self._manager.missing(self._required_artifacts))
+
     def _install_bundle(self, bundle_index: int) -> None:
-        if self._required_artifacts or not 0 <= bundle_index < len(MANAGED_MODEL_BUNDLES):
+        if not 0 <= bundle_index < len(MANAGED_MODEL_BUNDLES):
             return
         bundle = MANAGED_MODEL_BUNDLES[bundle_index]
         in_progress = self._manager.in_progress_for(bundle.artifact_names)
         if in_progress:
             self._manager.cancel(in_progress[0].id)
+            return
+        if self._required_artifacts:
             return
         self._with_saved_folder(lambda: self._install_bundle_in_current_folder(bundle_index))
 
@@ -329,7 +334,11 @@ class ManagedModelsDialog(DialogShell):
             if self._required_artifacts
             else MANAGED_ARTIFACT_NAMES
         )
-        if self._required_artifacts and self._manager.in_progress_for(targets):
+        if (
+            self._required_artifacts
+            and self._manager.in_progress_for(targets)
+            and not self._installable_required()
+        ):
             self._manager.cancel_for(targets)
             return
         self._with_saved_folder(
