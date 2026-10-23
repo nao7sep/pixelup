@@ -45,7 +45,6 @@ function Invoke-Native {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir = Split-Path -Parent $scriptDir
-$builtExecutable = Join-Path $repoDir "dist/PixelUp/PixelUp.exe"
 $runtimeToken = [guid]::NewGuid().ToString("N")
 
 try {
@@ -57,15 +56,16 @@ try {
 
     Write-Step "Replacing any existing PixelUp runtime"
     Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
-    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $builtExecutable
+    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -Token $runtimeToken
 
     Write-Step "Installing dependencies required for launch"
     Invoke-Native -FilePath "uv" -ArgumentList @("sync", "--extra", "dev")
 
     Write-Step "Starting PixelUp"
     # Forward any script arguments to the app, matching run-dev.command's `"$@"`.
-    $devProcess = Start-Process -FilePath (Get-Command "uv.exe").Source -ArgumentList (@("run", "--project", $repoDir, "pixelup") + $args) -NoNewWindow -PassThru
-    Wait-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $builtExecutable -TimeoutSeconds 120
+    $devProcess = Start-OwnedRuntime -RepoDir $repoDir -Token $runtimeToken -FilePath (Join-Path $repoDir ".venv/Scripts/python.exe") -ArgumentList (@("-m", "pixelup") + $args)
+    if ($null -eq $devProcess) { exit 0 }
+    Wait-OwnedRuntime -Label "PixelUp" -Process $devProcess -TimeoutSeconds 120
     Write-Step "PixelUp is ready"
     $devProcess.WaitForExit()
     if ($devProcess.ExitCode -notin @(0, 130, -1073741510)) {
@@ -79,7 +79,7 @@ catch {
 }
 finally {
     if (Test-LauncherRuntimeOwner -Token $runtimeToken -RepoDir $repoDir) {
-        Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $builtExecutable
+        Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -Token $runtimeToken -ReceiptToken $runtimeToken
         Release-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
         Read-Host "Press Enter to close" | Out-Null
     }

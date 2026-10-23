@@ -63,7 +63,7 @@ try {
     # happen before removing the distribution directory.
     Write-Step "Replacing any existing PixelUp runtime"
     Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
-    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $exePath
+    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -Token $runtimeToken
 
     Write-Step "Removing stale build output"
     # Clear output first so a build that fails to emit a file cannot be masked by a
@@ -88,10 +88,9 @@ try {
     if ($proc.ExitCode -ne 0) { throw "Frozen self-test failed (exit $($proc.ExitCode))" }
 
     Write-Step "Launching PixelUp"
-    # GUI app: launch non-blocking via Start-Process (the Windows counterpart to
-    # macOS `open`), so the console does not wait on the app's lifetime.
-    Start-Process -FilePath $exePath | Out-Null
-    Wait-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -ExecutableName "pixelup" -BuiltExecutable $exePath -TimeoutSeconds 30
+    $appProcess = Start-OwnedRuntime -RepoDir $repoDir -Token $runtimeToken -FilePath $exePath -ArgumentList $args
+    if ($null -eq $appProcess) { exit 0 }
+    Wait-OwnedRuntime -Label "PixelUp" -Process $appProcess -TimeoutSeconds 30
 }
 catch {
     Write-Host ""

@@ -6,7 +6,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-APP_EXECUTABLE="$REPO_DIR/dist/PixelUp.app/Contents/MacOS/PixelUp"
 RUNTIME_TOKEN="run-dev-$$-$(date +%s)-$RANDOM"
 source "$SCRIPT_DIR/launcher-runtime.sh"
 
@@ -34,7 +33,7 @@ cleanup() {
   local status="$?"
   trap - EXIT
   if is_launcher_runtime_owner "$RUNTIME_TOKEN" "$REPO_DIR"; then
-    stop_owned_runtime PixelUp "$REPO_DIR" pixelup "$APP_EXECUTABLE" >/dev/null 2>&1 || true
+    stop_owned_runtime PixelUp "$REPO_DIR" "$RUNTIME_TOKEN" "$RUNTIME_TOKEN" >/dev/null 2>&1 || true
     release_launcher_runtime "$RUNTIME_TOKEN" "$REPO_DIR"
   fi
   pause_on_failure "$status"
@@ -49,14 +48,18 @@ cd "$REPO_DIR"
 
 log_step "Replacing any existing PixelUp runtime"
 claim_launcher_runtime "$RUNTIME_TOKEN" "$REPO_DIR"
-stop_owned_runtime PixelUp "$REPO_DIR" pixelup "$APP_EXECUTABLE"
+stop_owned_runtime PixelUp "$REPO_DIR" "$RUNTIME_TOKEN"
 
 log_step "Installing dependencies required for launch"
 uv sync --extra dev
 
 log_step "Starting PixelUp"
-uv run --project "$REPO_DIR" pixelup "$@" &
-DEV_PID=$!
-wait_for_owned_runtime PixelUp "$REPO_DIR" pixelup "$APP_EXECUTABLE" 120
+start_owned_runtime "$REPO_DIR" "$RUNTIME_TOKEN" "$REPO_DIR/.venv/bin/python" -m pixelup "$@" || {
+  status=$?
+  [[ "$status" -eq 2 ]] && exit 0
+  exit "$status"
+}
+DEV_PID=$LAUNCHED_RUNTIME_PID
+wait_for_captured_runtime PixelUp "$DEV_PID" "$LAUNCHED_RUNTIME_IDENTITY" 120
 log_step "PixelUp is ready"
 wait "$DEV_PID"
