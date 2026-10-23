@@ -1,36 +1,13 @@
-from types import ModuleType
+import weakref
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from pixelup.errors import PixelupError
-from pixelup.inference import _assert_safe_torch_load, _build_network
+from pixelup.inference import InferenceConfig, _build_network
 from pixelup.model_registry import GENERAL_MODEL, model_info
 from pixelup.upscale import count_tiles
-
-
-def _fake_torch(version: str) -> ModuleType:
-    module = ModuleType("torch")
-    module.__version__ = version  # type: ignore[attr-defined]
-    return module
-
-
-def test_assert_safe_torch_load_rejects_pre_2_6() -> None:
-    # torch < 2.6 loaded weights with full unpickling by default; refuse it.
-    with pytest.raises(PixelupError) as excinfo:
-        _assert_safe_torch_load(_fake_torch("2.5.1"))
-    assert excinfo.value.code == "internal_error"
-
-
-def test_assert_safe_torch_load_accepts_2_6_and_newer() -> None:
-    # No raise == the safe-load floor is satisfied.
-    _assert_safe_torch_load(_fake_torch("2.6.0"))
-    _assert_safe_torch_load(_fake_torch("2.11.0+cpu"))
-
-
-def test_assert_safe_torch_load_tolerates_unparseable_version() -> None:
-    # An odd build string must not brick a legitimate install; the SHA-256 pin
-    # stays the primary protection.
-    _assert_safe_torch_load(_fake_torch("weird-build"))
 
 
 def test_count_tiles_matches_input_grid() -> None:
@@ -44,87 +21,6 @@ def test_build_network_uses_srvgg_architecture() -> None:
     result = _build_network(model_info(GENERAL_MODEL).architecture)
 
     assert isinstance(result, SRVGGNetCompact)
-
-
-def test_tile_reporting_upsampler_emits_per_tile_callback(capsys) -> None:
-    from pixelup.inference import _tile_reporting_upsampler_class
-
-    class _FakeImg:
-        shape = (1, 3, 512, 1024)
-
-    class _FakeBase:
-        def __init__(self) -> None:
-            self.img = _FakeImg()
-            self.tile_size = 512
-            self.model = lambda x: x
-            self.calls = 0
-
-        def tile_process(self) -> None:
-            tiles_x = (self.img.shape[3] + self.tile_size - 1) // self.tile_size
-            tiles_y = (self.img.shape[2] + self.tile_size - 1) // self.tile_size
-            for _ in range(tiles_x * tiles_y):
-                self.model("tile")
-                self.calls += 1
-                print("upstream tile progress")
-
-    cls = _tile_reporting_upsampler_class(_FakeBase)
-    upsampler = cls()
-    events: list[tuple[int, int]] = []
-    upsampler._pixelup_on_tile = lambda i, n: events.append((i, n))
-
-    upsampler.tile_process()
-
-    assert events == [(1, 2), (2, 2)]
-    assert upsampler.calls == 2
-    assert capsys.readouterr().out == ""
-
-
-def test_tile_reporting_upsampler_falls_back_when_shape_unexpected() -> None:
-    from pixelup.inference import _tile_reporting_upsampler_class
-
-    class _FakeBase:
-        def __init__(self) -> None:
-            self.img = object()  # no .shape attribute
-            self.tile_size = 512
-            self.model = lambda x: x
-            self.ran = False
-
-        def tile_process(self) -> None:
-            self.ran = True
-
-    cls = _tile_reporting_upsampler_class(_FakeBase)
-    upsampler = cls()
-    upsampler._pixelup_on_tile = lambda i, n: pytest.fail("should not be called")
-
-    upsampler.tile_process()
-
-    assert upsampler.ran is True
-
-
-def test_tile_reporting_upsampler_swallows_callback_exception() -> None:
-    from pixelup.inference import _tile_reporting_upsampler_class
-
-    class _FakeImg:
-        shape = (1, 3, 512, 512)
-
-    class _FakeBase:
-        def __init__(self) -> None:
-            self.img = _FakeImg()
-            self.tile_size = 512
-            self.model = lambda x: x
-
-        def tile_process(self) -> None:
-            self.model("tile")
-
-    cls = _tile_reporting_upsampler_class(_FakeBase)
-    upsampler = cls()
-
-    def bad_callback(i: int, n: int) -> None:
-        raise RuntimeError("boom")
-
-    upsampler._pixelup_on_tile = bad_callback
-
-    upsampler.tile_process()
 
 
 @pytest.mark.parametrize(
@@ -148,7 +44,7 @@ def test_running_out_of_memory_is_reported_with_what_to_change(monkeypatch, fail
 
     monkeypatch.setattr(inference, "_run_inference", exhausted)
     with pytest.raises(PixelupError) as caught:
-        inference.run_inference(None, None)  # type: ignore[arg-type]
+        inference.run_inference(SimpleNamespace(device="cpu"), None)  # type: ignore[arg-type]
     assert caught.value.code == ErrorCode.OUT_OF_MEMORY
     assert caught.value.hint == Message("error.hintOutOfMemory")
 
@@ -162,5 +58,85 @@ def test_another_runtime_failure_stays_an_inference_failure(monkeypatch) -> None
 
     monkeypatch.setattr(inference, "_run_inference", broken)
     with pytest.raises(PixelupError) as caught:
-        inference.run_inference(None, None)  # type: ignore[arg-type]
+        inference.run_inference(SimpleNamespace(device="cpu"), None)  # type: ignore[arg-type]
     assert caught.value.code == ErrorCode.INTERNAL_ERROR
+
+
+@pytest.mark.parametrize("stage", ["construct", "cancel", "enhance", "success"])
+def test_cache_cleanup_follows_tensor_lifetime(monkeypatch, tmp_path: Path, stage: str) -> None:
+    import torch
+
+    from pixelup import inference
+    from pixelup.errors import ErrorCode
+
+    config = InferenceConfig(
+        models_dir=tmp_path, model=GENERAL_MODEL, scale=4, tile=2, tile_pad=0,
+        pre_pad=0, fp32=True, denoise_strength=1, alpha_mode="bicubic",
+        gpu_id=None, device="cpu",
+    )
+    references = []
+    cleanup_devices = []
+
+    class Upsampler:
+        def __init__(self):
+            self.tensor = torch.zeros(1)
+            references.append(weakref.ref(self))
+            references.append(weakref.ref(self.tensor))
+            if stage == "construct":
+                raise RuntimeError("constructor diagnostic")
+
+        def enhance(self, *_args, **_kwargs):
+            tile = torch.zeros(1)
+            references.append(weakref.ref(tile))
+            if stage == "enhance":
+                raise RuntimeError("enhancement diagnostic")
+            return "output", "RGB"
+
+    checks = 0
+
+    def should_cancel():
+        nonlocal checks
+        checks += 1
+        return stage == "cancel" and checks == 2
+
+    def release(device):
+        assert references
+        assert all(reference() is None for reference in references)
+        cleanup_devices.append(device)
+
+    monkeypatch.setattr(inference, "_create_upsampler", lambda *_a, **_kw: Upsampler())
+    monkeypatch.setattr(inference, "_release_device_cache", release)
+    if stage == "success":
+        assert inference.run_inference(config, None, should_cancel=should_cancel) == "output"
+    else:
+        with pytest.raises(PixelupError) as caught:
+            inference.run_inference(config, None, should_cancel=should_cancel)
+        if stage == "cancel":
+            assert caught.value.code == ErrorCode.JOB_CANCELLED
+        else:
+            cause = caught.value.__cause__
+            assert isinstance(cause, RuntimeError)
+            assert "diagnostic" in str(cause)
+            assert cause.__traceback__ is not None
+            assert caught.value.details["reason"] == str(cause)
+    assert cleanup_devices == ["cpu"]
+
+
+def test_cleanup_failure_preserves_the_primary_error(monkeypatch) -> None:
+    from pixelup import inference
+    from pixelup.errors import ErrorCode
+
+    primary = PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+
+    def fail(*_args, **_kwargs):
+        raise primary
+
+    def cleanup(_device):
+        raise RuntimeError("cache diagnostic")
+
+    monkeypatch.setattr(inference, "_run_inference", fail)
+    monkeypatch.setattr(inference, "_release_device_cache", cleanup)
+    with pytest.raises(PixelupError) as caught:
+        inference.run_inference(SimpleNamespace(device="cpu"), None)
+    assert caught.value is primary
+    assert any("cache diagnostic" in note for note in caught.value.__notes__)

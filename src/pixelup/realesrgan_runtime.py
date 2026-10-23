@@ -34,6 +34,7 @@ from Real-ESRGAN 0.3.0 under the license above."""
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Any
 
 import cv2
@@ -41,6 +42,8 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.nn import functional as F
+
+from pixelup.errors import ErrorCode, PixelupError
 
 
 class RealESRGANer:
@@ -66,7 +69,11 @@ class RealESRGANer:
         half: bool = False,
         device: Any = None,
         gpu_id: int | None = None,
+        on_tile: Callable[[int, int], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> None:
+        self.on_tile = on_tile
+        self.should_cancel = should_cancel
         self.scale = scale
         self.tile_size = tile
         self.tile_pad = tile_pad
@@ -84,7 +91,7 @@ class RealESRGANer:
                 raise ValueError("model_path and dni_weight must have equal lengths")
             loadnet = self.dni(model_path[0], model_path[1], dni_weight)
         else:
-            loadnet = torch.load(model_path, map_location=torch.device("cpu"))
+            loadnet = torch.load(model_path, map_location=torch.device("cpu"), weights_only=True)
 
         keyname = "params_ema" if "params_ema" in loadnet else "params"
         model.load_state_dict(loadnet[keyname], strict=True)
@@ -100,8 +107,8 @@ class RealESRGANer:
         weights: list[float],
         key: str = "params",
     ) -> dict[str, Any]:
-        net_a = torch.load(net_a_path, map_location=torch.device("cpu"))
-        net_b = torch.load(net_b_path, map_location=torch.device("cpu"))
+        net_a = torch.load(net_a_path, map_location=torch.device("cpu"), weights_only=True)
+        net_b = torch.load(net_b_path, map_location=torch.device("cpu"), weights_only=True)
         for name, value_a in net_a[key].items():
             net_a[key][name] = weights[0] * value_a + weights[1] * net_b[key][name]
         return net_a
@@ -139,6 +146,8 @@ class RealESRGANer:
 
         for tile_y in range(tiles_y):
             for tile_x in range(tiles_x):
+                if self.should_cancel is not None and self.should_cancel():
+                    raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
                 offset_x = tile_x * self.tile_size
                 offset_y = tile_y * self.tile_size
                 input_start_x = offset_x
@@ -177,6 +186,13 @@ class RealESRGANer:
                     output_start_x,
                 )
                 del output_tile
+                if self.on_tile is not None:
+                    try:
+                        self.on_tile(tile_y * tiles_x + tile_x + 1, tiles_x * tiles_y)
+                    except PixelupError:
+                        raise
+                    except Exception:
+                        pass
 
     def _begin_output(self) -> None:
         """The output image at its final size: the padding added before inference
@@ -251,7 +267,7 @@ class RealESRGANer:
                         cv2.resize(
                             alpha,
                             (width * self.scale, height * self.scale),
-                            interpolation=cv2.INTER_LINEAR,
+                            interpolation=cv2.INTER_CUBIC,
                         )
                     )
                 )
@@ -290,4 +306,4 @@ def _tensor_to_rgb(tensor: torch.Tensor) -> np.ndarray[Any, Any]:
 
 
 def _quantize(pixels: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
-    return (pixels * 255.0).round().astype(np.uint8)
+    return (pixels.clip(0, 1) * 255.0).round().astype(np.uint8)

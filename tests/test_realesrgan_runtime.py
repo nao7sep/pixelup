@@ -1,5 +1,7 @@
+import pickle
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 import torch
@@ -141,3 +143,89 @@ def test_the_runtime_takes_only_8_bit_pixels(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError):
         upsampler.enhance(np.zeros((4, 4), dtype=np.uint16))
+
+
+@pytest.mark.parametrize("unsafe_path", ["single", "dni_a", "dni_b"])
+def test_checkpoint_loading_stays_safe_when_environment_changes_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsafe_path: str
+) -> None:
+    monkeypatch.setenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    monkeypatch.delenv("TORCH_FORCE_WEIGHTS_ONLY_LOAD", raising=False)
+    safe = tmp_path / "safe.pth"
+    unsafe = tmp_path / "unsafe.pth"
+    torch.save({"params": {}}, safe)
+    # A Path requires a pickle global; tensors and state dictionaries do not.
+    torch.save({"params": {}, "unexpected_global": Path("untrusted")}, unsafe)
+    model_path = str(unsafe)
+    if unsafe_path == "dni_a":
+        model_path = [str(unsafe), str(safe)]
+    elif unsafe_path == "dni_b":
+        model_path = [str(safe), str(unsafe)]
+    with pytest.raises(pickle.UnpicklingError, match="Weights only load failed"):
+        RealESRGANer(
+            scale=4, model_path=model_path, dni_weight=[0.5, 0.5],
+            model=_NearestModel(), device=torch.device("cpu"),
+        )
+
+
+def _runtime(tmp_path: Path, **kwargs) -> RealESRGANer:
+    model_path = tmp_path / "nearest.pth"
+    torch.save({"params": {}}, model_path)
+    return RealESRGANer(
+        scale=4, model_path=str(model_path), model=_NearestModel(),
+        tile=2, tile_pad=0, pre_pad=0, device=torch.device("cpu"), **kwargs,
+    )
+
+
+def test_tile_callback_reports_written_tiles_and_cancel_stops_next_tile(tmp_path: Path) -> None:
+    from pixelup.errors import ErrorCode, PixelupError
+
+    events = []
+    upsampler = _runtime(
+        tmp_path,
+        on_tile=lambda completed, total: events.append((completed, total)),
+        should_cancel=lambda: len(events) == 1,
+    )
+    upsampler.pre_process(np.ones((2, 4, 3), dtype=np.float32))
+    with pytest.raises(PixelupError) as caught:
+        upsampler.tile_process()
+    assert caught.value.code == ErrorCode.JOB_CANCELLED
+    assert events == [(1, 2)]
+    assert upsampler.output.getpixel((0, 0)) == (255, 255, 255)
+    assert upsampler.output.getpixel((8, 0)) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_tile_callback_error_policy(tmp_path: Path, structured: bool) -> None:
+    from pixelup.errors import ErrorCode, PixelupError
+
+    calls = []
+    failure = PixelupError(ErrorCode.JOB_CANCELLED, "callback cancelled") if structured else (
+        RuntimeError("callback diagnostic")
+    )
+
+    def callback(completed, total):
+        calls.append((completed, total))
+        raise failure
+
+    upsampler = _runtime(tmp_path, on_tile=callback)
+    image = np.full((2, 4, 3), 255, dtype=np.uint8)
+    if structured:
+        with pytest.raises(PixelupError) as caught:
+            upsampler.enhance(image)
+        assert caught.value is failure
+        assert calls == [(1, 2)]
+    else:
+        output, _ = upsampler.enhance(image)
+        assert calls == [(1, 2), (2, 2)]
+        assert output.getpixel((15, 0)) == (255, 255, 255)
+
+
+def test_bicubic_alpha_matches_clipped_cubic_reference(tmp_path: Path) -> None:
+    alpha = np.array([[0, 0, 255, 255], [255, 255, 0, 0]], dtype=np.uint8)
+    pixels = np.dstack((np.zeros((2, 4, 3), dtype=np.uint8), alpha))
+    output, _ = _runtime(tmp_path).enhance(pixels, alpha_upsampler="bicubic")
+    cubic = cv2.resize(alpha.astype(np.float32) / 255, (16, 8), interpolation=cv2.INTER_CUBIC)
+    assert cubic.min() < 0 and cubic.max() > 1  # clipping matters at the edge
+    expected = (cubic.clip(0, 1) * 255).round().astype(np.uint8)
+    assert np.array_equal(np.asarray(output.getchannel("A")), expected)
