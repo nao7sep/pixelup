@@ -365,3 +365,40 @@ def test_reader_primary_survives_failed_rollback_and_deadline_always_clears(
         assert reader._deadline is None
     finally:
         reader.close()
+
+
+def test_passive_refresh_is_bounded_and_explicit_paging_reaches_every_evicted_row(
+    database: Path, reader: RecordsReader,
+) -> None:
+    _seed(database, [{"time": _time(i)} for i in range(PAGE_SIZE * 2)])
+    first = reader.page(RecordsQuery(), None)
+    shown, more = list(first.records), first.more
+    for i in range(PAGE_SIZE * 2, PAGE_SIZE * 5):
+        _seed(database, [{"time": _time(i)}])
+        shown, more = merge_newest_page(shown, more, reader.page(RecordsQuery(), None))
+        assert len(shown) == PAGE_SIZE
+    while more:
+        page = reader.page(RecordsQuery(), cursor_after(shown))
+        shown.extend(page.records)
+        more = page.more
+    assert [row.id for row in shown] == list(range(PAGE_SIZE * 5, 0, -1))
+
+
+def test_newest_refresh_resets_disjoint_cache_instead_of_hiding_an_unread_gap() -> None:
+    shown = [_summary(i, _time(i)) for i in range(10, 0, -1)]
+    page = RecordsPage(tuple(_summary(i, _time(i)) for i in range(30, 20, -1)), True)
+    refreshed, more = merge_newest_page(shown, False, page)
+    assert refreshed == list(page.records)
+    assert more
+
+
+def test_passive_refresh_preserves_explicitly_extended_cache_size() -> None:
+    shown = [_summary(i, _time(i)) for i in range(PAGE_SIZE * 3, 0, -1)]
+    page = RecordsPage(
+        tuple(_summary(i, _time(i)) for i in range(PAGE_SIZE * 3 + 20, PAGE_SIZE * 2 + 20, -1)),
+        True,
+    )
+    refreshed, more = merge_newest_page(shown, False, page)
+    assert len(refreshed) == len(shown)
+    assert [row.id for row in refreshed] == list(range(PAGE_SIZE * 3 + 20, 20, -1))
+    assert more

@@ -423,35 +423,42 @@ def test_insert_and_rollback_failure_falls_back_with_primary_and_cleanup(
 
 
 def test_logging_never_waits_on_a_stuck_store(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The caller only queues the line; a store stuck in its write holds up no one,
-    # and the lines land in order once it moves again.
-    import time
-
+    # The caller finishes while the store is still held; queued lines land in
+    # order after the backing write is released.
     from pixelup import session_log
 
     database = configure_session_logging()
     assert flush_records(5)
     entered = threading.Event()
     release = threading.Event()
+    returned = threading.Event()
     handler = session_log._records_handler()
     real_insert = handler._insert
 
     def stuck_insert(entry: dict) -> None:
         entered.set()
-        assert release.wait(5)
+        release.wait()
         real_insert(entry)
 
-    monkeypatch.setattr(handler, "_insert", stuck_insert)
-    log.info("first.line")
-    assert entered.wait(5)
-    started = time.monotonic()
-    log.info("second.line")
-    log.info("third.line")
-    assert time.monotonic() - started < 1
-    assert flush_records(0.05) is False
+    def write_lines() -> None:
+        log.info("first.line")
+        log.info("second.line")
+        log.info("third.line")
+        returned.set()
 
-    release.set()
-    assert flush_records(5)
+    monkeypatch.setattr(handler, "_insert", stuck_insert)
+    caller = threading.Thread(target=write_lines)
+    caller.start()
+    try:
+        assert entered.wait(10), "the backing write never started"
+        assert returned.wait(10), "logging waited for the held backing write"
+        assert not release.is_set()
+        assert flush_records(0) is False
+    finally:
+        release.set()
+        caller.join(10)
+        assert not caller.is_alive()
+        assert flush_records(5)
     assert [entry["message"] for entry in _records(database)][-3:] == [
         "first.line",
         "second.line",
