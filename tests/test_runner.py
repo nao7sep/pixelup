@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 import subprocess
 import sys
@@ -276,9 +277,9 @@ def test_admitted_jobs_replace_old_models_folder_capture(
 ) -> None:
     jobs = [_make_job(i, tmp_path) for i in (1, 2)]
     workers: list[_HeldResultWorker] = []
-    original = RuntimeDirs(tmp_path / "original", tmp_path / "temp")
-    accepted = RuntimeDirs(tmp_path / "accepted", tmp_path / "temp")
-    replacement = RuntimeDirs(tmp_path / "replacement", tmp_path / "temp")
+    original = RuntimeDirs(tmp_path / "original")
+    accepted = RuntimeDirs(tmp_path / "accepted")
+    replacement = RuntimeDirs(tmp_path / "replacement")
 
     def make_worker(job: Job, runtime_dirs: RuntimeDirs | None = None) -> _HeldResultWorker:
         worker = _HeldResultWorker(job, runtime_dirs)
@@ -597,8 +598,9 @@ def _publish_fixture(path: Path, data: bytes) -> PublishedFile:
 
 
 def _worker_with_real_image_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> JobWorker:
+    from imaging_support import image_from_bgr_array
+
     from pixelup import inference
-    from pixelup.imaging import image_from_bgr_array
 
     job = _make_job(81, tmp_path)
     job.model = "RealESRGAN_x4plus"
@@ -613,16 +615,23 @@ def _worker_with_real_image_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyP
                         SimpleNamespace(
                             enhance=lambda pixels, **kwargs: (image_from_bgr_array(pixels), None)
                         ))
-    return JobWorker(job, RuntimeDirs(models, tmp_path / "temp"))
+    return JobWorker(job, RuntimeDirs(models))
 
 
 @pytest.mark.parametrize("boundary", ["encode", "sidecar"])
+@pytest.mark.parametrize("hard_links", [True, False])
 def test_worker_cancel_during_real_writes_removes_owned_output(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str,
+    hard_links: bool,
 ) -> None:
+    if not hard_links:
+        def unsupported(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        monkeypatch.setattr("pixelup.output_publication.os.link", unsupported)
     worker = _worker_with_real_image_pipeline(tmp_path, monkeypatch)
     finished, _ = _capture_worker(worker)
     sidecar = worker.job.output_path.with_suffix(".json")
+    boundaries = []
     files_at_completion = []
     worker.signals.finished.connect(lambda *args: files_at_completion.append(
         (worker.job.output_path.exists(), sidecar.exists())
@@ -632,6 +641,7 @@ def test_worker_cancel_during_real_writes_removes_owned_output(
 
         def cancel_in_encoder(self, file, **kwargs):
             original(self, file, **kwargs)
+            boundaries.append("encode")
             worker.request_cancel()
 
         monkeypatch.setattr(Image.Image, "save", cancel_in_encoder)
@@ -640,7 +650,12 @@ def test_worker_cancel_during_real_writes_removes_owned_output(
 
         def cancel_in_sidecar(descriptor):
             original_fsync(descriptor)
-            if sidecar.exists():
+            if worker.job.output_path.exists():
+                assert not sidecar.exists()
+                stages = list(tmp_path.glob("pixelup-*.tmp"))
+                assert len(stages) == 1
+                assert json.loads(stages[0].read_bytes())["status"] == "success"
+                boundaries.append("sidecar")
                 worker.request_cancel()
 
         monkeypatch.setattr(os, "fsync", cancel_in_sidecar)
@@ -649,6 +664,7 @@ def test_worker_cancel_during_real_writes_removes_owned_output(
 
     assert len(finished) == 1
     assert finished[0][1:4] == (False, "Cancelled", {"cancelled": True})
+    assert boundaries == [boundary]
     assert files_at_completion == [(False, False)]
     assert not worker.job.output_path.exists()
     assert not sidecar.exists()
@@ -656,31 +672,45 @@ def test_worker_cancel_during_real_writes_removes_owned_output(
 
 
 @pytest.mark.parametrize("replacement", ["image", "sidecar"])
+@pytest.mark.parametrize("hard_links", [True, False])
 def test_worker_cancel_before_commit_preserves_replacement_winner(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str,
+    hard_links: bool,
 ) -> None:
+    from pixelup import sidecar as sidecar_module
+
+    if not hard_links:
+        def unsupported(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        monkeypatch.setattr("pixelup.output_publication.os.link", unsupported)
     worker = _worker_with_real_image_pipeline(tmp_path, monkeypatch)
     finished, _ = _capture_worker(worker)
     sidecar = worker.job.output_path.with_suffix(".json")
     target = worker.job.output_path if replacement == "image" else sidecar
-    original_fsync = os.fsync
+    original_publish = sidecar_module.publish_complete
+    boundaries = []
 
-    def cancel_and_replace(descriptor):
-        original_fsync(descriptor)
-        if sidecar.exists():
-            winner = tmp_path / "winner"
-            winner.write_bytes(b"replacement-winner")
-            winner.replace(target)
-            worker.request_cancel()
+    def publish_then_cancel_and_replace(stage, target_path):
+        claim = original_publish(stage, target_path)
+        assert target_path == sidecar
+        assert json.loads(sidecar.read_bytes())["status"] == "success"
+        winner = tmp_path / "winner"
+        winner.write_bytes(b"replacement-winner")
+        winner.replace(target)
+        boundaries.append("published")
+        worker.request_cancel()
+        return claim
 
-    monkeypatch.setattr(os, "fsync", cancel_and_replace)
+    monkeypatch.setattr(sidecar_module, "publish_complete", publish_then_cancel_and_replace)
     worker.run()
 
     assert len(finished) == 1
     assert finished[0][1:4] == (False, "Cancelled", {"cancelled": True})
+    assert boundaries == ["published"]
     assert target.read_bytes() == b"replacement-winner"
     other = sidecar if replacement == "image" else worker.job.output_path
     assert not other.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_worker_cancel_after_bundle_commit_keeps_success(
@@ -756,7 +786,7 @@ def test_worker_rejects_occupied_output_before_inference(
 
     monkeypatch.setattr(
         "pixelup.runner.resolve_runtime_dirs",
-        lambda: SimpleNamespace(temp_dir=tmp_path / "temp"),
+        lambda: SimpleNamespace(),
     )
     monkeypatch.setattr("pixelup.runner.run_upscale", _upscale)
     worker = JobWorker(job)
@@ -1030,7 +1060,7 @@ def test_every_upscale_model_enlarges_a_corpus_photo_faithfully(
     )
     runner = JobRunner(
         jobs,
-        runtime_dirs=RuntimeDirs(models_dir=heavy_models_dir, temp_dir=tmp_path / "temp"),
+        runtime_dirs=RuntimeDirs(models_dir=heavy_models_dir),
     )
     outcomes: dict[int, tuple[bool, str, object]] = {}
     runner.finished.connect(
@@ -1065,8 +1095,8 @@ def test_folder_switch_keeps_accepted_jobs_on_original_folder(
 ):
     first, second, later = (_make_job(i, tmp_path) for i in range(1, 4))
     jobs = [first, second]
-    original = RuntimeDirs(tmp_path / "old", tmp_path / "temp")
-    replacement = RuntimeDirs(tmp_path / "new", tmp_path / "temp")
+    original = RuntimeDirs(tmp_path / "old")
+    replacement = RuntimeDirs(tmp_path / "new")
     runner = JobRunner(jobs, runtime_dirs=original)
     observed = {}
 

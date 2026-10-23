@@ -6,12 +6,12 @@ from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
+from config_support import load_app_config
 
 from pixelup.app_config import (
     AppConfig,
     ConfigSaveResult,
     config_log_payload,
-    load_app_config,
     load_app_config_result,
     save_app_config,
 )
@@ -766,3 +766,54 @@ def test_display_zone_is_saved_and_preserved_when_this_computer_lacks_it(tmp_pat
     assert rejected.config.display_zone == "system"
     save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.file)
     assert json.loads(path.read_text())["display_zone"] == "Mars/Olympus_Mons"
+
+
+def test_published_save_returns_new_state_with_its_durability_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pixelup import config as config_module
+
+    path = tmp_path / "config.json"
+    path.write_text('{"format_version": 1, "language": "ja"}', encoding="utf-8")
+    initial = load_app_config_result(path)
+    candidate = replace(initial.config, language="de", max_concurrent_jobs=3)
+    warning = OSError("directory sync failed after publication")
+
+    def fail_directory_sync(_path: Path) -> None:
+        # The warning arises only after the complete new file is already visible.
+        assert json.loads(path.read_text(encoding="utf-8"))["language"] == "de"
+        raise warning
+
+    monkeypatch.setattr(config_module, "_sync_directory", fail_directory_sync)
+    monkeypatch.setattr("pixelup.backup_store.record", lambda *_args: None)
+    saved = save_app_config(candidate, initial.config, initial.file)
+
+    assert saved.config == candidate
+    assert saved.durability_warning is warning
+    assert saved.file.path == path
+    assert saved.file.exists
+    assert saved.file.data == json.loads(path.read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "language": "de",
+        "max_concurrent_jobs": 3,
+    }
+    assert load_app_config_result(path).config == candidate
+    # The caller can continue from the published state without attempting the
+    # same write again or treating its warning as a failed save.
+    unchanged = save_app_config(saved.config, saved.config, saved.file)
+    assert unchanged.config == candidate
+    assert unchanged.file == saved.file
+    assert unchanged.durability_warning is None
+
+
+def test_successful_save_returns_no_durability_warning(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    initial = load_app_config_result(path)
+    candidate = replace(initial.config, language="ja")
+
+    saved = save_app_config(candidate, initial.config, initial.file)
+
+    assert saved.durability_warning is None
+    assert saved.config == candidate
+    assert saved.file.exists
+    assert load_app_config(path) == candidate

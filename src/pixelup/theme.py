@@ -23,19 +23,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPalette, QPen, QPixmap, QPolygon, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
     QProxyStyle,
+    QScrollArea,
+    QScrollBar,
     QStyle,
     QStyleHintReturn,
     QStyleOption,
+    QStyleOptionComplex,
+    QStyleOptionSlider,
     QWidget,
 )
 
 from pixelup.config import resolve_state_dir
 from pixelup.fonts import DEFAULT_UI_FONT_SIZE
+from pixelup.ui_common import apply_palette_fixes
 
 
 class PixelupStyle(QProxyStyle):
@@ -43,6 +48,29 @@ class PixelupStyle(QProxyStyle):
 
     def __init__(self) -> None:
         super().__init__("Fusion")
+
+    def drawComplexControl(  # noqa: N802 - Qt override name
+        self,
+        control: QStyle.ComplexControl,
+        option: QStyleOptionComplex,
+        painter: QPainter,
+        widget: QWidget | None = None,
+    ) -> None:
+        if (
+            control == QStyle.ComplexControl.CC_ScrollBar
+            and isinstance(option, QStyleOptionSlider)
+            and isinstance(widget, QScrollBar)
+        ):
+            owner = widget.parentWidget()
+            while owner is not None and not isinstance(owner, QScrollArea):
+                owner = owner.parentWidget()
+            if owner is not None and owner.hasFocus():
+                # A passive text region marks keyboard focus on its thumb. Use
+                # Fusion's existing hover paint, with no frame around the body.
+                option = QStyleOptionSlider(option)
+                option.state |= QStyle.StateFlag.State_MouseOver
+                option.activeSubControls |= QStyle.SubControl.SC_ScrollBarSlider
+        super().drawComplexControl(control, option, painter, widget)
 
     def styleHint(  # noqa: N802 - Qt override name
         self,
@@ -304,13 +332,15 @@ def write_control_marks(palette: QPalette, directory: Path) -> dict[str, Path] |
     """
     try:
         directory.mkdir(parents=True, exist_ok=True)
+        # Qt caches stylesheet images by path. A changed colour needs a new path
+        # even when the OS only changes the accent within the same light/dark theme.
         suffix = "dark" if is_dark(palette) else "light"
         marks: dict[str, Path] = {}
         states = (("", QPalette.ColorRole.Text), ("-disabled", QPalette.ColorRole.PlaceholderText))
         for name, pointing_down in (("down", True), ("up", False)):
             for state, role in states:
                 colour = palette.color(role)
-                path = directory / f"arrow-{name}{state}-{suffix}.png"
+                path = directory / f"arrow-{name}{state}-{suffix}-{colour.rgba():08x}.png"
                 if not _arrow_pixmap(colour, pointing_down=pointing_down).save(str(path), "PNG"):
                     return None
                 marks[f"{name}{state}"] = path
@@ -322,7 +352,7 @@ def write_control_marks(palette: QPalette, directory: Path) -> dict[str, Path] |
         ink_disabled = QColor(accent_disabled(palette)["ink"])
         for name, draw in (("check", _check_pixmap), ("radio", _dot_pixmap)):
             for state, colour in (("", ink), ("-disabled", ink_disabled)):
-                path = directory / f"{name}{state}-{suffix}.png"
+                path = directory / f"{name}{state}-{suffix}-{colour.rgba():08x}.png"
                 if not draw(colour).save(str(path), "PNG"):
                     return None
                 marks[f"{name}{state}"] = path
@@ -739,7 +769,58 @@ QFrame[frameShape="4"], QFrame[frameShape="5"] {{
 
 
 def apply_theme(app: QApplication, cache_dir: Path | None = None) -> None:
-    """Install the app-wide sheet. Call once, after the palette is settled."""
+    """Rebuild the app-wide sheet and raster marks from the current palette."""
     directory = cache_dir if cache_dir is not None else resolve_state_dir() / "ui-marks"
     marks = write_control_marks(app.palette(), directory)
     app.setStyleSheet(build_stylesheet(app.palette(), marks))
+
+
+class _LiveTheme(QObject):
+    """Own one deferred refresh after Qt finishes replacing its platform palette."""
+
+    def __init__(self, app: QApplication, cache_dir: Path | None) -> None:
+        super().__init__(app)
+        self._app = app
+        self._cache_dir = cache_dir
+        self._refreshing = False
+        self._applied: QPalette | None = None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._refresh)
+        app.installEventFilter(self)
+        self._refresh()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            watched is self._app
+            and event.type() in (QEvent.Type.ApplicationPaletteChange, QEvent.Type.ThemeChange)
+            and not self._refreshing
+            and not self._timer.isActive()
+        ):
+            # The theme notification can precede Qt's palette update. Reading in
+            # the next event-loop turn also coalesces its palette/theme burst.
+            self._timer.start(0)
+        return False
+
+    def _refresh(self) -> None:
+        if self._app.palette() == self._applied:
+            return
+        self._refreshing = True
+        try:
+            # Correct only the two derived roles. Keeping Qt's resolve mask on
+            # all other roles lets subsequent native palette updates replace
+            # their colours instead of pinning a snapshot of the previous theme.
+            apply_palette_fixes(self._app)
+            apply_theme(self._app, self._cache_dir)
+            self._applied = self._app.palette()
+        finally:
+            self._refreshing = False
+
+
+def install_live_theme(app: QApplication, cache_dir: Path | None = None) -> _LiveTheme:
+    """Install once at startup; QApplication owns the observer and its queued work."""
+    owner = getattr(app, "_pixelup_live_theme", None)
+    if owner is None:
+        owner = _LiveTheme(app, cache_dir)
+        app._pixelup_live_theme = owner
+    return owner

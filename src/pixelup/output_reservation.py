@@ -77,19 +77,6 @@ def remove_published_file(published: PublishedFile) -> bool:
     return removed
 
 
-def close_published_file(path: Path, descriptor: int) -> PublishedFile:
-    """The claim on ``path`` for the descriptor that created it, which is then closed.
-
-    Called once the bytes are written, written or failed: an exFAT or FAT file id
-    changes when the first bytes are (storage-path-conventions).
-    """
-    try:
-        current = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    return PublishedFile(path, current.st_dev, current.st_ino)
-
-
 def _bundle_entries(output_path: Path) -> list[Path]:
     stem_identity = normalized_name(output_path.stem)
     try:

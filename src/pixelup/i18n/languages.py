@@ -68,11 +68,6 @@ def name_key(tag: str) -> str:
     return _NAME_KEYS[tag]
 
 
-def name_of(tag: str) -> str:
-    """The name ``tag`` is shown under, or the tag itself outside the set."""
-    return dict(LANGUAGES).get(tag, tag)
-
-
 def is_preference(value: object) -> bool:
     """Whether ``value`` is a preference Settings offers: System or a tag in the set."""
     return isinstance(value, str) and value in (SYSTEM, *TAGS)

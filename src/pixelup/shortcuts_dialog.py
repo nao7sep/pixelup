@@ -31,6 +31,7 @@ class ShortcutsDialog(DialogShell):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("shortcuts.title", parent, width=FORM_WIDTH)
+        self.enable_keyboard_scrolling()
 
         introduction = localize(secondary_label(""), text="shortcuts.introduction")
         self.body_layout.addWidget(introduction)

@@ -154,17 +154,23 @@ class SettingsDialog(DialogShell):
         # field it explains. Row labels top-align to sit beside the control, not
         # the caption.
         label_align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        def field_label(control: QWidget, key: str) -> QLabel:
+            label = localize(QLabel(), text=key)
+            label.setBuddy(control)
+            localize(control, accessible_name=key)
+            return label
+
         row = 0
-        form.addWidget(localize(QLabel(), text="settings.language"), row, 0)
+        form.addWidget(field_label(self.language, "settings.language"), row, 0)
         form.addWidget(self.language, row, 1, Qt.AlignmentFlag.AlignLeft)
         row += 1
-        form.addWidget(localize(QLabel(), text="settings.timeZone"), row, 0)
+        form.addWidget(field_label(self.display_zone, "settings.timeZone"), row, 0)
         form.addWidget(self.display_zone, row, 1, Qt.AlignmentFlag.AlignLeft)
         row += 1
-        form.addWidget(localize(QLabel(), text="settings.uiFont"), row, 0, label_align)
+        form.addWidget(field_label(self.font_family, "settings.uiFont"), row, 0, label_align)
         form.addWidget(_captioned(self.font_family, "settings.uiFontCaption"), row, 1)
         row += 1
-        form.addWidget(localize(QLabel(), text="settings.concurrentJobs"), row, 0)
+        form.addWidget(field_label(self.concurrent, "settings.concurrentJobs"), row, 0)
         form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)
         form.setColumnStretch(0, 0)
         form.setColumnStretch(1, 0)
@@ -212,13 +218,16 @@ class SettingsDialog(DialogShell):
         Constructing one here would silently reset the panel to its built-ins every time
         the user pressed OK on a font change.
         """
-        return replace(
-            self._initial,
-            max_concurrent_jobs=self.concurrent.value(),
-            font_family=single_line(self.font_family.text()),
-            language=self.language.currentData(),
-            display_zone=self.display_zone.currentData(),
-        )
+        return replace(self._initial, **self.edits())
+
+    def edits(self) -> dict[str, object]:
+        """The values authored by this dialog, also defining its save scope."""
+        return {
+            "max_concurrent_jobs": self.concurrent.value(),
+            "font_family": single_line(self.font_family.text()),
+            "language": self.language.currentData(),
+            "display_zone": self.display_zone.currentData(),
+        }
 
     def is_dirty(self) -> bool:
         return self.config() != self._initial

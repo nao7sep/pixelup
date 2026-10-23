@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFocusEvent, QKeyEvent
 from PySide6.QtWidgets import (
+    QAbstractSlider,
     QApplication,
     QDialog,
     QFrame,
@@ -47,6 +49,43 @@ TABLE_WIDTH = 880
 # NOTICE_WIDTH because the two dialogs' content no longer calls for the same
 # width.
 ABOUT_WIDTH = 390
+
+
+class _BodyScrollArea(QScrollArea):
+    """Passive reference bodies can opt into keys without taking children's keys."""
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt override
+        if self.hasFocus():
+            modifiers = event.modifiers()
+            key = event.key()
+            actions = {
+                Qt.Key.Key_Up: QAbstractSlider.SliderAction.SliderSingleStepSub,
+                Qt.Key.Key_Down: QAbstractSlider.SliderAction.SliderSingleStepAdd,
+                Qt.Key.Key_PageUp: QAbstractSlider.SliderAction.SliderPageStepSub,
+                Qt.Key.Key_PageDown: QAbstractSlider.SliderAction.SliderPageStepAdd,
+                Qt.Key.Key_Home: QAbstractSlider.SliderAction.SliderToMinimum,
+                Qt.Key.Key_End: QAbstractSlider.SliderAction.SliderToMaximum,
+            }
+            action = actions.get(key) if modifiers == Qt.KeyboardModifier.NoModifier else None
+            if key == Qt.Key.Key_Space:
+                if modifiers == Qt.KeyboardModifier.NoModifier:
+                    action = QAbstractSlider.SliderAction.SliderPageStepAdd
+                elif modifiers == Qt.KeyboardModifier.ShiftModifier:
+                    action = QAbstractSlider.SliderAction.SliderPageStepSub
+            if action is not None:
+                self.verticalScrollBar().triggerAction(action)
+                event.accept()
+                return
+        # Keys ignored by a descendant must not become parent scrolling.
+        event.ignore()
+
+    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt override
+        super().focusInEvent(event)
+        self.verticalScrollBar().update()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt override
+        super().focusOutEvent(event)
+        self.verticalScrollBar().update()
 
 
 class DialogShell(QDialog):
@@ -103,12 +142,9 @@ class DialogShell(QDialog):
         )
         self.body_layout.setSpacing(DIALOG_SPACING)
 
-        # The body takes no focus of its own. It reaches the dialog's own edges, so
-        # any focus treatment it carried would draw a second border just inside the
-        # window — which is what a scroll region that was also a focus target did
-        # here. The controls inside it keep their own focus, as they do in the
-        # Avalonia apps, whose dialog bodies are not focus targets either.
-        self.body_scroll = QScrollArea()
+        # Forms leave focus with their controls. Passive reference bodies opt in
+        # to keyboard scrolling without adding a frame around the region.
+        self.body_scroll = _BodyScrollArea()
         self.body_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.body_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.body_scroll.setWidgetResizable(True)
@@ -141,6 +177,10 @@ class DialogShell(QDialog):
     def body(self) -> QWidget:
         """The widget inside the scroll region: everything but the footer band."""
         return self._body
+
+    def enable_keyboard_scrolling(self) -> None:
+        """Make a passive body reachable by Tab; its footer keeps initial focus."""
+        self.body_scroll.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def add_footer_widget(self, widget: QWidget) -> None:
         """Append an action to the footer band, left to right."""

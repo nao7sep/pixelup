@@ -330,5 +330,11 @@
   "units.kilobytes": "{value} KB",
   "units.megabytes": "{value} MB",
   "warning.extensionMismatch": "Die Endung „.{extension}“ des Ausgabepfads passt nicht zum gewählten Format „{format}“.",
-  "warning.scaleMismatch": "Das Modell „{model}“ ist auf {native}x trainiert, gewählt ist aber {scale}x; Real-ESRGAN skaliert die Ausgabe entsprechend um."
+  "warning.scaleMismatch": "Das Modell „{model}“ ist auf {native}x trainiert, gewählt ist aber {scale}x; Real-ESRGAN skaliert die Ausgabe entsprechend um.",
+  "preview.loading": "Vorschau wird geladen\u00a0…",
+  "images.opening": "Bilder werden geöffnet\u00a0…",
+  "error.webpDimensions": "Die WebP-Ausgabe darf weder in der Breite noch in der Höhe {maximum} Pixel überschreiten. Wählen Sie einen kleineren Skalierungsfaktor oder ein anderes Format.",
+  "models.readinessFailed": "Die Modelldateien konnten nicht geprüft werden. Öffnen Sie „Verwaltete Modelle“, um es erneut zu versuchen.",
+  "managedModels.readinessFailed": "Die Modelldateien konnten nicht geprüft werden. Prüfen Sie den Ordner und seine Zugriffsrechte und öffnen Sie dann „Verwaltete Modelle“ erneut, um es noch einmal zu versuchen.",
+  "notice.configDurabilityUnconfirmed": "Die Einstellungen wurden gespeichert, aber ihre dauerhafte Speicherung konnte nicht bestätigt werden. Bei einem Stromausfall können sie verloren gehen."
 }

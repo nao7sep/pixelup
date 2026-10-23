@@ -9,11 +9,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from config_support import load_app_config
+from localization_support import speaking
 from PySide6.QtCore import QLibraryInfo, QLocale
 
 from pixelup.app_config import (
     AppConfig,
-    load_app_config,
     load_app_config_result,
     save_app_config,
 )
@@ -22,10 +23,6 @@ from pixelup.i18n import bootstrap, languages, localizer, plural
 from pixelup.i18n.bootstrap import read_computer_languages as _real_read_computer_languages
 from pixelup.i18n.message import Message, join
 from pixelup.i18n.translator import Translator
-
-
-def test_a_tag_outside_the_set_is_shown_as_itself() -> None:
-    assert languages.name_of("xx-Unknown") == "xx-Unknown"
 
 
 @pytest.mark.parametrize(
@@ -170,7 +167,7 @@ def test_a_failure_logs_english_and_shows_the_readers_language() -> None:
         Message.of("error.modelMissing", model="x4plus"),
         hint=Message("error.hintInstallModel"),
     )
-    with localizer.speaking("ja"):
+    with speaking("ja"):
         assert str(error).startswith("Model 'x4plus' is not present")
         assert localizer.of(error.message) == "モデル「x4plus」がモデルフォルダーにありません。"
 
@@ -183,7 +180,7 @@ def test_a_language_change_is_announced_and_restored(qapp) -> None:
 
     localizer.changed.connect(hear)
     try:
-        with localizer.speaking("fr"):
+        with speaking("fr"):
             assert localizer.t("quit.quit") == "Quitter"
             assert QLocale().language() == QLocale.Language.French
         assert localizer.language() == "en"

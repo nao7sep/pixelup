@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -47,6 +48,12 @@ BUILDERS = {
 @pytest.fixture(params=sorted(BUILDERS))
 def dialog(request: pytest.FixtureRequest, qapp: QApplication) -> Iterator[DialogShell]:
     surface = BUILDERS[request.param]()
+    if isinstance(surface, ManagedModelsDialog):
+        # Geometry assertions compare the same loaded state before and after show.
+        deadline = time.monotonic() + 5
+        while not surface._manager.readiness_known:
+            assert time.monotonic() < deadline
+            qapp.processEvents()
     yield surface
     surface.close()
     surface.deleteLater()
@@ -164,12 +171,14 @@ def test_the_scroll_bar_never_takes_a_column_out_of_the_body(
     assert dialog.body_scroll.horizontalScrollBar().isVisible() is False
 
 
-def test_no_dialog_body_is_a_focus_target(dialog: DialogShell) -> None:
-    # The body reaches the dialog's own edges, so any focus treatment it carried
-    # would draw a second border just inside the window — which is exactly what a
-    # scroll region that was also a focus target drew here. The controls inside
-    # keep their own focus; the region itself takes none.
-    assert dialog.body_scroll.focusPolicy() == Qt.FocusPolicy.NoFocus
+def test_only_opted_in_reference_bodies_are_focus_targets(dialog: DialogShell) -> None:
+    expected = (
+        Qt.FocusPolicy.StrongFocus
+        if isinstance(dialog, (ParametersHelpDialog, ShortcutsDialog))
+        else Qt.FocusPolicy.NoFocus
+    )
+    assert dialog.body_scroll.focusPolicy() == expected
+    assert dialog.body_scroll.frameShape() == QFrame.Shape.NoFrame
 
 
 def test_every_dialog_opens_on_a_control_it_chose(
@@ -185,3 +194,45 @@ def test_every_dialog_opens_on_a_control_it_chose(
     assert focused is not None, "nothing takes focus when this dialog opens"
     assert focused is not dialog.body_scroll
     assert dialog.isAncestorOf(focused)
+
+
+def test_opted_in_body_preserves_descendant_editing_keys(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QLineEdit, QPushButton, QSpinBox
+
+    dialog = DialogShell("help.title", width=FORM_WIDTH, body_height_limit=160)
+    dialog.enable_keyboard_scrolling()
+    field = QLineEdit("alpha beta")
+    number = QSpinBox()
+    number.setValue(4)
+    dialog.body_layout.addWidget(field)
+    dialog.body_layout.addWidget(number)
+    for _ in range(12):
+        dialog.body_layout.addWidget(QLabel("Reference text"))
+    close = QPushButton("Close")
+    close.clicked.connect(dialog.reject)
+    dialog.add_footer_widget(close)
+    dialog.set_initial_focus(close)
+    dialog.fit()
+    try:
+        dialog.show()
+        dialog.activateWindow()
+        qapp.processEvents()
+        field.setFocus()
+        bar = dialog.body_scroll.verticalScrollBar()
+        bar.setValue(0)
+        QTest.keyClick(field, Qt.Key.Key_End)
+        assert field.cursorPosition() == len(field.text())
+        QTest.keyClick(field, Qt.Key.Key_Home)
+        assert field.cursorPosition() == 0
+        QTest.keyClick(field, Qt.Key.Key_Space)
+        assert field.text() == " alpha beta"
+        QTest.keyClick(field, Qt.Key.Key_PageDown)
+        assert bar.value() == 0
+        number.setFocus()
+        bar.setValue(0)
+        QTest.keyClick(number, Qt.Key.Key_Up)
+        assert number.value() == 5
+        assert bar.value() == 0
+    finally:
+        dialog.close()
+        dialog.deleteLater()

@@ -437,3 +437,179 @@ def test_a_collection_keeps_its_square_contents_inside_its_rounded_edge() -> Non
     assert "background-color: transparent;" in section
     inner_radius = theme.RADIUS - theme.BORDER_WIDTH
     assert theme.COLLECTION_INSET >= inner_radius * (1 - 1 / math.sqrt(2))
+
+
+def test_live_theme_waits_for_palette_settlement_and_coalesces(
+    qapp: QApplication, tmp_path, monkeypatch
+) -> None:
+    from PySide6.QtCore import QEvent
+    from shiboken6 import delete
+
+    applied = []
+    original = theme.apply_theme
+
+    def record(app, cache_dir):
+        original(app, cache_dir)
+        applied.append(app.palette())
+
+    monkeypatch.setattr(theme, "apply_theme", record)
+    qapp.setPalette(LIGHT)
+    owner = theme._LiveTheme(qapp, tmp_path)
+    try:
+        before = qapp.styleSheet()
+        QApplication.sendEvent(qapp, QEvent(QEvent.Type.ThemeChange))
+        for _ in range(4):
+            QApplication.sendEvent(qapp, QEvent(QEvent.Type.ApplicationPaletteChange))
+        dark = QPalette(DARK)
+        dark.setColor(QPalette.ColorRole.Accent, QColor("#d36a35"))
+        dark.setColor(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText, QColor("#fafafa"))
+        dark.setColor(QPalette.ColorRole.WindowText, QColor("#ededed"))
+        qapp.setPalette(dark)
+        assert qapp.styleSheet() == before
+        qapp.processEvents()
+        corrected = qapp.palette()
+        assert len(applied) == 2
+        assert theme.is_dark(corrected)
+        assert corrected.color(
+            QPalette.ColorGroup.Inactive, QPalette.ColorRole.ButtonText
+        ) == corrected.color(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText)
+        assert corrected.color(QPalette.ColorRole.PlaceholderText).alpha() == 150
+        marks = theme.write_control_marks(corrected, tmp_path)
+        assert qapp.styleSheet() == theme.build_stylesheet(corrected, marks)
+        assert qapp.styleSheet() != before
+        for _ in range(5):
+            qapp.processEvents()
+        QApplication.sendEvent(qapp, QEvent(QEvent.Type.ApplicationPaletteChange))
+        qapp.processEvents()
+        assert len(applied) == 2
+        assert not owner._timer.isActive()
+    finally:
+        delete(owner)
+
+
+def test_accent_change_refreshes_disabled_indicator_images_in_the_same_theme(
+    qapp: QApplication, tmp_path
+) -> None:
+    from shiboken6 import delete
+
+    blue = QPalette(LIGHT)
+    blue.setColor(QPalette.ColorRole.Accent, QColor("#2f6fd0"))
+    qapp.setPalette(blue)
+    owner = theme._LiveTheme(qapp, tmp_path)
+    try:
+        before = qapp.styleSheet()
+        blue_marks = theme.write_control_marks(qapp.palette(), tmp_path)
+        green = QPalette(blue)
+        green.setColor(QPalette.ColorRole.Accent, QColor("#2f9d55"))
+        qapp.setPalette(green)
+        qapp.processEvents()
+        green_marks = theme.write_control_marks(qapp.palette(), tmp_path)
+        assert before != qapp.styleSheet()
+        for name in ("check-disabled", "radio-disabled"):
+            assert blue_marks[name] != green_marks[name]
+            assert QImage(str(blue_marks[name])) != QImage(str(green_marks[name]))
+            assert str(green_marks[name]) in qapp.styleSheet()
+        assert theme.write_control_marks(qapp.palette(), tmp_path) == green_marks
+    finally:
+        delete(owner)
+
+
+def test_live_theme_keeps_native_roles_unresolved(qapp: QApplication, tmp_path) -> None:
+    from shiboken6 import delete
+
+    qapp.setPalette(QPalette())
+    native = qapp.palette()
+    owner = theme._LiveTheme(qapp, tmp_path)
+    try:
+        # Qt resolves unset roles against its replacement platform palette.
+        replacement = QPalette(DARK)
+        replacement.setColor(QPalette.ColorRole.Accent, QColor("#3caa78"))
+        replacement.setColor(QPalette.ColorRole.WindowText, QColor("#dddddd"))
+        replacement.setColor(QPalette.ColorRole.ButtonText, QColor("#eeeeee"))
+        replacement.setResolveMask(0)
+        resolved = qapp.palette().resolve(replacement)
+        for role in (
+            QPalette.ColorRole.Window, QPalette.ColorRole.Accent,
+            QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText,
+        ):
+            assert resolved.color(
+                QPalette.ColorGroup.Active, role
+            ) == replacement.color(QPalette.ColorGroup.Active, role)
+        assert native.resolveMask() == 0
+        # Derived roles intentionally keep their override until the live owner
+        # recomputes them from the newly resolved source roles.
+        qapp.setPalette(DARK)
+        qapp.processEvents()
+        expected = qapp.palette().color(QPalette.ColorRole.WindowText)
+        expected.setAlpha(150)
+        assert qapp.palette().color(QPalette.ColorRole.PlaceholderText) == expected
+    finally:
+        delete(owner)
+
+
+def test_live_theme_retention_and_pending_refresh_lifetime(qapp: QApplication, tmp_path) -> None:
+    from PySide6.QtCore import QEvent
+    from shiboken6 import delete
+
+    owner = theme.install_live_theme(qapp, tmp_path)
+    assert theme.install_live_theme(qapp, tmp_path) is owner
+    assert owner.parent() is qapp
+    QApplication.sendEvent(qapp, QEvent(QEvent.Type.ThemeChange))
+    assert owner._timer.isActive()
+    before = qapp.styleSheet()
+    delete(owner)
+    del qapp._pixelup_live_theme
+    qapp.setPalette(DARK if not theme.is_dark(qapp.palette()) else LIGHT)
+    qapp.processEvents()
+    assert qapp.styleSheet() == before
+
+
+def test_focused_passive_scroll_region_uses_the_native_hover_thumb(qapp: QApplication) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPainter
+    from PySide6.QtWidgets import QScrollArea, QStyle, QStyleOptionSlider
+    from shiboken6 import delete
+
+    area = QScrollArea()
+    area.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    content = QWidget()
+    content.resize(120, 900)
+    area.setWidget(content)
+    area.resize(180, 150)
+    area.show()
+    qapp.processEvents()
+    style = theme.PixelupStyle()
+    bar = area.verticalScrollBar()
+    option = QStyleOptionSlider()
+    bar.initStyleOption(option)
+    option.state &= ~QStyle.StateFlag.State_MouseOver
+    option.activeSubControls = QStyle.SubControl.SC_None
+    option.subControls = QStyle.SubControl.SC_All
+
+    def render(hover: bool = False) -> QImage:
+        state = QStyleOptionSlider(option)
+        if hover:
+            state.state |= QStyle.StateFlag.State_MouseOver
+            state.activeSubControls = QStyle.SubControl.SC_ScrollBarSlider
+        image = QImage(bar.size(), QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        style.drawComplexControl(QStyle.ComplexControl.CC_ScrollBar, state, painter, bar)
+        painter.end()
+        return image
+
+    try:
+        area.clearFocus()
+        resting, hovered = render(), render(hover=True)
+        assert resting != hovered, "Fusion must visibly distinguish its hovered thumb"
+        area.setFocus()
+        qapp.processEvents()
+        assert area.hasFocus()
+        assert render() == hovered
+        area.clearFocus()
+        qapp.processEvents()
+        assert render() == resting
+    finally:
+        area.close()
+        delete(area)
+        delete(style)

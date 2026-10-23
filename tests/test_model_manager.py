@@ -183,7 +183,7 @@ def test_switching_folder_ignores_a_stalled_old_scan(
         assert manager.ready_names == frozenset()
         release.set()
         # Deliver the stale result explicitly as well: it cannot mutate current facts.
-        manager._scan_finished(1, frozenset({name}))
+        manager._scan_finished(1, model_manager.ModelReadinessResult(frozenset({name})))
         assert manager.ready_names == frozenset()
     finally:
         release.set()
@@ -346,16 +346,106 @@ def test_finished_install_workers_are_released_once_without_crashing(tmp_path: P
     assert result.stdout.splitlines()[-1] == "True True"
 
 
-def test_a_scan_that_fails_unexpectedly_still_settles_readiness(
+def test_failed_scan_preserves_known_inventory_and_error_until_successful_retry(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
 ) -> None:
-    def broken(_models_dir: Path) -> frozenset[str]:
-        if threading.current_thread() is threading.main_thread():
-            return frozenset()
-        raise ValueError("unexpected")
-
-    monkeypatch.setattr(model_manager, "read_ready_names", broken)
+    name = MANAGED_ARTIFACT_NAMES[0]
+    model_file(tmp_path, name).write_bytes(b"present")
     manager = ModelManager(tmp_path)
-    process_until(lambda: manager.readiness_known, timeout_s=10, what="Readiness after a failure")
-    assert manager.ready_names == frozenset()
-    manager.deleteLater()
+    _settle(manager, process_until)
+    failure = PermissionError(13, "unreadable", str(tmp_path))
+
+    def broken(_models_dir: Path) -> frozenset[str]:
+        raise failure
+
+    real_read = model_manager.read_ready_names
+    monkeypatch.setattr(model_manager, "read_ready_names", broken)
+    try:
+        manager.refresh_readiness()
+        _settle(manager, process_until)
+        assert not manager.readiness_known
+        assert manager.readiness_error is failure
+        assert manager.ready_names == frozenset({name})
+        monkeypatch.setattr(model_manager, "read_ready_names", real_read)
+        manager.refresh_readiness()
+        _settle(manager, process_until)
+        assert manager.readiness_known
+        assert manager.readiness_error is None
+        assert manager.ready_names == frozenset({name})
+    finally:
+        manager.deleteLater()
+
+
+def test_cancelled_connection_keeps_install_slot_until_physical_return(
+    qapp, tmp_path, monkeypatch, process_until,
+) -> None:
+    from pixelup import models
+
+    entered, release, closed = (threading.Event() for _ in range(3))
+
+    class LateResponse:
+        def close(self):
+            closed.set()
+
+    class BlockingOpener:
+        def open(self, _url, *, timeout):
+            entered.set()
+            assert release.wait(5)
+            return LateResponse()
+
+    monkeypatch.setattr(models, "build_opener", lambda *_handlers: BlockingOpener())
+    monkeypatch.setattr(model_manager, "download_model", models.download_model)
+    monkeypatch.setattr(model_manager, "MAX_CONCURRENT_INSTALLS", 1)
+    manager = ModelManager(tmp_path)
+    _settle(manager, process_until)
+    first, second = MANAGED_ARTIFACT_NAMES[:2]
+    cancelled = []
+    manager.cancelled.connect(cancelled.append)
+    operation_id = manager.install((first,), force=False)
+    try:
+        assert entered.wait(5)
+        assert manager.cancel(operation_id)
+        manager.install((second,), force=False)
+        qapp.processEvents()
+        assert len(manager._threads) == 1
+        assert manager.operations_for((first,))[0].cancelling
+        assert manager.operations_for((second,))[0].kind == "queued"
+        assert not manager.cleanup_for_quit()
+        assert not cancelled
+        manager.cancel_for((second,))
+        assert cancelled == [(second,)]
+    finally:
+        release.set()
+        process_until(manager.cleanup_for_quit, timeout_s=5, what="Connection settlement")
+        manager.deleteLater()
+    assert closed.is_set()
+    assert cancelled == [(second,), (first,)]
+    assert not model_file(tmp_path, first).exists()
+
+
+def test_install_failure_logs_once_with_operation_artifact_and_original_cause(
+    tmp_path, monkeypatch, caplog,
+) -> None:
+    from pixelup import models
+
+    original = TimeoutError("sentinel transport failure")
+
+    class FailingOpener:
+        def open(self, _url, *, timeout):
+            raise original
+
+    monkeypatch.setattr(models, "build_opener", lambda *_handlers: FailingOpener())
+    monkeypatch.setattr(model_manager, "download_model", models.download_model)
+    name = MANAGED_ARTIFACT_NAMES[0]
+    worker = model_manager.ModelInstallWorker(19, tmp_path, (name,), force=False)
+    with caplog.at_level("INFO", logger="pixelup"):
+        worker.run()
+    failures = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(failures) == 1
+    record = failures[0]
+    assert record.msg == "models.install_failed"
+    assert record.fields["operation_id"] == 19
+    assert record.fields["artifact"] == name
+    assert record.exc_info[1].__cause__ is original
+    assert not any(record.msg == "model.download_failed" for record in caplog.records)
+    assert any(record.msg == "model.download_started" for record in caplog.records)

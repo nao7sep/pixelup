@@ -67,6 +67,7 @@ class ModelInstallWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        name: str | None = None
         try:
             total_bytes = artifact_size_bytes(self._artifact_names)
             completed_bytes = 0
@@ -110,13 +111,20 @@ class ModelInstallWorker(QObject):
                 log.exception(
                     "models.install_failed",
                     operation_id=self._operation_id,
+                    artifact=name,
+                    artifacts=list(self._artifact_names),
                     code=exc.code.value,
                     error_details=exc.details,
                 )
             message = user_text(exc, internal_fallback=INSTALL_FAILED)
             self.finished.emit(self._operation_id, False, cancelled, message)
         except Exception:  # noqa: BLE001 - every worker outcome must settle.
-            log.exception("models.install_failed_unexpectedly", operation_id=self._operation_id)
+            log.exception(
+                "models.install_failed",
+                operation_id=self._operation_id,
+                artifact=name,
+                artifacts=list(self._artifact_names),
+            )
             self.finished.emit(self._operation_id, False, False, INSTALL_FAILED)
         else:
             self.finished.emit(self._operation_id, True, False, None)
@@ -125,6 +133,12 @@ class ModelInstallWorker(QObject):
 def read_ready_names(models_dir: Path) -> frozenset[str]:
     """The managed artifacts the models folder holds a usable file for."""
     return frozenset(name for name in MANAGED_ARTIFACT_NAMES if model_is_ready(models_dir, name))
+
+
+@dataclass(frozen=True, slots=True)
+class ModelReadinessResult:
+    ready_names: frozenset[str] | None = None
+    error: Exception | None = None
 
 
 class ModelManager(QObject):
@@ -143,6 +157,7 @@ class ModelManager(QObject):
         self._reads.idle.connect(self.idle)
         self._ready_names: frozenset[str] = frozenset()
         self.readiness_known = False
+        self.readiness_error: Exception | None = None
         self.folder_change_pending = False
         # Each new scan or folder replaces the generation; an older answer
         # can never overwrite the current folder or action-boundary check.
@@ -234,6 +249,7 @@ class ModelManager(QObject):
         if self.in_progress_operations:
             raise RuntimeError("cannot change folder during model installation")
         self.models_dir = models_dir
+        self.readiness_error = None
         self._ready_names = frozenset()
         self.readiness_known = False
         self._operations.clear()
@@ -260,23 +276,27 @@ class ModelManager(QObject):
 
     def _scan(self, models_dir: Path, version: int) -> None:
         try:
-            ready_names = read_ready_names(models_dir)
-        except Exception:  # noqa: BLE001 - a failed scan must still settle readiness.
+            result = ModelReadinessResult(ready_names=read_ready_names(models_dir))
+        except Exception as exc:  # noqa: BLE001 - a failed scan must still settle readiness.
             log.exception("models.scan_failed", models_dir=str(models_dir))
-            ready_names = frozenset()
+            result = ModelReadinessResult(error=exc)
         try:
-            self._scanned.emit(version, ready_names)
+            self._scanned.emit(version, result)
         except RuntimeError:
             pass  # The manager was deleted while the scan ran.
 
     @Slot(int, object)
-    def _scan_finished(self, version: int, ready_names: frozenset[str]) -> None:
+    def _scan_finished(self, version: int, result: ModelReadinessResult) -> None:
         if version != self._readiness_version:
             return
         self._scan_in_flight = False
         if not self._shutting_down:
-            changed = self._set_ready_names(ready_names) or not self.readiness_known
-            self.readiness_known = True
+            changed = (self.readiness_error is not result.error
+                       or self.readiness_known != (result.error is None))
+            self.readiness_error = result.error
+            self.readiness_known = result.error is None
+            if result.ready_names is not None:
+                changed = self._set_ready_names(result.ready_names) or changed
             if changed:
                 self.changed.emit()
         if self._scan_again:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from collections.abc import Iterable
 from functools import cache
 
 from PySide6.QtCore import (
@@ -93,25 +92,6 @@ def use(preference: str, computer_languages: Iterable[str] | None = None) -> Non
     tag = languages.resolve(_preference, _computer_languages)
     if tag != _translator.tag:
         _switch(tag)
-
-
-@contextmanager
-def speaking(tag: str) -> Iterator[None]:
-    """Speak ``tag`` for the length of one test, then restore the previous language.
-
-    Only tests use this; the app changes its language through ``use``. The
-    previous language comes back even if a handler raised.
-    """
-    global _preference
-    previous_tag = _translator.tag
-    previous_preference = _preference
-    _switch(tag)
-    try:
-        yield
-    finally:
-        _preference = previous_preference
-        if _translator.tag != previous_tag:
-            _switch(previous_tag)
 
 
 def sync_qt_translation() -> None:

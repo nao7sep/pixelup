@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from pixelup import imaging
+from pixelup import imaging, output_publication
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.imaging import SourceMetadata, save_output_image
 from pixelup.output_cleanup import (
@@ -168,7 +168,7 @@ def test_native_windows_transfer_failure_closes_handle_and_removes_only_new_clai
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary output mode contract")
-@pytest.mark.parametrize("publication", ["hardlink", "exclusive_copy"])
+@pytest.mark.parametrize("publication", ["hardlink", "native_rename"])
 def test_completed_output_keeps_ordinary_creation_mode_and_staging_is_private(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -186,7 +186,7 @@ def test_completed_output_keeps_ordinary_creation_mode_and_staging_is_private(
         original_save(image, stream, **kwargs)
 
     monkeypatch.setattr(Image.Image, "save", save)
-    if publication == "exclusive_copy":
+    if publication == "native_rename":
         monkeypatch.setattr(
             imaging.os,
             "link",
@@ -231,8 +231,8 @@ def test_staging_close_failure_preserves_primary_and_still_removes_owned_path(
     assert not stage.exists()
 
 
-@pytest.mark.parametrize("stage", ["encode", "exclusive_copy"])
-def test_quit_removes_only_active_owned_staging_and_partial_claims(
+@pytest.mark.parametrize("stage", ["encode", "native_rename"])
+def test_quit_removes_only_active_owned_staging_before_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
 ) -> None:
     output = tmp_path / "out.png"
@@ -242,7 +242,7 @@ def test_quit_removes_only_active_owned_staging_and_partial_claims(
     release = threading.Event()
     errors = []
     original_save = Image.Image.save
-    original_copy = imaging._copy_staged
+    original_rename = output_publication.rename_no_replace
 
     def held_encode(image, stream, **kwargs):
         stream.write(b"partial")
@@ -251,12 +251,14 @@ def test_quit_removes_only_active_owned_staging_and_partial_claims(
         assert release.wait(5)
         original_save(image, stream, **kwargs)
 
-    def held_copy(source, target):
-        target.write(b"partial")
-        target.flush()
+    def held_rename(source, target):
+        # Encoding is complete, but no final name has been published yet.
+        with Image.open(source) as image:
+            assert image.size == (8, 4)
+        assert not target.exists()
         entered.set()
         assert release.wait(5)
-        original_copy(source, target)
+        original_rename(source, target)
 
     if stage == "encode":
         monkeypatch.setattr(Image.Image, "save", held_encode)
@@ -266,7 +268,7 @@ def test_quit_removes_only_active_owned_staging_and_partial_claims(
             "link",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(errno.EPERM, "unsupported")),
         )
-        monkeypatch.setattr(imaging, "_copy_staged", held_copy)
+        monkeypatch.setattr(output_publication, "rename_no_replace", held_rename)
 
     def save():
         try:
@@ -287,13 +289,15 @@ def test_quit_removes_only_active_owned_staging_and_partial_claims(
     worker.start()
     try:
         assert entered.wait(5)
+        assert not output.exists()
+        assert len(list(tmp_path.glob("pixelup-*.tmp"))) == 1
         output_cleanup.begin_shutdown()
         assert output_cleanup._settled.wait(5)
         if os.name != "nt":
             # POSIX removes directory entries now; Windows marks the shared
             # handles delete-pending until close (including process hard exit).
             assert not output.exists()
-            assert list(tmp_path.glob("out-*.tmp")) == []
+            assert list(tmp_path.glob("pixelup-*.tmp")) == []
         assert foreign.read_bytes() == b"keep"
     finally:
         release.set()
@@ -303,14 +307,14 @@ def test_quit_removes_only_active_owned_staging_and_partial_claims(
     assert isinstance(errors[0], PixelupError)
     assert errors[0].code == ErrorCode.JOB_CANCELLED
     assert not output.exists()
-    assert list(tmp_path.glob("out-*.tmp")) == []
+    assert list(tmp_path.glob("pixelup-*.tmp")) == []
 
 
 def test_publication_treats_einval_from_link_as_no_hard_links(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Windows reports CreateHardLink on exFAT as EINVAL; publication falls back to
-    # an exclusive claim instead of failing every output on such a drive.
+    # a complete no-replace rename instead of failing every output on such a drive.
     output = tmp_path / "out.png"
     monkeypatch.setattr(
         imaging.os,
@@ -331,4 +335,4 @@ def test_publication_treats_einval_from_link_as_no_hard_links(
 
     assert size == (2, 2)
     assert output.is_file()
-    assert list(tmp_path.glob("out-*.tmp")) == []
+    assert list(tmp_path.glob("pixelup-*.tmp")) == []

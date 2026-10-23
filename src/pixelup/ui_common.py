@@ -59,7 +59,7 @@ _GROUPS = (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.Co
 
 
 def apply_palette_fixes(app: QApplication) -> None:
-    """Fix two palette roles Qt gets wrong. Call once, after setStyle.
+    """Fix two derived palette roles after startup or a native palette change.
 
     ButtonText: Qt hands the Inactive group opaque black in both themes, so in dark
     mode every combo and button turns black-on-dark once the window loses focus.

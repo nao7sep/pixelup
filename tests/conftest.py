@@ -10,8 +10,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop
 from PySide6.QtWidgets import QApplication, QStyleFactory
+from shiboken6 import delete, isValid
 
 from pixelup.backup_store import close_backup_store
 from pixelup.i18n.localizer import english
@@ -140,6 +141,15 @@ def qapp(_session_qapp: QApplication):
     style_sheet, palette = app.styleSheet(), app.palette()
     quit_on_last_window = app.quitOnLastWindowClosed()
     yield app
+    # The application survives the test; its observer and queued work must not.
+    owner = getattr(app, "_pixelup_live_theme", None)
+    if owner is not None:
+        if isValid(owner):
+            delete(owner)
+        del app._pixelup_live_theme
+    # processEvents alone does not deliver DeferredDelete outside app.exec().
+    # Dispose the widgets each fixture retired before repolishing the application.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.setQuitOnLastWindowClosed(quit_on_last_window)
     if app.styleSheet() != style_sheet:
         app.setStyleSheet(style_sheet)

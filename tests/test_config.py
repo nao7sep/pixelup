@@ -14,7 +14,6 @@ from pixelup.config import (
     resolve_models_dir,
     resolve_runtime_dirs,
     resolve_state_dir,
-    resolve_temp_dir,
     window_settings_path,
 )
 from pixelup.errors import ErrorCode, PixelupError
@@ -28,7 +27,7 @@ def test_override_takes_precedence_over_env(tmp_path: Path) -> None:
 
 def test_env_used_when_no_override(tmp_path: Path) -> None:
     env_dir = tmp_path / "from-env"
-    assert resolve_temp_dir(None, {"PIXELUP_TEMP_DIR": str(env_dir)}) == env_dir.resolve()
+    assert resolve_models_dir(None, {"PIXELUP_MODELS_DIR": str(env_dir)}) == env_dir.resolve()
 
 
 def test_default_leaf_used_when_neither_override_nor_env(
@@ -36,16 +35,14 @@ def test_default_leaf_used_when_neither_override_nor_env(
 ) -> None:
     monkeypatch.setattr(config_module, "_default_state_dir", lambda env=None: tmp_path / "state")
     assert resolve_models_dir(None, {}) == (tmp_path / "state" / "models").resolve()
-    assert resolve_temp_dir(None, {}) == (tmp_path / "state" / "temp").resolve()
 
 
-def test_resolve_runtime_dirs_composes_both(
+def test_resolve_runtime_dirs_resolves_models(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(config_module, "_default_state_dir", lambda env=None: tmp_path / "state")
     dirs = resolve_runtime_dirs(env={})
     assert dirs.models_dir == (tmp_path / "state" / "models").resolve()
-    assert dirs.temp_dir == (tmp_path / "state" / "temp").resolve()
 
 
 def test_override_expands_user() -> None:
@@ -61,16 +58,14 @@ def test_relative_runtime_overrides_anchor_to_home_from_any_working_directory(
     # Path.home() and a leading ~ both read these.
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.setenv("USERPROFILE", str(fake_home))
-    env = {"PIXELUP_MODELS_DIR": "models", "PIXELUP_TEMP_DIR": "~/work"}
-    expected = RuntimeDirs(
-        models_dir=(fake_home / "models").resolve(), temp_dir=(fake_home / "work").resolve()
-    )
+    env = {"PIXELUP_MODELS_DIR": "models"}
+    expected = RuntimeDirs(models_dir=(fake_home / "models").resolve())
     for working_directory in (tmp_path / "one", tmp_path / "two"):
         working_directory.mkdir()
         monkeypatch.chdir(working_directory)
         assert resolve_runtime_dirs(env=env) == expected
         assert resolve_runtime_dirs(
-            models_dir=Path("models"), temp_dir=Path("work"), env={}
+            models_dir=Path("models"), env={}
         ) == expected
 
 
@@ -96,7 +91,7 @@ def test_pixelup_home_relocates_root(
     # The root and its standard subdirectories are created on first use.
     assert (root / "logs").is_dir()
     assert (root / "models").is_dir()
-    assert (root / "temp").is_dir()
+    assert not (root / "temp").exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission model")
@@ -325,3 +320,234 @@ def test_saved_model_folder_is_literal_home_relative_and_never_resolves_disk(
     assert saved_models_dir("~literal/models", default) == tmp_path / "~literal/models"
     literal = tmp_path / "$literal%PATH%"
     assert saved_models_dir(str(literal), default) == literal
+
+
+def test_retired_temp_override_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    unused = tmp_path / "retired"
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
+    monkeypatch.setenv("PIXELUP_TEMP_DIR", str(unused))
+    assert resolve_runtime_dirs() == RuntimeDirs(models_dir=root / "models")
+    assert not unused.exists()
+    assert not (root / "temp").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission model")
+@pytest.mark.parametrize("initial_mode", [0o500, 0o750, 0o770, 0o1700])
+def test_root_establishes_exact_owner_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initial_mode: int
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root.chmod(initial_mode)
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
+    resolve_state_dir()
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission model")
+def test_root_permission_failure_stops_startup_before_creating_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o755)
+    root.chmod(0o755)
+    failure = PermissionError("permission denied")
+
+    def fail_chmod(_path: Path, _mode: int) -> None:
+        raise failure
+
+    monkeypatch.setattr(Path, "chmod", fail_chmod)
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
+    with pytest.raises(PixelupError) as exc_info:
+        resolve_state_dir()
+    assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
+    assert exc_info.value.__cause__ is failure
+    assert not (root / "logs").exists()
+
+
+def test_managed_write_syncs_flushed_bytes_before_publication_and_records_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "config.json"
+    target.write_text("old", encoding="utf-8")
+    data = "new \u65e5\u672c\u8a9e\n".encode()
+    events: list[str] = []
+    fsync = config_module.os.fsync
+    replace = config_module.os.replace
+
+    def observe_sync(descriptor: int) -> None:
+        status = config_module.os.fstat(descriptor)
+        if stat.S_ISDIR(status.st_mode):
+            events.append("directory sync")
+            assert target.read_bytes() == data
+        else:
+            events.append("file sync")
+            # fstat observes bytes flushed out of Python's buffer.
+            assert status.st_size == len(data)
+            assert target.read_text(encoding="utf-8") == "old"
+        fsync(descriptor)
+
+    def observe_replace(source: Path, destination: Path) -> None:
+        events.append("replace")
+        assert source.read_bytes() == data
+        replace(source, destination)
+
+    def observe_backup(path: Path, saved: bytes) -> None:
+        events.append("backup")
+        assert path == target
+        assert saved == target.read_bytes() == data
+
+    monkeypatch.setattr(config_module.os, "fsync", observe_sync)
+    monkeypatch.setattr(config_module.os, "replace", observe_replace)
+    monkeypatch.setattr("pixelup.backup_store.record", observe_backup)
+    assert config_module.write_managed_text(target, data.decode()) is None
+    expected = ["file sync", "replace"]
+    if sys.platform != "win32":
+        expected.append("directory sync")
+    assert events == [*expected, "backup"]
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("failed_step", ["file sync", "replace"])
+def test_managed_write_failure_keeps_previous_bytes_and_does_not_record_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_step: str
+) -> None:
+    target = tmp_path / "config.json"
+    target.write_text("old", encoding="utf-8")
+    failure = OSError("primary write failed")
+
+    def fail(*_args: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        config_module.os, "fsync" if failed_step == "file sync" else "replace", fail
+    )
+    monkeypatch.setattr(
+        "pixelup.backup_store.record", lambda *_args: pytest.fail("backup before publication")
+    )
+    with pytest.raises(OSError) as exc_info:
+        config_module.write_managed_text(target, "new")
+    assert exc_info.value is failure
+    assert target.read_text(encoding="utf-8") == "old"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_staging_cleanup_does_not_replace_the_primary_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "config.json"
+    target.write_text("old", encoding="utf-8")
+    failure = OSError("primary write failed")
+
+    def fail_replace(*_args: object) -> None:
+        raise failure
+
+    def fail_cleanup(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("cleanup failed")
+
+    monkeypatch.setattr(config_module.os, "replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_cleanup)
+    with pytest.raises(OSError) as exc_info:
+        config_module.write_managed_text(target, "new")
+    assert exc_info.value is failure
+    assert target.read_text(encoding="utf-8") == "old"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not sync directories")
+def test_failed_directory_sync_returns_published_warning_and_records_new_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno
+
+    target = tmp_path / "config.json"
+    target.write_text("old", encoding="utf-8")
+    failure = OSError(errno.EIO, "directory sync failed")
+    fsync = config_module.os.fsync
+    backups: list[bytes] = []
+
+    def fail_directory_sync(descriptor: int) -> None:
+        if stat.S_ISDIR(config_module.os.fstat(descriptor).st_mode):
+            raise failure
+        fsync(descriptor)
+
+    monkeypatch.setattr(config_module.os, "fsync", fail_directory_sync)
+    monkeypatch.setattr("pixelup.backup_store.record", lambda _path, data: backups.append(data))
+    warning = config_module.write_managed_text(target, "new")
+    assert warning is failure
+    assert target.read_text(encoding="utf-8") == "new"
+    assert backups == [b"new"]
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not sync directories")
+@pytest.mark.parametrize("unsupported", ["EINVAL", "ENOTSUP", "ENOSYS"])
+def test_unsupported_directory_sync_is_a_platform_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsupported: str
+) -> None:
+    import errno
+
+    fsync = config_module.os.fsync
+
+    def unsupported_directory_sync(descriptor: int) -> None:
+        if stat.S_ISDIR(config_module.os.fstat(descriptor).st_mode):
+            raise OSError(getattr(errno, unsupported), "directory sync unsupported")
+        fsync(descriptor)
+
+    monkeypatch.setattr(config_module.os, "fsync", unsupported_directory_sync)
+    monkeypatch.setattr("pixelup.backup_store.record", lambda *_args: None)
+    target = tmp_path / "config.json"
+    assert config_module.write_managed_text(target, "saved") is None
+    assert target.read_text(encoding="utf-8") == "saved"
+
+
+def test_windows_skips_directory_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config_module.sys, "platform", "win32")
+    monkeypatch.setattr(config_module.os, "open", lambda *_args: pytest.fail("opened directory"))
+    config_module._sync_directory(tmp_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not sync directories")
+def test_directory_open_failure_is_a_published_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "config.json"
+    failure = PermissionError("directory unavailable")
+    open_file = config_module.os.open
+    recorded: list[bytes] = []
+
+    def fail_directory_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        if path == tmp_path:
+            raise failure
+        return open_file(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(config_module.os, "open", fail_directory_open)
+    monkeypatch.setattr("pixelup.backup_store.record", lambda _path, data: recorded.append(data))
+    assert config_module.write_managed_text(target, "saved") is failure
+    assert target.read_text(encoding="utf-8") == "saved"
+    assert recorded == [b"saved"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not sync directories")
+def test_directory_cleanup_does_not_replace_its_sync_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failure = OSError("directory sync failed")
+    close_file = config_module.os.close
+
+    def fail_sync(_descriptor: int) -> None:
+        raise failure
+
+    def close_then_fail(descriptor: int) -> None:
+        close_file(descriptor)
+        raise OSError("close failed")
+
+    monkeypatch.setattr(config_module.os, "fsync", fail_sync)
+    monkeypatch.setattr(config_module.os, "close", close_then_fail)
+    with pytest.raises(OSError) as exc_info:
+        config_module._sync_directory(tmp_path)
+    assert exc_info.value is failure

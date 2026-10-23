@@ -16,7 +16,9 @@ from pixelup.sidecar import write_sidecar
 from pixelup.upscale import UpscaleOptions
 
 
-def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
+def _write_sample_sidecar(
+    tmp_path: Path, *, read_permissions: int = 0o444
+) -> tuple[Path, dict]:
     input_path = tmp_path / "source.png"
     output_path = tmp_path / "source-realesr-general-x4v3-4x.png"
     Image.new("RGB", (1, 1), "white").save(input_path)
@@ -53,6 +55,7 @@ def _write_sample_sidecar(tmp_path: Path) -> tuple[Path, dict]:
             "model": "realesr-general-x4v3",
             "scale": 4,
             "ms": 10,
+            "source_read_permissions": read_permissions,
         },
         warnings=[],
     )
@@ -120,30 +123,25 @@ def test_sidecar_write_failure_without_hard_links_leaves_no_sidecar(
     assert not (tmp_path / "source-realesr-general-x4v3-4x.json").exists()
 
 
-def test_sidecar_failure_cleanup_preserves_an_exact_boundary_replacement(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_sidecar_fsync_failure_happens_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sidecar = tmp_path / "source-realesr-general-x4v3-4x.json"
-    real_remove = sidecar_module.remove_published_file
 
     def fail_flush(_descriptor: int) -> None:
+        assert not sidecar.exists()
         raise OSError("flush failed")
 
-    def replace_then_cleanup(claim) -> bool:
-        winner = tmp_path / "winner.tmp"
-        winner.write_bytes(b"external winner")
-        os.replace(winner, sidecar)
-        return real_remove(claim)
-
     monkeypatch.setattr("pixelup.sidecar.os.fsync", fail_flush)
-    monkeypatch.setattr("pixelup.sidecar.remove_published_file", replace_then_cleanup)
-
+    monkeypatch.setattr(
+        sidecar_module, "publish_complete",
+        lambda *_args: pytest.fail("must not publish unsynced bytes"),
+    )
     with pytest.raises(PixelupError) as excinfo:
         _write_sample_sidecar(tmp_path)
-
     assert excinfo.value.code == "output_unwritable"
-    assert sidecar.read_bytes() == b"external winner"
+    assert not sidecar.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_sidecar_success_verification_rejects_an_exact_boundary_replacement(
@@ -207,3 +205,82 @@ def test_quit_removes_a_sidecar_still_being_written(
     assert not worker.is_alive()
     assert list(tmp_path.glob("*.json")) == []
 
+
+
+@pytest.mark.parametrize("hard_links", [True, False])
+def test_reader_at_publication_observes_the_complete_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hard_links: bool
+) -> None:
+    if not hard_links:
+        def unsupported(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        monkeypatch.setattr("pixelup.output_publication.os.link", unsupported)
+    publish = sidecar_module.publish_complete
+    observed: list[dict] = []
+
+    def publish_and_read(stage: Path, target: Path):
+        assert not target.exists()
+        staged_bytes = stage.read_bytes()
+        claim = publish(stage, target)
+        # This observer runs before the sidecar writer acknowledges publication.
+        assert target.read_bytes() == staged_bytes
+        observed.append(json.loads(target.read_bytes()))
+        return claim
+
+    monkeypatch.setattr(sidecar_module, "publish_complete", publish_and_read)
+    _path, payload = _write_sample_sidecar(tmp_path)
+    assert observed == [payload]
+    assert payload["input"]["sha256"] == "ab" * 32
+    assert payload["status"] == "success"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary permission bits")
+@pytest.mark.parametrize("read_permissions", [0o400, 0o440, 0o404, 0o444])
+def test_sidecar_does_not_broaden_source_read_permissions(
+    tmp_path: Path, read_permissions: int
+) -> None:
+    ordinary = tmp_path / "ordinary"
+    ordinary.write_bytes(b"")
+    ordinary_reads = ordinary.stat().st_mode & 0o444
+
+    path, _payload = _write_sample_sidecar(tmp_path, read_permissions=read_permissions)
+
+    assert path.stat().st_mode & 0o444 == ordinary_reads & read_permissions
+    assert path.stat().st_mode & 0o7111 == 0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary permission bits")
+def test_sidecar_staging_is_private_before_any_json_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fdopen = sidecar_module.os.fdopen
+    observed: list[int] = []
+
+    class ObservedWriter:
+        def __init__(self, file):
+            self.file = file
+
+        def __enter__(self):
+            self.file.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.file.__exit__(*args)
+
+        def __getattr__(self, name):
+            return getattr(self.file, name)
+
+        def write(self, data):
+            status = os.fstat(self.file.fileno())
+            assert status.st_size == 0
+            assert status.st_mode & 0o077 == 0
+            observed.append(len(data))
+            return self.file.write(data)
+
+    monkeypatch.setattr(
+        sidecar_module.os, "fdopen", lambda *a, **kw: ObservedWriter(fdopen(*a, **kw))
+    )
+    _write_sample_sidecar(tmp_path)
+    assert len(observed) == 1
+    assert observed[0] > 0

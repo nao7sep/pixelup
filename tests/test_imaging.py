@@ -8,6 +8,7 @@ from pathlib import Path
 from struct import pack
 
 import pytest
+from imaging_support import image_from_bgr_array
 from PIL import Image, ImageCms
 
 from pixelup.errors import PixelupError
@@ -49,9 +50,8 @@ def test_save_output_image_stages_a_random_name_beside_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The staged file is named after the output's stem and staged in the
-    # output's own directory, so the final no-clobber publication always stays
-    # on one volume.
+    # The random stage stays in the destination directory, so publication
+    # always stays on the destination volume.
     output_dir = tmp_path / "output-volume"
     output_dir.mkdir()
     output = output_dir / "photo-x4plus-4x.png"
@@ -77,7 +77,7 @@ def test_save_output_image_stages_a_random_name_beside_output(
     monkeypatch.setattr(os, "open", original_open)
 
     assert len(captured) == 1
-    assert re.fullmatch(r"photo-x4plus-4x-[0-9a-f]{16}\.tmp", captured[0].name)
+    assert re.fullmatch(r"pixelup-[0-9a-f]{16}\.tmp", captured[0].name)
     assert captured[0].parent == output.parent
 
 
@@ -360,7 +360,7 @@ def test_save_output_image_treats_a_broken_symlink_as_occupied(
     assert Path(target) == tmp_path / "missing.png"
 
 
-def test_save_output_image_without_hard_links_removes_a_partly_copied_output(
+def test_save_output_image_failed_native_publication_leaves_no_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -369,14 +369,14 @@ def test_save_output_image_without_hard_links_removes_a_partly_copied_output(
     def unsupported_link(*args: object, **kwargs: object) -> None:
         raise OSError(errno.EPERM, "hard links unsupported")
 
-    def disk_full(source: object, target: object) -> None:
-        target.write(b"partial")  # type: ignore[attr-defined]
-        target.flush()  # type: ignore[attr-defined]
-        raise OSError(errno.ENOSPC, "No space left on device")
+    def rename_failure(source: Path, target: Path) -> None:
+        assert source.is_file()
+        assert not target.exists()
+        raise OSError(errno.EIO, "native publication failed")
 
     monkeypatch.setattr("pixelup.imaging.os.link", unsupported_link)
     monkeypatch.setattr("pixelup.output_reservation.os.link", unsupported_link)
-    monkeypatch.setattr("pixelup.imaging._copy_staged", disk_full)
+    monkeypatch.setattr("pixelup.output_publication.rename_no_replace", rename_failure)
 
     with pytest.raises(PixelupError) as excinfo:
         save_output_image(
@@ -394,7 +394,7 @@ def test_save_output_image_without_hard_links_removes_a_partly_copied_output(
     assert list(tmp_path.iterdir()) == []
 
 
-def test_save_output_image_falls_back_to_an_exclusive_claim_without_hard_links(
+def test_save_output_image_uses_native_no_replace_rename_without_hard_links(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -688,7 +688,7 @@ def test_inference_reads_a_non_rgb_input_through_its_profile(tmp_path: Path) -> 
 def test_oriented_pixels_survive_metadata_policy(
     tmp_path: Path, orientation: int, strip_metadata: bool
 ) -> None:
-    from pixelup.imaging import image_from_bgr_array, load_source_image, read_image_size
+    from pixelup.imaging import load_source_image, read_image_size
 
     source = tmp_path / "source.png"
     pixels = Image.new("RGB", (3, 2))
@@ -764,7 +764,7 @@ def test_png_transparency_survives_decode_and_profile_conversion(
     tmp_path: Path, mode: str, transparency: object, expected: list[int],
     output_format: OutputFormat,
 ) -> None:
-    from pixelup.imaging import image_from_bgr_array, load_source_image
+    from pixelup.imaging import load_source_image
 
     source = tmp_path / "source.png"
     pixels = Image.new(mode, (3, 1))
@@ -839,7 +839,7 @@ def test_16_bit_transparency_keys_precede_quantization_and_orientation(tmp_path:
 
 
 def test_source_capture_keeps_original_exif_offsets_before_transpose(tmp_path: Path) -> None:
-    from pixelup.imaging import image_from_bgr_array, load_source_image
+    from pixelup.imaging import load_source_image
 
     note = b"MAKER-NOTE-BYTES"
     thumbnail = b"\xff\xd8thumbnail\xff\xd9"
@@ -882,7 +882,6 @@ def test_heif_opener_applies_orientation_once(tmp_path: Path) -> None:
     from pillow_heif import register_heif_opener
 
     from pixelup.imaging import (
-        image_from_bgr_array,
         load_source_image,
         read_image_orientation,
         read_image_size,
@@ -1022,3 +1021,88 @@ def test_orientation_reader_reports_permission_denial(tmp_path: Path) -> None:
         assert isinstance(error.value.__cause__, PermissionError)
     finally:
         source.chmod(0o600)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary permission bits")
+@pytest.mark.parametrize("source_mode", [0o600, 0o640, 0o604, 0o644])
+def test_image_output_does_not_broaden_source_read_permissions(
+    tmp_path: Path, source_mode: int
+) -> None:
+    source = tmp_path / "source.png"
+    Image.new("RGB", (2, 2), "red").save(source)
+    source.chmod(source_mode)
+    captured = load_source_image(source)
+    ordinary = tmp_path / "ordinary"
+    ordinary.write_bytes(b"")
+    ordinary_reads = ordinary.stat().st_mode & 0o444
+    output = tmp_path / "out.png"
+
+    save_output_image(
+        Image.new("RGB", (2, 2), "red"), output_path=output,
+        output_format=OutputFormat.PNG, quality=95, background="white",
+        source_metadata=captured.metadata, strip_metadata=True, target_profile=None,
+        read_permissions=captured.read_permissions,
+    )
+
+    assert captured.read_permissions == source_mode & 0o444
+    assert output.stat().st_mode & 0o444 == ordinary_reads & captured.read_permissions
+    assert output.stat().st_mode & 0o7111 == 0
+    with Image.open(output) as decoded:
+        assert decoded.getpixel((0, 0)) == (255, 0, 0)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary permission bits")
+def test_image_staging_is_private_before_any_encoded_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_save = Image.Image.save
+    observed: list[int] = []
+
+    def checked_save(image, file, *args, **kwargs):
+        descriptor = file.fileno()
+        status = os.fstat(descriptor)
+        assert status.st_size == 0
+        assert status.st_mode & 0o077 == 0
+        observed.append(descriptor)
+        return original_save(image, file, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "save", checked_save)
+    save_output_image(
+        Image.new("RGB", (2, 2), "red"), output_path=tmp_path / "out.png",
+        output_format=OutputFormat.PNG, quality=95, background="white",
+        source_metadata=SourceMetadata(), strip_metadata=True, target_profile=None,
+    )
+    assert len(observed) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary permission bits")
+def test_source_mode_and_bytes_are_captured_from_the_same_open_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+
+    source = tmp_path / "source.png"
+    replacement = tmp_path / "replacement.png"
+    Image.new("RGB", (2, 2), "red").save(source)
+    Image.new("RGB", (3, 3), "blue").save(replacement)
+    original_bytes = source.read_bytes()
+    source.chmod(0o600)
+    replacement.chmod(0o644)
+    original_open = Path.open
+    captures = []
+
+    def open_then_replace(path, *args, **kwargs):
+        opened = original_open(path, *args, **kwargs)
+        if path == source:
+            captures.append(path)
+            replacement.replace(source)
+        return opened
+
+    monkeypatch.setattr(Path, "open", open_then_replace)
+    captured = load_source_image(source)
+
+    assert captures == [source]
+    assert captured.size == (2, 2)
+    assert captured.sha256 == hashlib.sha256(original_bytes).hexdigest()
+    assert captured.read_permissions == 0o400
+    assert source.stat().st_mode & 0o444 == 0o444

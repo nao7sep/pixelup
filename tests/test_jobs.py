@@ -62,7 +62,7 @@ def test_planned_output_preserves_literal_braces_through_the_processing_adapter(
 
     plan = build_plan(
         options_for_job(job),
-        RuntimeDirs(tmp_path / "models", tmp_path / "temp"),
+        RuntimeDirs(tmp_path / "models"),
         check_model=False,
     )
 
@@ -302,7 +302,7 @@ def test_create_jobs_uses_all_inputs_and_models(tmp_path: Path) -> None:
 def test_a_batch_reads_each_output_folder_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Planning runs on the window thread: a batch reads its output folder once,
+    # Worker planning reads each batch output folder once,
     # not once per candidate name, so a large or slow folder costs one listing.
     inputs = []
     for name in ("a", "b", "c"):

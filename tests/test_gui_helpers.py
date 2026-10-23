@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 from PySide6.QtCore import QSize
 
+from pixelup.errors import PixelupError
 from pixelup.gui import (
     _image_size_text,
     _safe_image_size,
@@ -33,8 +35,10 @@ def test_safe_image_size_reads_existing_image(tmp_path: Path) -> None:
     assert _safe_image_size(path) == (12, 7)
 
 
-def test_safe_image_size_returns_none_for_missing_path(tmp_path: Path) -> None:
-    assert _safe_image_size(tmp_path / "missing.png") is None
+def test_safe_image_size_preserves_missing_path_diagnosis(tmp_path: Path) -> None:
+    with pytest.raises(PixelupError) as failure:
+        _safe_image_size(tmp_path / "missing.png")
+    assert isinstance(failure.value.__cause__, FileNotFoundError)
 
 
 def test_safe_image_size_returns_none_for_non_image(tmp_path: Path) -> None:

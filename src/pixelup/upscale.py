@@ -84,6 +84,16 @@ def build_plan(
     input_size: tuple[int, int] | None = None,
 ) -> UpscalePlan:
     validate_options(options)
+    return _build_plan(options, runtime_dirs, check_model=check_model, input_size=input_size)
+
+
+def _build_plan(
+    options: UpscaleOptions,
+    runtime_dirs: RuntimeDirs,
+    *,
+    check_model: bool = True,
+    input_size: tuple[int, int] | None = None,
+) -> UpscalePlan:
     input_path = absolute_user_path(options.input_path)
     read_path = input_path.resolve()
     if not read_path.exists():
@@ -101,6 +111,12 @@ def build_plan(
 
     if input_size is None:
         input_size = read_image_size(read_path)
+    output_size = tuple(dimension * options.scale for dimension in input_size)
+    if options.output_format == OutputFormat.WEBP and max(output_size) > 16383:
+        raise PixelupError(
+            ErrorCode.INVALID_ARGUMENT, Message.of("error.webpDimensions", maximum=16383),
+            details={"output_size": output_size, "maximum": 16383},
+        )
     output_path = absolute_user_path(options.output_path)
     validate_output_path(output_path)
     if check_model:
@@ -114,7 +130,7 @@ def build_plan(
         model=options.model,
         scale=options.scale,
         input_size=input_size,
-        output_size=tuple(dimension * options.scale for dimension in input_size),
+        output_size=output_size,
         output_format=options.output_format,
         device=device,
     )
@@ -138,7 +154,7 @@ def run_upscale(
     # Decode before loading models. Header dimensions, pixels, embedded metadata,
     # digest and byte count now all belong to one transient encoded capture.
     source = load_source_image(absolute_user_path(options.input_path).resolve())
-    plan = build_plan(options, runtime_dirs, check_model=True, input_size=source.size)
+    plan = _build_plan(options, runtime_dirs, check_model=True, input_size=source.size)
     log.info(
         "upscale.planned",
         input=str(plan.input_path),
@@ -182,6 +198,8 @@ def run_upscale(
     )
     log.info(
         "upscale.inference_done",
+        input=str(plan.input_path),
+        output=str(plan.output_path),
         model=options.model,
         device=plan.device,
         duration_ms=round((time.perf_counter() - inference_started) * 1000),
@@ -200,6 +218,7 @@ def run_upscale(
         strip_metadata=options.strip_metadata,
         target_profile=options.target_profile,
         on_published=on_output_published,
+        read_permissions=source.read_permissions,
     )
     return {
         "ok": True,
@@ -210,6 +229,7 @@ def run_upscale(
         "input_size": list(plan.input_size),
         "input_sha256": source.sha256,
         "input_size_bytes": source.size_bytes,
+        "source_read_permissions": source.read_permissions,
         "output_size": list(output_size),
         "format": plan.output_format.value,
         "ms": round((time.perf_counter() - started) * 1000),

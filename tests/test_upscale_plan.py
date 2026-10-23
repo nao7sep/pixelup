@@ -1,13 +1,13 @@
 from pathlib import Path
 
 import pytest
+from imaging_support import image_from_bgr_array
 from PIL import Image
 
 from pixelup.config import RuntimeDirs
 from pixelup.errors import PixelupError
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
-from pixelup.imaging import image_from_bgr_array
 from pixelup.paths import OutputFormat
 from pixelup.upscale import UpscaleOptions, build_plan
 
@@ -56,15 +56,13 @@ def test_build_plan_validates_input_output_and_model(tmp_path: Path) -> None:
     input_path = tmp_path / "input.png"
     output_path = tmp_path / "output.png"
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     models_dir.mkdir()
-    temp_dir.mkdir()
     (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     Image.new("RGB", (3, 2), "white").save(input_path)
 
     plan = build_plan(
         options(input_path, output_path, model="RealESRGAN_x4plus"),
-        RuntimeDirs(models_dir, temp_dir),
+        RuntimeDirs(models_dir),
     )
 
     assert plan.input_size == (3, 2)
@@ -81,11 +79,9 @@ def test_build_plan_keeps_literal_input_and_uses_resolved_path_only_for_reads(
     source_dir = tmp_path / "source"
     chosen_dir = tmp_path / "chosen"
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     source_dir.mkdir()
     chosen_dir.mkdir()
     models_dir.mkdir()
-    temp_dir.mkdir()
     target = source_dir / "target.png"
     Image.new("RGB", (3, 2), "white").save(target)
     chosen = chosen_dir / "dropped-link.png"
@@ -95,7 +91,7 @@ def test_build_plan_keeps_literal_input_and_uses_resolved_path_only_for_reads(
 
     plan = build_plan(
         options(chosen, output, model="RealESRGAN_x4plus"),
-        RuntimeDirs(models_dir, temp_dir),
+        RuntimeDirs(models_dir),
     )
 
     assert plan.input_path == chosen
@@ -107,14 +103,12 @@ def test_build_plan_rejects_a_model_pixelup_does_not_offer(tmp_path: Path) -> No
     input_path = tmp_path / "input.png"
     Image.new("RGB", (1, 1), "white").save(input_path)
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     models_dir.mkdir()
-    temp_dir.mkdir()
 
     with pytest.raises(PixelupError) as excinfo:
         build_plan(
             options(input_path, tmp_path / "output.png", model="not-a-pixelup-model"),
-            RuntimeDirs(models_dir, temp_dir),
+            RuntimeDirs(models_dir),
         )
 
     assert excinfo.value.code == "model_not_found"
@@ -129,9 +123,7 @@ def test_run_upscale_calls_inference_and_writes_output(
     input_path = tmp_path / "input.png"
     output_path = tmp_path / "output.png"
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     models_dir.mkdir()
-    temp_dir.mkdir()
     (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     # 300px at the smallest offered tile (128) is genuinely tiled: ceil(300/128) = 3
     # per axis, so on_start must report 9. This used to be a 2x2 image at tile=1 —
@@ -142,7 +134,7 @@ def test_run_upscale_calls_inference_and_writes_output(
 
     result = run_upscale(
         options(input_path, output_path, model="RealESRGAN_x4plus", tile=128),
-        RuntimeDirs(models_dir, temp_dir),
+        RuntimeDirs(models_dir),
         on_start=lambda plan, tiles: events.append(("start", tiles)),
         on_progress=lambda phase: events.append(("progress", phase)),
     )
@@ -161,15 +153,13 @@ def test_run_upscale_errors_on_missing_model(tmp_path: Path) -> None:
 
     input_path = tmp_path / "input.png"
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     models_dir.mkdir()
-    temp_dir.mkdir()
     Image.new("RGB", (1, 1), "white").save(input_path)
 
     with pytest.raises(PixelupError) as excinfo:
         run_upscale(
             options(input_path, tmp_path / "output.png"),
-            RuntimeDirs(models_dir, temp_dir),
+            RuntimeDirs(models_dir),
         )
 
     assert excinfo.value.code == "model_not_found"
@@ -183,9 +173,7 @@ def test_run_upscale_warns_for_forced_format_extension_mismatch(
 
     input_path = tmp_path / "input.png"
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     models_dir.mkdir()
-    temp_dir.mkdir()
     (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     Image.new("RGB", (1, 1), "white").save(input_path)
     warnings: list[Message] = []
@@ -198,7 +186,7 @@ def test_run_upscale_warns_for_forced_format_extension_mismatch(
             model="RealESRGAN_x4plus",
             output_format=OutputFormat.JPG,
         ),
-        RuntimeDirs(models_dir, temp_dir),
+        RuntimeDirs(models_dir),
         on_warning=warnings.append,
     )
 
@@ -216,9 +204,7 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
 
     input_path = tmp_path / "input.png"
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     models_dir.mkdir()
-    temp_dir.mkdir()
     (models_dir / "RealESRGAN_x2plus.pth").write_bytes(b"weights")
     Image.new("RGB", (1, 1), "white").save(input_path)
     warnings: list[Message] = []
@@ -232,7 +218,7 @@ def test_run_upscale_warns_for_model_native_scale_mismatch(
             model="RealESRGAN_x2plus",
             scale=4,
         ),
-        RuntimeDirs(models_dir, temp_dir),
+        RuntimeDirs(models_dir),
         on_warning=warnings.append,
     )
 
@@ -288,7 +274,7 @@ def test_run_upscale_uses_one_source_capture_when_the_path_is_replaced(
         replacement.replace(source)
 
     opts = options(source, output, model="RealESRGAN_x4plus")
-    result = run_upscale(opts, RuntimeDirs(models_dir, tmp_path / "temp"),
+    result = run_upscale(opts, RuntimeDirs(models_dir),
                          on_start=replace_after_capture)
     write_sidecar(input_path=source, output_path=output, options=opts,
                   result=result, warnings=[])
@@ -363,7 +349,7 @@ def test_source_buffers_close_before_model_construction(
     monkeypatch.setattr(inference, "to_torch_device", lambda *args: "cpu")
     monkeypatch.setattr(inference, "_create_upsampler", construct)
     run_upscale(options(source, output, model="RealESRGAN_x4plus"),
-                RuntimeDirs(models, tmp_path / "temp"))
+                RuntimeDirs(models))
 
 
 def test_the_planned_record_keeps_the_input_version_when_inference_fails(
@@ -382,9 +368,7 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
     database = configure_session_logging()
     input_path = tmp_path / "input.png"
     models_dir = tmp_path / "models"
-    temp_dir = tmp_path / "temp"
     models_dir.mkdir(exist_ok=True)
-    temp_dir.mkdir(exist_ok=True)
     (models_dir / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
     Image.new("RGB", (4, 4), "white").save(input_path)
     original = input_path.read_bytes()
@@ -398,7 +382,7 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
     with pytest.raises(PixelupError):
         run_upscale(
             options(input_path, tmp_path / "output.png", model="RealESRGAN_x4plus"),
-            RuntimeDirs(models_dir, temp_dir),
+            RuntimeDirs(models_dir),
         )
 
     assert flush_records(5)
@@ -413,3 +397,162 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
     assert input_path.read_bytes() != original
     assert planned["input_sha256"] == hashlib.sha256(original).hexdigest()
     assert planned["input_size_bytes"] == len(original)
+
+
+@pytest.mark.parametrize("input_size", [(8191, 1), (1, 8191)])
+@pytest.mark.parametrize("output_format", list(OutputFormat))
+def test_build_plan_accepts_largest_reachable_webp_axis_and_other_formats(
+    tmp_path: Path, input_size: tuple[int, int], output_format: OutputFormat
+) -> None:
+    source = tmp_path / "input.png"
+    source.write_bytes(b"header dimensions supplied separately")
+    plan = build_plan(
+        options(source, tmp_path / f"output.{output_format}", scale=2,
+                output_format=output_format),
+        RuntimeDirs(tmp_path / "models"), check_model=False, input_size=input_size,
+    )
+    assert max(plan.output_size) == 16382
+
+
+@pytest.mark.parametrize("input_size", [(8192, 1), (1, 8192)])
+@pytest.mark.parametrize("entry", ["build_plan", "run_upscale"])
+def test_webp_overflow_rejected_before_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    input_size: tuple[int, int], entry: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from pixelup import upscale
+
+    source = tmp_path / "input.png"
+    source.write_bytes(b"header dimensions supplied separately")
+    monkeypatch.setattr(
+        upscale, "load_source_image", lambda _path: SimpleNamespace(size=input_size)
+    )
+    inferred = []
+    monkeypatch.setattr(upscale, "run_inference", lambda *args, **kwargs: inferred.append(args))
+    opts = options(source, tmp_path / "output.webp", scale=2, output_format=OutputFormat.WEBP)
+    with pytest.raises(PixelupError) as failure:
+        if entry == "build_plan":
+            build_plan(opts, RuntimeDirs(tmp_path / "models"),
+                       check_model=False, input_size=input_size)
+        else:
+            upscale.run_upscale(opts, RuntimeDirs(tmp_path / "models"))
+    assert failure.value.code == "invalid_argument"
+    assert failure.value.message.key == "error.webpDimensions"
+    assert failure.value.details["maximum"] == 16383
+    assert inferred == []
+
+
+@pytest.mark.parametrize("output_format", [OutputFormat.PNG, OutputFormat.JPG])
+@pytest.mark.parametrize("input_size", [(8192, 1), (1, 8192)])
+def test_webp_axis_limit_does_not_restrict_other_output_formats(
+    tmp_path: Path, output_format: OutputFormat, input_size: tuple[int, int]
+) -> None:
+    source = tmp_path / "input.png"
+    source.write_bytes(b"header dimensions supplied separately")
+    plan = build_plan(
+        options(source, tmp_path / f"output.{output_format}", scale=2,
+                output_format=output_format),
+        RuntimeDirs(tmp_path / "models"), check_model=False, input_size=input_size,
+    )
+    assert max(plan.output_size) == 16384
+
+
+def test_run_resolves_auto_once_and_native_inference_receives_that_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from pixelup import inference, upscale
+
+    source = tmp_path / "input.png"
+    Image.new("RGB", (2, 2), "red").save(source)
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "RealESRGAN_x4plus.pth").write_bytes(b"weights")
+    resolved = []
+    native = []
+    validated = []
+    original_validate = upscale.validate_options
+
+    def resolve(device, gpu_id):
+        resolved.append((device, gpu_id))
+        assert len(resolved) == 1
+        return "cpu"
+
+    def validate(opts):
+        validated.append(opts)
+        original_validate(opts)
+
+    def construct(config, **kwargs):
+        native.append((config.device, kwargs["concrete_device"], kwargs["torch_device"]))
+        return SimpleNamespace(enhance=lambda pixels, **_kwargs: (Image.new("RGB", (8, 8)), None))
+
+    monkeypatch.setattr(upscale, "resolve_device", resolve)
+    monkeypatch.setattr(upscale, "validate_options", validate)
+    monkeypatch.setattr(inference, "_import_torch", lambda: None)
+    monkeypatch.setattr(inference, "to_torch_device", lambda device, _gpu_id: f"torch:{device}")
+    monkeypatch.setattr(inference, "_create_upsampler", construct)
+    opts = replace(options(source, tmp_path / "output.png"), device="auto")
+    result = upscale.run_upscale(opts, RuntimeDirs(models))
+    assert result["ok"]
+    assert resolved == [("auto", None)]
+    assert native == [("cpu", "cpu", "torch:cpu")]
+    assert validated == [opts]
+
+
+def test_public_build_plan_validates_options_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pixelup import upscale
+
+    source = tmp_path / "input.png"
+    source.write_bytes(b"header dimensions supplied separately")
+    validated = []
+    original_validate = upscale.validate_options
+
+    def validate(opts):
+        validated.append(opts)
+        original_validate(opts)
+
+    monkeypatch.setattr(upscale, "validate_options", validate)
+    opts = options(source, tmp_path / "output.png")
+    build_plan(opts, RuntimeDirs(tmp_path / "models"), check_model=False, input_size=(2, 2))
+    assert validated == [opts]
+
+
+@pytest.mark.parametrize("vertical", [False, True])
+@pytest.mark.parametrize("output_format", list(OutputFormat))
+def test_run_preflight_accepts_supported_axes_without_allocating_large_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    vertical: bool, output_format: OutputFormat,
+) -> None:
+    from pixelup import upscale
+    from pixelup.imaging import SourceImage, SourceMetadata
+
+    source = tmp_path / "input.png"
+    source.write_bytes(b"source capture substituted")
+    axis = 8191 if output_format == OutputFormat.WEBP else 8192
+    size = (1, axis) if vertical else (axis, 1)
+    capture = SourceImage(
+        pixels=object(), size=size, metadata=SourceMetadata(), sha256="a" * 64, size_bytes=12,
+    )
+    monkeypatch.setattr(upscale, "load_source_image", lambda _path: capture)
+    monkeypatch.setattr(upscale, "require_model_present", lambda *args: None)
+    inferred = []
+
+    def infer(config, pixels, **kwargs):
+        inferred.append(pixels)
+        return Image.new("RGB", (2, 2), "red")
+
+    monkeypatch.setattr(upscale, "run_inference", infer)
+    result = upscale.run_upscale(
+        options(source, tmp_path / f"output.{output_format}", scale=2,
+                output_format=output_format),
+        RuntimeDirs(tmp_path / "models"),
+    )
+    assert inferred == [capture.pixels]
+    assert result["input_size"] == list(size)
+    assert result["ok"]

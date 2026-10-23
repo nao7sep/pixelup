@@ -1,6 +1,11 @@
 import hashlib
 import re
+import socket
+import ssl
+import threading
+import time
 from email.message import Message
+from http.client import HTTPResponse
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
@@ -443,13 +448,13 @@ def test_download_model_info_aborts_stream_above_pin_and_cleans_temp(
     assert not list(models_dir.glob("*.tmp"))
 
 
-def test_download_model_info_cancels_during_blocking_connection_setup(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("cancel", [True, False])
+def test_connection_keeps_ownership_until_late_response_is_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool,
 ) -> None:
-    started = models_module.threading.Event()
-    release = models_module.threading.Event()
-    closed = models_module.threading.Event()
+    started, release, closed, settled = (threading.Event() for _ in range(4))
+    errors: list[PixelupError] = []
+    clock = [0.0]
 
     class LateResponse:
         def close(self) -> None:
@@ -457,76 +462,42 @@ def test_download_model_info_cancels_during_blocking_connection_setup(
 
     class BlockingOpener:
         def open(self, _url: str, *, timeout: float) -> LateResponse:
-            assert timeout > 0
+            assert timeout == 10
             started.set()
-            release.wait(5)
+            assert release.wait(5)
             return LateResponse()
 
-    monkeypatch.setattr(models_module, "DOWNLOAD_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(models_module.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: BlockingOpener())
     models_dir = tmp_path / "models"
-    info = _info(
-        "local-model",
-        "local-model.pth",
-        "https://example.com/model.pth",
-        expected_size=1,
-        checksum_sha256=_sha256_hex(b"x"),
-    )
+    info = _info("local-model", "local-model.pth", expected_size=1)
 
-    try:
-        with pytest.raises(PixelupError) as excinfo:
+    def acquire() -> None:
+        try:
             download_model_info(
-                models_dir,
-                info,
-                download_timeout=10,
-                should_cancel=started.is_set,
+                models_dir, info, download_timeout=10,
+                should_cancel=lambda: cancel and started.is_set(),
             )
-    finally:
-        release.set()
+        except PixelupError as exc:
+            errors.append(exc)
+        finally:
+            settled.set()
 
-    assert excinfo.value.code == "job_cancelled"
-    assert closed.wait(1), "a response returned after cancellation must be closed"
-    assert not (models_dir / "local-model.pth").exists()
-    assert not list(models_dir.glob("*.tmp"))
-
-
-def test_download_model_info_deadline_abandons_blocking_connection_setup(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    release = models_module.threading.Event()
-    closed = models_module.threading.Event()
-
-    class LateResponse:
-        def close(self) -> None:
-            closed.set()
-
-    class BlockingOpener:
-        def open(self, _url: str, *, timeout: float) -> LateResponse:
-            assert 0 < timeout <= 0.051
-            release.wait(5)
-            return LateResponse()
-
-    monkeypatch.setattr(models_module, "DOWNLOAD_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: BlockingOpener())
-    models_dir = tmp_path / "models"
-    info = _info(
-        "local-model",
-        "local-model.pth",
-        "https://example.com/model.pth",
-        expected_size=1,
-        checksum_sha256=_sha256_hex(b"x"),
-    )
-
+    worker = threading.Thread(target=acquire)
+    worker.start()
     try:
-        with pytest.raises(PixelupError) as excinfo:
-            download_model_info(models_dir, info, download_timeout=0.05)
+        assert started.wait(5)
+        clock[0] = 11
+        assert not settled.is_set()
+        assert not closed.is_set()
+        assert list(models_dir.glob("*.tmp"))
     finally:
         release.set()
-
-    assert excinfo.value.code == "model_download_failed"
-    assert "total timeout" in str(excinfo.value.details["reason"])
-    assert closed.wait(1), "a response returned after the deadline must be closed"
+        worker.join(5)
+    assert not worker.is_alive()
+    assert closed.is_set()
+    assert len(errors) == 1
+    assert errors[0].code == ("job_cancelled" if cancel else "model_download_failed")
     assert not (models_dir / "local-model.pth").exists()
     assert not list(models_dir.glob("*.tmp"))
 
@@ -554,51 +525,148 @@ def test_verify_model_file_honors_cancellation_during_hash(tmp_path: Path) -> No
     assert excinfo.value.code == "job_cancelled"
 
 
-def test_download_read_poll_honors_cancellation_while_socket_is_stalled(
+def test_fragmented_real_http_response_can_progress_beyond_old_poll_timeout() -> None:
+    client, server = socket.socketpair()
+    first_sent, continue_body = threading.Event(), threading.Event()
+
+    def send() -> None:
+        try:
+            server.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
+            first_sent.set()
+            assert continue_body.wait(5)
+            # A healthy fragment may arrive later than the removed 250 ms poll.
+            time.sleep(0.3)
+            server.sendall(b"def")
+        finally:
+            server.close()
+
+    sender = threading.Thread(target=send)
+    sender.start()
+    response = HTTPResponse(client)
+    try:
+        assert first_sent.wait(5)
+        response.begin()
+        deadline = time.monotonic() + 5
+        first = models_module._read_download_chunk(response, deadline, None)
+        assert first == b"abc"
+        continue_body.set()
+        assert models_module._read_download_chunk(response, deadline, None) == b"def"
+        assert models_module._read_download_chunk(response, deadline, None) == b""
+    finally:
+        continue_body.set()
+        response.close()
+        client.close()
+        sender.join(5)
+    assert not sender.is_alive()
+
+
+@pytest.mark.skipif(not ssl.HAS_PSK, reason="the local TLS fixture requires PSK support")
+def test_fragmented_tls_record_keeps_real_http_response_readable_below_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class StalledSocket:
-        def pending(self) -> int:
-            return 0
+    # Public fixture key: this socketpair never leaves the test process.
+    key = b"pixelup-public-tls-fragmentation-test-key"
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    server_context.maximum_version = ssl.TLSVersion.TLSv1_2
+    server_context.set_ciphers("PSK-AES128-GCM-SHA256")
+    server_context.set_psk_server_callback(
+        lambda identity: key if identity == "pixelup-test" else b""
+    )
+    client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client_context.check_hostname = False
+    client_context.verify_mode = ssl.CERT_NONE
+    client_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    client_context.maximum_version = ssl.TLSVersion.TLSv1_2
+    client_context.set_ciphers("PSK-AES128-GCM-SHA256")
+    client_context.set_psk_client_callback(lambda _hint: ("pixelup-test", key))
+    raw_client, server = socket.socketpair()
+    raw_client.settimeout(5)
+    server.settimeout(5)
+    client = client_context.wrap_socket(raw_client, do_handshake_on_connect=False)
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    encrypted_server = server_context.wrap_bio(incoming, outgoing, server_side=True)
+    headers_sent, send_body, first_fragment, body_read_started = (
+        threading.Event() for _ in range(4)
+    )
+    server_errors = []
+    body = b"complete body from one fragmented TLS record"
 
-    class Raw:
-        _sock = StalledSocket()
+    def flush_encrypted() -> None:
+        while outgoing.pending:
+            server.sendall(outgoing.read())
 
-    class File:
-        raw = Raw()
+    def send() -> None:
+        try:
+            while True:
+                try:
+                    encrypted_server.do_handshake()
+                except ssl.SSLWantReadError:
+                    flush_encrypted()
+                    received = server.recv(65536)
+                    if not received:
+                        raise EOFError("TLS client closed during the fixture handshake") from None
+                    incoming.write(received)
+                else:
+                    flush_encrypted()
+                    break
+            encrypted_server.write(
+                f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n".encode("ascii")
+            )
+            flush_encrypted()
+            headers_sent.set()
+            assert send_body.wait(5), "the client never finished reading the HTTP headers"
+            assert encrypted_server.write(body) == len(body)
+            record = outgoing.read()
+            assert record[0] == 23  # TLS application data, with a five-byte record header.
+            assert len(record) == 5 + int.from_bytes(record[3:5], "big")
+            server.sendall(record[:7])
+            first_fragment.set()
+            assert body_read_started.wait(5), "the client never attempted its body read"
+            # Start this delay only once the real TLS read has begun. A complete
+            # record arrives after the removed 250 ms timeout but within its budget.
+            time.sleep(0.35)
+            server.sendall(record[7:])
+        except BaseException as exc:
+            server_errors.append(exc)
+        finally:
+            server.close()
 
-    class StalledResponse:
-        fp = File()
+    sender = threading.Thread(target=send)
+    response = None
+    sender.start()
+    try:
+        client.do_handshake()
+        assert headers_sent.wait(5)
+        response = HTTPResponse(client)
+        response.begin()
+        real_recv_into = client.recv_into
 
-        def read(self, _size: int) -> bytes:
-            raise AssertionError("a stalled socket must not be read before it is ready")
+        def observed_recv_into(buffer, nbytes=0, flags=0):
+            body_read_started.set()
+            return real_recv_into(buffer, nbytes, flags)
 
-    polls = 0
-
-    def should_cancel() -> bool:
-        nonlocal polls
-        polls += 1
-        return polls >= 3
-
-    monkeypatch.setattr(models_module.select, "select", lambda *_args: ([], [], []))
-
-    with pytest.raises(PixelupError) as excinfo:
-        models_module._read_download_chunk(
-            StalledResponse(),
-            deadline=models_module.time.monotonic() + 60,
-            should_cancel=should_cancel,
-        )
-
-    assert excinfo.value.code == "job_cancelled"
+        monkeypatch.setattr(client, "recv_into", observed_recv_into)
+        send_body.set()
+        assert first_fragment.wait(5)
+        deadline = time.monotonic() + 5
+        assert models_module._read_download_chunk(response, deadline, None) == body
+        assert models_module._read_download_chunk(response, deadline, None) == b""
+    finally:
+        send_body.set()
+        body_read_started.set()
+        if response is not None:
+            response.close()
+        client.close()
+        sender.join(5)
+    assert not sender.is_alive()
+    assert not server_errors, server_errors
 
 
-def test_download_read_timeout_returns_to_cancellation_poll() -> None:
+def test_download_read_timeout_is_terminal_and_uses_remaining_deadline() -> None:
     timeouts: list[float] = []
 
     class PartialTlsSocket:
-        def pending(self) -> int:
-            return 1
-
         def settimeout(self, timeout: float) -> None:
             timeouts.append(timeout)
 
@@ -616,27 +684,14 @@ def test_download_read_timeout_returns_to_cancellation_poll() -> None:
             self.reads += 1
             raise TimeoutError("partial TLS record")
 
-        def read(self, _size: int) -> bytes:
-            raise AssertionError("read1 should be used when available")
-
-    cancellation_checks = 0
-
-    def should_cancel() -> bool:
-        nonlocal cancellation_checks
-        cancellation_checks += 1
-        return cancellation_checks >= 2
-
     response = PartialTlsResponse()
-    with pytest.raises(PixelupError) as excinfo:
+    with pytest.raises(TimeoutError, match="partial TLS record"):
         models_module._read_download_chunk(
-            response,
-            deadline=models_module.time.monotonic() + 60,
-            should_cancel=should_cancel,
+            response, deadline=time.monotonic() + 60, should_cancel=None,
         )
-
-    assert excinfo.value.code == "job_cancelled"
     assert response.reads == 1
-    assert timeouts == [models_module.DOWNLOAD_POLL_SECONDS]
+    assert len(timeouts) == 1
+    assert 59 < timeouts[0] <= 60
 
 
 def test_download_model_info_checks_cancellation_immediately_before_publish(
@@ -800,3 +855,61 @@ def test_download_model_info_cleans_temp_after_unexpected_progress_failure(tmp_p
 
     assert not (models_dir / "local-model.pth").exists()
     assert not list(models_dir.glob("*.tmp"))
+
+
+def test_model_readiness_distinguishes_missing_from_filesystem_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name = GENERAL_MODEL
+    assert not models_module.model_is_ready(tmp_path, name)
+    failure = PermissionError(13, "denied", str(tmp_path))
+
+    def unreadable(_path: Path):
+        raise failure
+
+    monkeypatch.setattr(Path, "stat", unreadable)
+    with pytest.raises(PermissionError) as caught:
+        models_module.model_is_ready(tmp_path, name)
+    assert caught.value is failure
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_failed_or_cancelled_body_read_closes_response_without_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool,
+) -> None:
+    closed = False
+    cancellation_requested = False
+
+    class Response:
+        headers = {}
+
+        def geturl(self):
+            return "https://example.com/model.pth"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            nonlocal closed
+            closed = True
+
+        def read(self, _size):
+            nonlocal cancellation_requested
+            cancellation_requested = cancel
+            raise TimeoutError("body read stopped")
+
+    class Opener:
+        def open(self, _url, *, timeout):
+            return Response()
+
+    monkeypatch.setattr(models_module, "build_opener", lambda *_handlers: Opener())
+    info = _info("local-model", "local-model.pth", expected_size=1)
+    with pytest.raises(PixelupError) as caught:
+        download_model_info(
+            tmp_path, info, download_timeout=10,
+            should_cancel=lambda: cancellation_requested,
+        )
+    assert caught.value.code == ("job_cancelled" if cancel else "model_download_failed")
+    assert closed
+    assert not (tmp_path / info.filename).exists()
+    assert not list(tmp_path.glob("*.tmp"))

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from localization_support import speaking
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QWidget
@@ -376,5 +377,62 @@ def test_a_saved_time_zone_is_selected_when_settings_opens(qapp: QApplication) -
     try:
         assert dialog.display_zone.currentData() == "Europe/Paris"
         assert dialog.is_dirty() is False
+    finally:
+        dialog.deleteLater()
+
+
+def test_edits_are_the_dialog_owned_values(qapp: QApplication) -> None:
+    dialog = SettingsDialog(AppConfig())
+    try:
+        dialog.concurrent.setValue(4)
+        dialog.font_family.setText("  Menlo  ")
+        dialog.language.setCurrentIndex(dialog.language.findData("ja"))
+        dialog.display_zone.setCurrentIndex(dialog.display_zone.findData("Asia/Tokyo"))
+        assert dialog.edits() == {
+            "max_concurrent_jobs": 4,
+            "font_family": "Menlo",
+            "language": "ja",
+            "display_zone": "Asia/Tokyo",
+        }
+        from dataclasses import replace
+
+        assert dialog.config() == replace(dialog._initial, **dialog.edits())
+    finally:
+        dialog.deleteLater()
+
+
+def test_field_labels_and_accessible_names_follow_the_interface_language(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtGui import QAccessible
+
+    from pixelup.i18n import localizer
+
+    dialog = SettingsDialog(AppConfig())
+    try:
+        controls = {
+            dialog.language: "settings.language",
+            dialog.display_zone: "settings.timeZone",
+            dialog.font_family: "settings.uiFont",
+            dialog.concurrent: "settings.concurrentJobs",
+        }
+        for language in ("en", "ja"):
+            with speaking(language):
+                for control, key in controls.items():
+                    label = next(
+                        label for label in dialog.findChildren(QLabel) if label.buddy() is control
+                    )
+                    assert label.text() == localizer.t(key)
+                    interface = QAccessible.queryAccessibleInterface(control)
+                    assert interface is not None
+                    assert control.accessibleName() == label.text()
+                    # Qt's combo interface uses its selected value as Text.Name;
+                    # the associated label is exposed through the real relation.
+                    assert any(
+                        related.object() is label and relation == QAccessible.RelationFlag.Label
+                        for related, relation in interface.relations()
+                    )
+                    if control in (dialog.font_family, dialog.concurrent):
+                        assert interface.text(QAccessible.Text.Name) == label.text()
     finally:
         dialog.deleteLater()

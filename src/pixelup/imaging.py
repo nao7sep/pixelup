@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import hashlib
 import os
 import secrets
@@ -24,11 +23,11 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
 from pixelup.output_cleanup import open_output_handle, output_cleanup
+from pixelup.output_publication import publish_complete
 from pixelup.output_reservation import (
     PublishedFile,
     assert_output_bundle_available,
     assert_output_bundle_claims_current,
-    close_published_file,
     remove_published_file,
 )
 from pixelup.paths import OutputFormat
@@ -54,6 +53,7 @@ class SourceImage:
     metadata: SourceMetadata
     sha256: str
     size_bytes: int
+    read_permissions: int = 0o444
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +149,9 @@ def load_source_image(path: Path) -> SourceImage:
     """
     register_image_plugins()
     try:
-        encoded = path.read_bytes()
+        with path.open("rb") as source_file:
+            read_permissions = os.fstat(source_file.fileno()).st_mode & 0o444
+            encoded = source_file.read()
         digest = hashlib.sha256(encoded).hexdigest()
         with BytesIO(encoded) as stream, Image.open(stream) as image, ExitStack() as images:
             image.load()
@@ -172,7 +174,7 @@ def load_source_image(path: Path) -> SourceImage:
                     bgr[:, :, destination] = array[:, :, source]
             else:
                 bgr = array[:, :, ::-1].copy()
-            return SourceImage(bgr, pixels.size, metadata, digest, len(encoded))
+            return SourceImage(bgr, pixels.size, metadata, digest, len(encoded), read_permissions)
     except FileNotFoundError as exc:
         raise PixelupError(
             ErrorCode.INPUT_NOT_FOUND, Message("error.inputMissing"),
@@ -193,28 +195,6 @@ def load_source_image(path: Path) -> SourceImage:
             ErrorCode.INPUT_UNREADABLE, Message("error.inputOpenFailed"),
             details={"input": str(path), "reason": str(exc)},
         ) from exc
-
-
-def image_from_bgr_array(array: Any) -> Image.Image:
-    ndim = getattr(array, "ndim", None)
-    if ndim == 2:
-        return Image.fromarray(array)
-    if ndim != 3:
-        raise PixelupError(
-            ErrorCode.INTERNAL_ERROR,
-            "Inference returned an unsupported image array.",
-            details={"ndim": ndim},
-        )
-    channels = array.shape[2]
-    if channels == 3:
-        return Image.fromarray(array[:, :, ::-1].copy())
-    if channels == 4:
-        return Image.fromarray(array[:, :, [2, 1, 0, 3]])
-    raise PixelupError(
-        ErrorCode.INTERNAL_ERROR,
-        "Inference returned an unsupported channel layout.",
-        details={"channels": channels},
-    )
 
 
 def rgb_pixels(image: Image.Image) -> Image.Image:
@@ -302,6 +282,7 @@ def save_output_image(
     strip_metadata: bool,
     target_profile: str | None,
     on_published: PublishedCallback | None = None,
+    read_permissions: int = 0o444,
 ) -> tuple[int, int]:
     source_metadata = source_metadata or SourceMetadata()
     color = _plan_color(
@@ -332,7 +313,7 @@ def save_output_image(
             # claimed atomically below, so an exact-boundary winner is preserved.
             assert_output_bundle_available(output_path)
             if os.name != "nt":
-                os.fchmod(staged.fileno(), final_mode)
+                os.fchmod(staged.fileno(), final_mode & (read_permissions | 0o222))
             published = _publish_image_no_clobber(temp_path, output_path)
             try:
                 assert_output_bundle_claims_current(output_path, (published,))
@@ -355,57 +336,10 @@ def save_output_image(
 
 
 def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedFile:
-    source = os.stat(temp_path)
-    output_cleanup.check_open()
     try:
-        # A hard-link publish is atomic, no-clobber, and keeps the already-fsynced
-        # staged bytes invisible at the final name until the single link operation.
-        os.link(temp_path, output_path, follow_symlinks=False)
-        return PublishedFile(output_path, source.st_dev, source.st_ino)
+        return publish_complete(temp_path, output_path)
     except FileExistsError as exc:
         raise _output_exists(output_path) from exc
-    except OSError as exc:
-        # EINVAL is what Windows reports for CreateHardLink on exFAT
-        # (ERROR_INVALID_FUNCTION); treating it as fatal would fail every publish there.
-        unsupported = {
-            errno.EACCES,
-            errno.EINVAL,
-            errno.ENOSYS,
-            errno.ENOTSUP,
-            errno.EOPNOTSUPP,
-            errno.EPERM,
-        }
-        if exc.errno not in unsupported:
-            raise
-
-    # Filesystems without hard links (notably removable exFAT volumes) still get
-    # an atomic O_EXCL path claim. Bytes are copied through the claimed descriptor,
-    # so deleting/replacing the pathname cannot make PixelUp overwrite the winner.
-    try:
-        descriptor = open_output_handle(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-    except FileExistsError as exc:
-        raise _output_exists(output_path) from exc
-    try:
-        output_cleanup.admit(descriptor, output_path, staging=False)
-        with (
-            os.fdopen(open_output_handle(temp_path, os.O_RDONLY), "rb") as source_file,
-            os.fdopen(descriptor, "wb", closefd=False) as output_file,
-        ):
-            _copy_staged(source_file, output_file)
-            output_file.flush()
-            os.fsync(output_file.fileno())
-    except Exception:
-        remove_published_file(close_published_file(output_path, descriptor))
-        raise
-    finally:
-        output_cleanup.release(descriptor)
-    return close_published_file(output_path, descriptor)
-
-
-def _copy_staged(source_file: Any, output_file: Any) -> None:
-    while chunk := source_file.read(1024 * 1024):
-        output_cleanup.check_open()
-        output_file.write(chunk)
 
 
 def _output_exists(output_path: Path) -> PixelupError:
@@ -550,11 +484,11 @@ def _save_kwargs(
 
 def _temp_output_path(output_path: Path) -> Path:
     # Staged beside output_path, not in a central temp directory: the atomic
-    # hard-link publication requires one filesystem volume, and output_path may
-    # be on a USB stick or second disk rather than ~/.pixelup/temp/. Only the name
+    # complete-file publication requires one filesystem volume, and output_path
+    # may be on a USB stick or second disk. Only the name
     # comes from here: tempfile's own functions would create the file through the
     # C runtime, whose Windows handle quit could not delete (open_output_handle).
-    return output_path.parent / f"{output_path.stem}-{secrets.token_hex(8)}.tmp"
+    return output_path.parent / f"pixelup-{secrets.token_hex(8)}.tmp"
 
 
 @contextmanager
@@ -565,7 +499,7 @@ def temp_file_guard(path: Path) -> Iterator[tuple[Any, int]]:
     try:
         output_cleanup.admit(descriptor, path, staging=True)
         # Capture ordinary creation's umask-filtered mode before keeping staged
-        # image bytes private; hardlink publication later restores this exact mode.
+        # bytes private; publication later intersects this with source read permissions.
         final_mode = os.fstat(descriptor).st_mode & 0o777
         if os.name != "nt":
             os.fchmod(descriptor, final_mode & 0o600)

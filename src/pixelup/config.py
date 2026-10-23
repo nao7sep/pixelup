@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import errno
 import os
 import re
 import stat
 import sys
 import tempfile
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +18,6 @@ from pixelup.timestamps import utc_now_stamp
 APP_NAME = "pixelup"
 HOME_ENV = "PIXELUP_DATA_DIR"
 MODELS_ENV = "PIXELUP_MODELS_DIR"
-TEMP_ENV = "PIXELUP_TEMP_DIR"
 
 # An environment reference in a path override: ${VAR}, $VAR or %VAR%.
 _ENV_REF = re.compile(r"\$\{(\w+)\}|\$(\w+)|%(\w+)%")
@@ -25,19 +26,16 @@ _ENV_REF = re.compile(r"\$\{(\w+)\}|\$(\w+)|%(\w+)%")
 @dataclass(frozen=True, slots=True)
 class RuntimeDirs:
     models_dir: Path
-    temp_dir: Path
 
 
 def resolve_runtime_dirs(
     *,
     models_dir: Path | None = None,
-    temp_dir: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> RuntimeDirs:
     source_env = env if env is not None else os.environ
     return RuntimeDirs(
         models_dir=resolve_models_dir(models_dir, source_env),
-        temp_dir=resolve_temp_dir(temp_dir, source_env),
     )
 
 
@@ -58,10 +56,6 @@ def saved_models_dir(value: str, default: Path) -> Path:
     if path.parts and path.parts[0] == "~":
         path = Path.home().joinpath(*path.parts[1:])
     return Path(os.path.normpath(path if path.is_absolute() else Path.home() / path))
-
-
-def resolve_temp_dir(override: Path | None, env: dict[str, str] | None = None) -> Path:
-    return _resolve_dir(override, TEMP_ENV, "temp", env)
 
 
 def resolve_state_dir(override: Path | None = None) -> Path:
@@ -156,7 +150,8 @@ def _ensure_state_root(root: Path) -> Path:
         # never widen it. Subdirectories keep their existing default-mode creation;
         # `_tighten_root_permissions` below only ever touches the root itself.
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        for path in (root / "logs", root / "models", root / "temp"):
+        _tighten_root_permissions(root)
+        for path in (root / "logs", root / "models"):
             path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise PixelupError(
@@ -172,7 +167,6 @@ def _ensure_state_root(root: Path) -> Path:
             hint=Message.of("error.hintHomeWritableDirectory", variable=HOME_ENV),
             details={"path": str(root)},
         )
-    _tighten_root_permissions(root)
     return root
 
 
@@ -183,20 +177,22 @@ def _tighten_root_permissions(root: Path) -> None:
     tightened at each launch when an existing root is broader, because
     derived data and logs must never be readable by accounts that cannot
     read their sources. Windows uses its own permission model and is
-    unaffected. A failure to tighten is logged and does not stop the app —
-    only the root itself is touched, never its contents.
+    unaffected. A failure to establish 0700 prevents startup; only the root
+    itself is touched, never its contents.
     """
     if sys.platform == "win32":
         return
     try:
         mode = stat.S_IMODE(root.stat().st_mode)
-        if mode & 0o077:
+        if mode != 0o700:
             root.chmod(0o700)
     except OSError as exc:
-        print(
-            f"pixelup: could not tighten permissions on storage root {root}: {exc}",
-            file=sys.stderr,
-        )
+        raise PixelupError(
+            ErrorCode.OUTPUT_UNWRITABLE,
+            Message("error.storageCreateFailed"),
+            hint=Message.of("error.hintHomeWritableLocation", variable=HOME_ENV),
+            details={"path": str(root), "reason": str(exc)},
+        ) from exc
 
 
 def quarantine_corrupt_file(path: Path) -> Path:
@@ -233,7 +229,7 @@ def quarantine_corrupt_file(path: Path) -> Path:
     return target
 
 
-def write_managed_text(path: Path, text: str) -> None:
+def write_managed_text(path: Path, text: str) -> OSError | None:
     """The single managed-text atomic-write choke point for PixelUp.
 
     Every durable text file the app owns, including ``config.json``, is written
@@ -243,8 +239,14 @@ def write_managed_text(path: Path, text: str) -> None:
     Writes ``text`` (UTF-8) to a temp file the standard library creates exclusively
     beside ``path`` (``<stem>-<random>.tmp``, the storage-path conventions'
     derived-filename grammar), then atomically renames it over ``path``, so a crash
-    mid-write cannot corrupt the target. Raises on failure; the caller logs it
-    through the session log.
+    mid-write cannot corrupt the target. Flushes and syncs the staged bytes before
+    publication, then syncs the containing directory where supported (Windows
+    and filesystems that reject directory sync cannot provide that final flush).
+
+    Raises on a failure before publication, preserving the previous target. Returns
+    an OSError only when directory sync fails AFTER the new bytes were published;
+    callers must apply the saved state and report durability as unconfirmed rather
+    than claim the replacement failed. Returns None when no such warning remains.
 
     **The data-backup record fires strictly AFTER the rename lands
     (data-backup-conventions).** Recording before the rename would risk a "backup of
@@ -261,12 +263,21 @@ def write_managed_text(path: Path, text: str) -> None:
     try:
         with os.fdopen(descriptor, "wb") as file:
             file.write(data)
-        if sys.platform == "darwin":
-            _keep_replaced_file_mode(path, temp_path)
+            file.flush()
+            if sys.platform == "darwin":
+                _keep_replaced_file_mode(path, temp_path)
+            os.fsync(file.fileno())
         os.replace(temp_path, path)
     except BaseException:
-        temp_path.unlink(missing_ok=True)
+        # Cleanup must not obscure the failure that prevented publication.
+        with suppress(OSError):
+            temp_path.unlink(missing_ok=True)
         raise
+    durability_warning = None
+    try:
+        _sync_directory(path.parent)
+    except OSError as exc:
+        durability_warning = exc
     # After the rename: the file is exactly where it belongs, so record the bytes we
     # just wrote. Imported lazily to avoid a config <-> backup_store import cycle
     # (backup_store resolves its store path through resolve_state_dir here). record()
@@ -275,6 +286,25 @@ def write_managed_text(path: Path, text: str) -> None:
     from pixelup.backup_store import record
 
     record(path, data)
+    return durability_warning
+
+
+def _sync_directory(path: Path) -> None:
+    """Sync a published directory entry on platforms/filesystems supporting it."""
+    if sys.platform == "win32":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            # A directory descriptor owns no pending writes; closing it is cleanup
+            # and must not replace a failed fsync diagnostic.
+            with suppress(OSError):
+                os.close(descriptor)
+    except OSError as exc:
+        if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.ENOSYS}:
+            raise
 
 
 def _keep_replaced_file_mode(path: Path, temp_path: Path) -> None:

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import os
-import select
+import stat
 import tempfile
-import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -24,7 +22,6 @@ CancelCheck = Callable[[], bool]
 
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 DOWNLOAD_REPORT_BYTES = 5 * 1024 * 1024
-DOWNLOAD_POLL_SECONDS = 0.25
 MIN_DOWNLOAD_RATE_BYTES_PER_SECOND = 128 * 1024
 LARGE_DOWNLOAD_FINALIZATION_SECONDS = 120
 MAX_DOWNLOAD_REDIRECTS = 10
@@ -34,13 +31,6 @@ _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 class _NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
-
-
-@dataclass(slots=True)
-class _ConnectionAttempt:
-    response: object | None = None
-    error: BaseException | None = None
-    abandoned: bool = False
 
 
 def model_file(models_dir: Path, name: str) -> Path:
@@ -69,10 +59,7 @@ def require_model_present(
 
 def model_is_ready(models_dir: Path, name: str) -> bool:
     """Whether the artifact-local cache has a usable non-empty model file."""
-    try:
-        return _model_file_present(model_file(models_dir, name))
-    except OSError:
-        return False
+    return _model_file_present(model_file(models_dir, name))
 
 
 def download_model(
@@ -170,27 +157,7 @@ def download_model_info(
             # (data-backup-conventions).
             os.replace(temp_path, target)
             _sync_directory_best_effort(models_dir)
-        except PixelupError as exc:
-            # A cancellation is not a download failure; the job-level log records
-            # it. Any other PixelupError here is a real failure (e.g. the
-            # downloaded file failed verification) and gets a terminal event so
-            # every model.download_started has a matching outcome.
-            if exc.code != ErrorCode.JOB_CANCELLED:
-                log.warning(
-                    "model.download_failed",
-                    model=info.name,
-                    url=info.url,
-                    code=exc.code.value,
-                    reason=str(exc),
-                )
-            raise
         except (HTTPError, URLError, TimeoutError, OSError, HTTPException) as exc:
-            log.warning(
-                "model.download_failed",
-                model=info.name,
-                url=info.url,
-                reason=str(exc),
-            )
             raise PixelupError(
                 ErrorCode.MODEL_DOWNLOAD_FAILED,
                 Message.of("error.modelDownloadFailed", model=info.name),
@@ -325,9 +292,8 @@ def _open_download_response(
             current_url = urljoin(current_url, location)
             _assert_safe_download_url(current_url, allow_file=False)
             continue
-        effective_url = response.geturl()
         try:
-            _assert_safe_download_url(effective_url, allow_file=allow_file)
+            _assert_safe_download_url(response.geturl(), allow_file=allow_file)
         except Exception:
             response.close()
             raise
@@ -341,116 +307,45 @@ def _open_response_cancellable(
     deadline: float,
     should_cancel: CancelCheck | None,
 ):
-    """Open without letting urllib's blocking DNS/connect/TLS hide cancel or deadline.
+    """Keep setup owned by the installation worker until the call returns.
 
-    The daemon worker owns only connection setup. Response ownership transfers under
-    the lock; if the caller has already left, the worker closes a late response.
+    urllib's timeout cannot interrupt every DNS/platform call. Cancellation remains
+    requested until physical return; a late response is closed before settlement.
     """
-    attempt = _ConnectionAttempt()
-    ready = threading.Event()
-    lock = threading.Lock()
-    open_timeout = _remaining_download_seconds(deadline)
-
-    def connect() -> None:
-        try:
-            response = opener.open(url, timeout=open_timeout)
-        except BaseException as exc:
-            with lock:
-                if attempt.abandoned:
-                    return
-                attempt.error = exc
-                ready.set()
-            return
-
-        with lock:
-            if attempt.abandoned:
-                close_abandoned = True
-            else:
-                attempt.response = response
-                ready.set()
-                close_abandoned = False
-        if close_abandoned:
-            _close_response(response)
-
-    threading.Thread(target=connect, name="pixelup-model-connect", daemon=True).start()
-
+    _check_acquisition(deadline, should_cancel)
     try:
-        while True:
+        response = opener.open(url, timeout=_remaining_download_seconds(deadline))
+    except Exception as exc:
+        try:
             _raise_if_cancelled(should_cancel)
-            remaining = _remaining_download_seconds(deadline)
-            if ready.wait(min(DOWNLOAD_POLL_SECONDS, remaining)):
-                break
-        # Cancellation or the total deadline wins until response ownership transfers.
-        _raise_if_cancelled(should_cancel)
-        _remaining_download_seconds(deadline)
-    except BaseException:
-        with lock:
-            attempt.abandoned = True
-            response = attempt.response
-            attempt.response = None
-        if response is not None:
-            _close_response(response)
+        except PixelupError:
+            if isinstance(exc, HTTPError):
+                exc.close()
+            raise
         raise
-
-    with lock:
-        response = attempt.response
-        error = attempt.error
-        attempt.response = None
-    if error is not None:
-        raise error
-    if response is None:
-        raise RuntimeError("Connection worker completed without a response or error.")
+    try:
+        _check_acquisition(deadline, should_cancel)
+    except BaseException:
+        response.close()
+        raise
     return response
 
 
-def _close_response(response: object) -> None:
-    close = getattr(response, "close", None)
-    if callable(close):
-        try:
-            close()
-        except Exception:
-            pass
-
-
 def _read_download_chunk(response, deadline: float, should_cancel: CancelCheck | None) -> bytes:
+    _check_acquisition(deadline, should_cancel)
     sock = _response_socket(response)
-    if sock is None:
+    if sock is not None:
+        # Buffered HTTP/TLS streams can become unusable after a socket timeout.
+        # Give this read the remaining acquisition budget and never retry it.
+        sock.settimeout(_remaining_download_seconds(deadline))
+    reader = getattr(response, "read1", None) or response.read
+    try:
+        chunk = reader(DOWNLOAD_CHUNK_BYTES)
+    except Exception:
         _raise_if_cancelled(should_cancel)
-        _remaining_download_seconds(deadline)
-        chunk = response.read(DOWNLOAD_CHUNK_BYTES)
-        _raise_if_cancelled(should_cancel)
-        _remaining_download_seconds(deadline)
-        return chunk
-
-    while True:
-        _raise_if_cancelled(should_cancel)
-        remaining = _remaining_download_seconds(deadline)
-        pending = getattr(sock, "pending", None)
-        if not (callable(pending) and pending() > 0):
-            readable, _, _ = select.select(
-                [sock],
-                [],
-                [],
-                min(DOWNLOAD_POLL_SECONDS, remaining),
-            )
-            if not readable:
-                continue
-
-        remaining = _remaining_download_seconds(deadline)
-        set_timeout = getattr(sock, "settimeout", None)
-        if callable(set_timeout):
-            set_timeout(min(DOWNLOAD_POLL_SECONDS, remaining))
-        reader = getattr(response, "read1", None) or response.read
-        try:
-            chunk = reader(DOWNLOAD_CHUNK_BYTES)
-        except TimeoutError:
-            # A readable raw socket may still hold only part of a TLS record.
-            # Return to the polling loop so cancellation and the total deadline
-            # remain responsive without treating slow progress as a failure.
-            continue
-        _raise_if_cancelled(should_cancel)
-        _remaining_download_seconds(deadline)
-        return chunk
+        raise
+    _check_acquisition(deadline, should_cancel)
+    return chunk
 
 
 def _response_socket(response):
@@ -538,7 +433,11 @@ def _model_file_present(path: Path) -> bool:
     # Presence is trust: a non-empty file at the target path was verified once at
     # download (or placed by the user), so the download is skipped and the file is not
     # re-hashed — see require_model_present. A zero-byte leftover does not count.
-    return path.is_file() and path.stat().st_size > 0
+    try:
+        metadata = path.stat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISREG(metadata.st_mode) and metadata.st_size > 0
 
 
 def _download_result(info: ModelInfo, path: Path, status: str) -> dict[str, object]:

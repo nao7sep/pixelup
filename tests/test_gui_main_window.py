@@ -12,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from config_support import load_app_config
+from localization_support import speaking
 from PIL import Image, PngImagePlugin
 from PySide6.QtCore import QEvent, QMargins, QRect, QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QCloseEvent, QColor, QImageReader, QKeySequence, QPalette
@@ -24,7 +26,6 @@ from pixelup.app_config import (
     ConfigSaveResult,
     SettingsFile,
     config_path,
-    load_app_config,
 )
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
@@ -185,7 +186,6 @@ def make_window(
             (models_dir / info.filename).write_bytes(b"ready")
         runtime_dirs = SimpleNamespace(
             models_dir=models_dir,
-            temp_dir=tmp_path / "home" / "temp",
         )
         window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs if injected else None)
         created.append(window)
@@ -265,7 +265,7 @@ def test_build_app_wires_application_and_opens_argv_paths(
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
     )
     image = _png(tmp_path, "a.png")
-    runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models", temp_dir=tmp_path / "temp")
+    runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models")
 
     app, window = gui.build_app(["pixelup", str(image)], runtime_dirs=runtime_dirs)
     try:
@@ -311,7 +311,7 @@ def test_build_app_assigns_runtime_icon_only_on_windows(
     assigned_icons: list[str] = []
     monkeypatch.setattr(gui, "QIcon", lambda path: path)
     monkeypatch.setattr(qapp, "setWindowIcon", assigned_icons.append)
-    runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models", temp_dir=tmp_path / "temp")
+    runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models")
 
     _, window = gui.build_app(["pixelup"], runtime_dirs=runtime_dirs)
     try:
@@ -624,7 +624,7 @@ def test_queue_selected_image_creates_rows_and_summary(make_window, tmp_path: Pa
 
     _settle_models(window)
     assert len(window.jobs) == 2
-    assert window.queue_table.rowCount() == 2
+    assert window.queue_table.model().rowCount() == 2
     assert window.queue_table.empty_state_visible is False
     assert _summary(window, image) == "2 queued"
     assert window.cancel_button.isEnabled() is True
@@ -827,6 +827,14 @@ def test_saved_font_change_refreshes_live_layout_metrics(
         def config(self):
             return candidate
 
+        def edits(self):
+            return {
+                "max_concurrent_jobs": candidate.max_concurrent_jobs,
+                "font_family": candidate.font_family,
+                "language": candidate.language,
+                "display_zone": candidate.display_zone,
+            }
+
     applied: list[str] = []
     refreshed: list[bool] = []
     monkeypatch.setattr("pixelup.gui.SettingsDialog", AcceptedSettings)
@@ -1019,7 +1027,7 @@ def test_missing_models_cancel_before_queue_materialization(
 
     assert not window._pending_model_work
     assert window.jobs == []
-    assert window.queue_table.rowCount() == 0
+    assert window.queue_table.model().rowCount() == 0
 
 
 def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
@@ -1049,7 +1057,7 @@ def test_install_and_queue_materializes_jobs_after_requirements_are_ready(
 
     assert not window._pending_model_work
     assert len(window.jobs) == 1
-    assert window.queue_table.rowCount() == 1
+    assert window.queue_table.model().rowCount() == 1
     assert window.manage_models_button.text() == "Managed models"
 
 
@@ -1526,6 +1534,7 @@ def test_failed_quit_save_settles_without_resolving_the_unavailable_root(
 def test_close_waits_for_worker_ownership_to_end(
     make_window,
     monkeypatch: pytest.MonkeyPatch,
+    process_until,
 ) -> None:
     window = make_window()
     cleanup_results = iter((False, True))
@@ -1548,7 +1557,10 @@ def test_close_waits_for_worker_ownership_to_end(
     second = QCloseEvent()
     window.closeEvent(second)
     assert second.isAccepted() is True
-    assert window._window_state.value(window._GEOMETRY_KEY) is not None
+    process_until(
+        lambda: window._window_state.value(window._GEOMETRY_KEY) is not None,
+        timeout_s=5, what="Accepted-close geometry persistence",
+    )
 
 
 class _ChoicesDialog:
@@ -1918,10 +1930,12 @@ from pixelup import gui
 class HeldHandler(logging.Handler):
     def close(self):
         print('logging tail entered', flush=True)
+        # Arm only after entry: host scheduling must not let the watchdog exit
+        # before this test reaches the blocking relationship it verifies.
+        gui._start_quit_watchdog(0.05, lambda: gui.MainWindow._force_exit(owner))
         threading.Event().wait()
 logging.getLogger().addHandler(HeldHandler())
 owner = SimpleNamespace(_log_forced_exit=lambda: threading.Event().wait())
-gui._start_quit_watchdog(0.05, lambda: gui.MainWindow._force_exit(owner))
 logging.shutdown()
 """
     result = subprocess.run(
@@ -1934,19 +1948,30 @@ logging.shutdown()
     assert "logging tail entered" in result.stdout
 
 
-def test_main_window_restores_geometry_saved_on_normal_close(make_window) -> None:
+def _await_saved_geometry(window: MainWindow, expected, process_until) -> None:
+    def saved() -> bool:
+        settings = QSettings(str(window._window_state.path), QSettings.Format.IniFormat)
+        settings.sync()
+        return settings.value(window._GEOMETRY_KEY) == expected
+
+    process_until(saved, timeout_s=10, what="Physical window geometry persistence")
+
+
+def test_main_window_restores_geometry_saved_on_normal_close(make_window, process_until) -> None:
     first = make_window()
     # The offscreen Qt test screen is only 800 px wide and the content-derived
     # minimum is nearly that wide, so keep the fixture geometry wholly on-screen.
     first.setGeometry(1, 40, first.minimumWidth(), 650)
+    expected = first.saveGeometry()
     first._is_session_shutdown = lambda: True
     assert first.close()
+    _await_saved_geometry(first, expected, process_until)
 
     second = make_window()
     assert second.geometry() == first.geometry()
 
 
-def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
+def test_main_window_saves_and_restores_normal_geometry(make_window, process_until) -> None:
     first = make_window()
     first.setGeometry(1, 40, first.minimumWidth(), 650)
     expected = first.saveGeometry()
@@ -1954,8 +1979,7 @@ def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
 
     assert first.close()
 
-    settings = QSettings(str(first._window_state.path), QSettings.Format.IniFormat)
-    assert settings.value(first._GEOMETRY_KEY) == expected
+    _await_saved_geometry(first, expected, process_until)
 
     second = make_window()
     assert second.saveGeometry() == expected
@@ -1990,7 +2014,9 @@ def test_restored_window_state_is_platform_appropriate(
         Qt.WindowState.WindowFullScreen,
     ],
 )
-def test_main_window_saves_geometry_on_every_accepted_close(make_window, window_state) -> None:
+def test_main_window_saves_geometry_on_every_accepted_close(
+    make_window, window_state, process_until,
+) -> None:
     window = make_window()
     window.setGeometry(1, 40, window.minimumWidth(), 650)
     window.setWindowState(window_state)
@@ -1999,21 +2025,24 @@ def test_main_window_saves_geometry_on_every_accepted_close(make_window, window_
 
     assert window.close()
 
-    settings = QSettings(str(window._window_state.path), QSettings.Format.IniFormat)
-    assert settings.value(window._GEOMETRY_KEY) == expected
+    _await_saved_geometry(window, expected, process_until)
 
 
 @pytest.mark.parametrize(
     "window_state",
     [Qt.WindowState.WindowMaximized, Qt.WindowState.WindowFullScreen],
 )
-def test_main_window_restores_native_state_according_to_platform(make_window, window_state) -> None:
+def test_main_window_restores_native_state_according_to_platform(
+    make_window, window_state, process_until,
+) -> None:
     first = make_window()
     first.setGeometry(1, 40, first.minimumWidth(), 650)
     normal_geometry = first.normalGeometry()
     first.setWindowState(window_state)
+    expected = first.saveGeometry()
     first._is_session_shutdown = lambda: True
     assert first.close()
+    _await_saved_geometry(first, expected, process_until)
 
     second = make_window()
     assert second.windowState() == restored_window_state(window_state, sys.platform)
@@ -2156,7 +2185,7 @@ def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_pat
 
     assert queued.settings.scale == 2
     assert queued.output_path.name == "a-realesr-general-x4v3-2x.png"
-    assert window.queue_table.item(0, 2).text() == "2x"
+    assert window.queue_table.model().index(0, 2).data(Qt.ItemDataRole.DisplayRole) == "2x"
 
     # The panel moves on, and the reset button is the most forceful way it can.
     _reset_button(window).click()
@@ -2164,14 +2193,14 @@ def test_queued_jobs_keep_the_scale_they_were_enqueued_with(make_window, tmp_pat
 
     assert queued.settings.scale == 2
     assert queued.output_path.name == "a-realesr-general-x4v3-2x.png"
-    assert window.queue_table.item(0, 2).text() == "2x"
+    assert window.queue_table.model().index(0, 2).data(Qt.ItemDataRole.DisplayRole) == "2x"
     assert window.config.parameters.scale == DEFAULT_SCALE
 
     # The next job takes the panel as it now stands.
     window._queue_selected_image()
     _settle_models(window)
     assert window.jobs[1].settings.scale == DEFAULT_SCALE
-    assert window.queue_table.item(1, 2).text() == "4x"
+    assert window.queue_table.model().index(1, 2).data(Qt.ItemDataRole.DisplayRole) == "4x"
 
 
 def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
@@ -2393,32 +2422,39 @@ def test_every_stored_settings_set_has_a_name_for_the_rejected_notice() -> None:
 
 
 def test_opening_images_never_waits_on_the_volume(
-    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    make_window, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
 ) -> None:
-    import threading
-    import time
-
     window = make_window()
     image = _png(tmp_path, "slow.png")
     entered = threading.Event()
     release = threading.Event()
+    readers = []
+    main_thread = threading.current_thread()
     real_size = gui._safe_image_size
 
     def stalled_size(path: Path):
+        readers.append(threading.current_thread())
         entered.set()
-        assert release.wait(5)
+        # A regression onto the window thread must fail without deadlocking the
+        # dispatcher needed to observe it and release the held read.
+        if threading.current_thread() is not main_thread:
+            release.wait()
         return real_size(path)
 
     monkeypatch.setattr(gui, "_safe_image_size", stalled_size)
-    started = time.monotonic()
-    window.open_paths([image])
-    assert time.monotonic() - started < 1
-    assert entered.wait(5)
-    assert window.opening is True
-    assert window.image_table.rowCount() == 0
-
-    release.set()
-    _settle_opens(window)
+    try:
+        window.open_paths([image])
+        assert entered.wait(10), "the image read never started"
+        assert readers[0] is not main_thread, "image metadata was read on the window thread"
+        tick = threading.Event()
+        QTimer.singleShot(0, tick.set)
+        process_until(tick.is_set, timeout_s=10, what="Window progress during held image read")
+        assert not release.is_set()
+        assert window.opening is True
+        assert window.image_table.rowCount() == 0
+    finally:
+        release.set()
+        _settle_opens(window)
     assert window.image_table.rowCount() == 1
     assert window._selected_path() == image.resolve()
 
@@ -3430,7 +3466,7 @@ def test_windows_session_end_messages_save_the_last_edit_and_quit_silently():
     route = """
 import ctypes
 from ctypes import wintypes
-from pixelup.app_config import load_app_config
+from pixelup.app_config import load_app_config_result
 user32 = ctypes.WinDLL('user32')
 user32.SendMessageW.restype = ctypes.c_ssize_t
 user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
@@ -3446,7 +3482,8 @@ def end_session():
 QTimer.singleShot(0, end_session)
 import atexit
 atexit.register(lambda: print(
-    'saved', load_app_config().parameters.quality == window.quality.value(), flush=True))
+    'saved', load_app_config_result().config.parameters.quality == window.quality.value(),
+    flush=True))
 """
     result = _run_os_quit(route, settles=True, QT_QPA_PLATFORM="windows")
     _assert_os_quit(result, settles=True)
@@ -3505,6 +3542,11 @@ def test_output_planning_keeps_the_window_live_while_storage_is_held(
             window._retry_failed()
         else:
             window._enqueue_jobs([image], [model])
+        if read_kind == "historical_resolve":
+            _settle_models(window)
+            assert not entered.is_set(), "Completed history must not read its old volume"
+            assert any(job.input_path == image for job in window.jobs)
+            return
         process_until(entered.is_set, timeout_s=5, what="Held planning filesystem read")
         assert readers[0] is not main_thread, "Output planning read storage on the window thread"
         tick = threading.Event()
@@ -3859,7 +3901,7 @@ def test_the_status_tooltip_carries_the_whole_message_with_its_warnings(
 
     window._job_finished(job.id, False, FAILED, {}, [DISK_WARNING])
 
-    assert window.queue_table.item(0, 4).toolTip() == (
+    assert window.queue_table.model().index(0, 4).data(Qt.ItemDataRole.ToolTipRole) == (
         f"{english().of(FAILED)}\n{english().of(DISK_WARNING)}"
     )
 
@@ -3896,8 +3938,6 @@ def test_cmd_or_ctrl_w_runs_the_main_windows_own_close(
 def test_auto_device_names_the_backend_it_resolves_to_once_known(
     make_window, monkeypatch, process_until
 ) -> None:
-    from pixelup.i18n import localizer
-
     window = make_window()
     assert window.device.itemText(0) == "Auto"
     monkeypatch.setattr(gui, "_resolve_auto_device", lambda: "mps")
@@ -3907,7 +3947,7 @@ def test_auto_device_names_the_backend_it_resolves_to_once_known(
 
     assert window.device.itemText(0) == "Auto (MPS)"
     assert window.device.currentData() == "auto"
-    with localizer.speaking("ja"):
+    with speaking("ja"):
         window._retranslate()
         assert window.device.itemText(0) == "自動（MPS）"
     window._retranslate()
@@ -4107,3 +4147,242 @@ def test_everyday_shortcuts_press_their_buttons_only_while_those_are_on(
     QTest.keyClick(window.image_table, Qt.Key.Key_Delete)
 
     assert pressed == ["open", "queue", "remove", "remove"]
+
+
+@pytest.mark.parametrize("changed_set", [
+    "max_concurrent_jobs", "font_family", "language", "display_zone",
+])
+def test_real_settings_dialog_replaces_failed_owned_edits_and_preserves_unshown_sets(
+    make_window, tmp_path, monkeypatch, changed_set,
+) -> None:
+    window = make_window()
+    unavailable = _isolate_settings_root(window, tmp_path, monkeypatch)
+    monkeypatch.setattr("pixelup.backup_store.record", lambda *_: None)
+    baseline = replace(
+        window.config, parameters=replace(window.config.parameters, quality=77),
+        models_folder=str(tmp_path / "preserved models"),
+    )
+    outcomes = []
+    window._save_config_candidate(baseline, Message("settings.saveFailed"), outcomes.append)
+    _settle_config(window)
+    assert outcomes == [None]
+    pending = {
+        "max_concurrent_jobs": 3,
+        "font_family": "Pending Font",
+        "language": "de",
+        "display_zone": "UTC",
+    }
+    replacement = {
+        "max_concurrent_jobs": 4,
+        "font_family": "Menlo",
+        "language": "ja",
+        "display_zone": "Europe/Paris",
+    }
+    dialogs = []
+
+    def edit_and_save(dialog):
+        dialogs.append(dialog)
+        assert dialog.config() == baseline
+        if changed_set == "max_concurrent_jobs":
+            dialog.concurrent.setValue(replacement[changed_set])
+        elif changed_set == "font_family":
+            dialog.font_family.setText(replacement[changed_set])
+        else:
+            combo = getattr(dialog, changed_set)
+            combo.setCurrentIndex(combo.findData(replacement[changed_set]))
+        assert dialog.ok_button.isEnabled()
+        dialog.ok_button.click()
+        _settle_config(window)
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        return dialog.result()
+
+    monkeypatch.setattr(gui.SettingsDialog, "exec", edit_and_save)
+    try:
+        unavailable.replace()
+        outcomes.clear()
+        window._save_config_candidate(
+            replace(baseline, **pending), Message("settings.saveFailed"), outcomes.append,
+        )
+        _settle_config(window)
+        assert outcomes == [Message("settings.saveFailed")]
+        assert window.config == baseline
+        assert window._unsaved_config_changes == pending
+        unavailable.restore()
+
+        # Exercise the real dialog's callback after the failed save has settled.
+        window._open_settings_after_save(True)
+
+        expected = replace(baseline, **{changed_set: replacement[changed_set]})
+        assert window.config == expected
+        assert load_app_config(window._settings_file.path) == expected
+        assert window.config.parameters == baseline.parameters
+        assert window.config.models_folder == baseline.models_folder
+        assert not window._unsaved_config_changes
+    finally:
+        unavailable.restore()
+        for dialog in dialogs:
+            dialog.deleteLater()
+
+
+def test_reoffering_selected_path_refreshes_dimensions_and_preview_from_replaced_image(
+    make_window, tmp_path, monkeypatch, process_until,
+) -> None:
+    window = make_window()
+    source = _png(tmp_path, "replaced.png", (8, 6))
+    decoded = []
+    real_read = QImageReader.read
+
+    def counted_read(reader):
+        decoded.append(reader.fileName())
+        return real_read(reader)
+
+    monkeypatch.setattr(QImageReader, "read", counted_read)
+    _open(window, [source])
+    process_until(lambda: window.preview.reads.settled, timeout_s=10, what="First preview return")
+    assert window.preview._pixmap.toImage().pixelColor(0, 0) == QColor("white")
+    Image.new("RGB", (12, 9), "red").save(source)
+
+    _open(window, [source])
+
+    assert window.image_table.rowCount() == 1
+    assert window._images_by_path[source].input_size == (12, 9)
+    assert window.image_table.item(0, 1).text() == "12 x 9"
+    preview = window.preview._pixmap
+    assert preview is not None
+    assert (preview.width(), preview.height()) == (12, 9)
+    assert preview.toImage().pixelColor(0, 0) == QColor("red")
+    assert decoded == [str(source), str(source)]
+
+
+def test_published_config_durability_warning_applies_saved_state_and_warns_without_retry(
+    make_window, monkeypatch,
+) -> None:
+    from pixelup import config as config_module
+
+    window = make_window()
+    sentinel = "EIO /internal/config ORIGINAL-DURABILITY-SENTINEL"
+    warning = OSError(sentinel)
+    published = []
+    path = window._settings_file.path
+
+    def fail_directory_sync(_directory):
+        published.append(json.loads(path.read_text(encoding="utf-8")))
+        raise warning
+
+    monkeypatch.setattr(config_module, "_sync_directory", fail_directory_sync)
+    monkeypatch.setattr("pixelup.backup_store.record", lambda *_args: None)
+    window.quality.setValue(72)
+
+    assert _flush(window) is True
+
+    assert published and published[0]["parameters"]["quality"] == 72
+    assert window.config.parameters.quality == 72
+    assert load_app_config(path) == window.config
+    assert window._settings_file.exists
+    assert not window._unsaved_config_changes
+    assert window._config_save is None
+    assert window.parameters_result.isVisibleTo(window)
+    assert window.parameters_result.property("severity") == "warning"
+    assert window.parameters_result.message_label.text() == english().of(
+        Message("notice.configDurabilityUnconfirmed")
+    )
+    assert sentinel not in window.parameters_result.message_label.text()
+    assert flush_records(5)
+    with sqlite3.connect(config_path().parent / "records.sqlite3") as connection:
+        rows = connection.execute(
+            "SELECT fields FROM logs WHERE message = 'config.durability_unconfirmed'"
+        ).fetchall()
+        failed = connection.execute(
+            "SELECT COUNT(*) FROM logs WHERE message = 'config.save_failed'"
+        ).fetchone()[0]
+    assert failed == 0
+    assert len(rows) == 1
+    assert json.loads(rows[0][0])["error"]["message"] == sentinel
+
+
+def test_failed_model_scan_shows_safe_main_rollup_and_recovers_after_retry(
+    make_window, monkeypatch, process_until,
+) -> None:
+    from pixelup import model_manager
+
+    window = make_window()
+    manager = window.model_manager
+    known = manager.ready_names
+    real_read = model_manager.read_ready_names
+    sentinel = "EACCES /internal/models ORIGINAL-MODEL-SCAN-SENTINEL"
+    failure = PermissionError(13, sentinel)
+
+    def unreadable(_folder):
+        raise failure
+
+    monkeypatch.setattr(model_manager, "read_ready_names", unreadable)
+    manager.refresh_readiness()
+    process_until(
+        lambda: not manager._scan_in_flight,
+        timeout_s=10, what="Failed model readiness scan",
+    )
+
+    assert manager.readiness_error is failure
+    assert not manager.readiness_known
+    assert manager.ready_names == known
+    expected = english().of(Message("models.readinessFailed"))
+    assert not window.model_status.isHidden()
+    assert window.model_status.text() == expected
+    assert window.model_status.property("severity") == "error"
+    assert window.manage_models_button.accessibleName() == expected
+    assert window.manage_models_button.toolTip() == expected
+    assert sentinel not in expected
+    assert "not installed" not in window.model_status.text()
+
+    monkeypatch.setattr(model_manager, "read_ready_names", real_read)
+    manager.refresh_readiness()
+    process_until(
+        lambda: manager.readiness_known and not manager._scan_in_flight,
+        timeout_s=10, what="Successful model readiness retry",
+    )
+    assert manager.readiness_error is None
+    assert window.model_status.isHidden()
+    assert window.manage_models_button.accessibleName() == english().t("models.readyAccessible")
+
+
+def test_open_pending_marker_survives_overlapping_offers_with_mixed_results(
+    make_window, tmp_path, monkeypatch, process_until,
+) -> None:
+    window = make_window()
+    slow = _png(tmp_path, "slow-marker.png")
+    fast = _png(tmp_path, "fast-marker.png")
+    missing = tmp_path / "missing-marker.png"
+    entered, release = threading.Event(), threading.Event()
+    readers = []
+    real_size = gui._safe_image_size
+
+    def held_size(path):
+        if path == slow:
+            readers.append(threading.current_thread())
+            entered.set()
+            if threading.current_thread() is not threading.main_thread():
+                release.wait()
+        return real_size(path)
+
+    monkeypatch.setattr(gui, "_safe_image_size", held_size)
+    try:
+        window.open_paths([slow, missing])
+        assert entered.wait(10)
+        assert readers[0] is not threading.main_thread()
+        assert window.open_pending.isVisibleTo(window)
+        assert window.open_pending.text() == english().t("images.opening")
+        window.open_paths([fast])
+        process_until(
+            lambda: fast in window._images_by_path,
+            timeout_s=10, what="Independent overlapping image offer",
+        )
+        assert window.opening
+        assert window.open_pending.isVisibleTo(window)
+        assert not release.is_set()
+        assert window.image_table.rowCount() == 1
+    finally:
+        release.set()
+        _settle_opens(window)
+    assert not window.open_pending.isVisibleTo(window)
+    assert window.image_table.rowCount() == 2
+    assert "missing-marker.png: the file is unavailable" in window.open_result.message_label.text()

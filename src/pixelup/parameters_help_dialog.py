@@ -45,6 +45,8 @@ class ParametersHelpDialog(DialogShell):
             content_body=True,
         )
 
+        self.enable_keyboard_scrolling()
+
         # The shell's body is the sole scroll region and the entries are all of it,
         # so they go straight in. Tighter than the body's default rhythm, because a
         # term and its description are one entry rather than two sections.

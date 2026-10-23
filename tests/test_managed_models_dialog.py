@@ -653,3 +653,61 @@ def test_folder_picker_uses_effective_draft_and_keeps_selection_until_apply(
         assert saved == [chosen]
     finally:
         dialog.deleteLater()
+
+
+@pytest.mark.parametrize("queue_preflight", [False, True])
+def test_failed_readiness_disables_install_and_recovers_after_successful_retry(
+    qapp, tmp_path, monkeypatch, process_until, queue_preflight,
+) -> None:
+    from pixelup import model_manager
+
+    present, absent = MANAGED_ARTIFACT_NAMES[:2]
+    model_file(tmp_path, present).write_bytes(b"present")
+    manager = ModelManager(tmp_path)
+    _ready(manager, qapp)
+    real_read = model_manager.read_ready_names
+    sentinel = "EACCES /internal/models ORIGINAL-DIALOG-SCAN-SENTINEL"
+    failure = PermissionError(13, sentinel)
+
+    def unreadable(_folder):
+        raise failure
+
+    monkeypatch.setattr(model_manager, "read_ready_names", unreadable)
+    manager.refresh_readiness()
+    process_until(
+        lambda: not manager._scan_in_flight, timeout_s=10, what="Failed models folder scan",
+    )
+    dialog = ManagedModelsDialog(
+        manager,
+        required_artifacts=(absent,) if queue_preflight else (),
+        pending_job_count=2 if queue_preflight else 0,
+    )
+    try:
+        expected = english().of(Message("managedModels.readinessFailed"))
+        assert manager.readiness_error is failure
+        assert not manager.readiness_known
+        assert manager.ready_names == frozenset({present})
+        assert dialog.summary_label.text() == expected
+        assert all(label.text() == expected for label in dialog.status_labels)
+        assert dialog.result_view.message_label.text() == expected
+        assert dialog.result_view.isVisibleTo(dialog)
+        assert sentinel not in dialog.result_view.message_label.text()
+        assert not dialog.primary_button.isEnabled()
+        assert all(not button.isEnabled() for button in dialog.row_action_buttons)
+
+        monkeypatch.setattr(model_manager, "read_ready_names", real_read)
+        manager.refresh_readiness()
+        process_until(
+            lambda: manager.readiness_known and not manager._scan_in_flight,
+            timeout_s=10, what="Successful models folder retry",
+        )
+        assert manager.readiness_error is None
+        assert dialog.result_view.isHidden()
+        assert dialog.primary_button.isEnabled()
+        assert all(button.isEnabled() is not queue_preflight
+                   for button in dialog.row_action_buttons)
+        assert all(label.text() != expected for label in dialog.status_labels)
+    finally:
+        dialog.deleteLater()
+        manager.begin_shutdown()
+        process_until(manager.cleanup_for_quit, timeout_s=10, what="Model scan cleanup")

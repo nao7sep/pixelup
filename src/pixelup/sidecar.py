@@ -10,10 +10,10 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.formats import SIDECAR_FORMAT_VERSION
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
-from pixelup.output_cleanup import open_output_handle, output_cleanup
+from pixelup.imaging import _temp_output_path, temp_file_guard
+from pixelup.output_publication import publish_complete
 from pixelup.output_reservation import (
     PublishedFile,
-    close_published_file,
     published_file_is_current,
     remove_published_file,
 )
@@ -78,46 +78,31 @@ def write_sidecar(
     # never recorded, and a sidecar beside a not-recorded output rides along into
     # exclusion (data-backup-conventions). It is regenerable from the run and would
     # bloat the text history with no recovery value.
+    stage_path = _temp_output_path(sidecar_path)
+    claim = None
     try:
-        # Exclusive creation is the last no-clobber gate after a potentially long
-        # inference: it protects a sidecar anything else placed in the meantime.
-        descriptor = open_output_handle(sidecar_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        with temp_file_guard(stage_path) as (file, final_mode):
+            file.write((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+            file.flush()
+            os.fsync(file.fileno())
+            if os.name != "nt":
+                permissions = int(result.get("source_read_permissions", 0o444))
+                os.fchmod(file.fileno(), final_mode & (permissions | 0o222))
+            if should_cancel is not None and should_cancel():
+                raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
+            claim = publish_complete(stage_path, sidecar_path)
     except FileExistsError as exc:
         raise PixelupError(
-            ErrorCode.OUTPUT_EXISTS,
-            Message("error.sidecarExists"),
-            hint=Message("error.hintRetryNewName"),
-            details={"sidecar": str(sidecar_path)},
+            ErrorCode.OUTPUT_EXISTS, Message("error.sidecarExists"),
+            hint=Message("error.hintRetryNewName"), details={"sidecar": str(sidecar_path)},
         ) from exc
     except OSError as exc:
+        if claim is not None:
+            remove_published_file(claim)
         raise PixelupError(
-            ErrorCode.OUTPUT_UNWRITABLE,
-            Message("error.sidecarWriteFailed"),
+            ErrorCode.OUTPUT_UNWRITABLE, Message("error.sidecarWriteFailed"),
             details={"sidecar": str(sidecar_path), "reason": str(exc)},
         ) from exc
-
-    try:
-        # Owned by the quit while it is written, so a forced exit removes a partial
-        # sidecar as it does a partial image (output_cleanup).
-        output_cleanup.admit(descriptor, sidecar_path, staging=False)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as file:
-                file.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-                file.flush()
-                os.fsync(file.fileno())
-        finally:
-            output_cleanup.release(descriptor)
-    except OSError as exc:
-        remove_published_file(close_published_file(sidecar_path, descriptor))
-        raise PixelupError(
-            ErrorCode.OUTPUT_UNWRITABLE,
-            Message("error.sidecarWriteFailed"),
-            details={"sidecar": str(sidecar_path), "reason": str(exc)},
-        ) from exc
-    except Exception:
-        remove_published_file(close_published_file(sidecar_path, descriptor))
-        raise
-    claim = close_published_file(sidecar_path, descriptor)
     if should_cancel is not None and should_cancel():
         remove_published_file(claim)
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")

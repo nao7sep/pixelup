@@ -315,5 +315,11 @@
   "units.kilobytes": "{value} KB",
   "units.megabytes": "{value} MB",
   "warning.extensionMismatch": "出力パスの拡張子「.{extension}」が、指定された形式「{format}」と一致しません。",
-  "warning.scaleMismatch": "モデル「{model}」は {native}x 用に学習されていますが、選択された倍率は {scale}x です。Real-ESRGAN が出力のサイズを調整します。"
+  "warning.scaleMismatch": "モデル「{model}」は {native}x 用に学習されていますが、選択された倍率は {scale}x です。Real-ESRGAN が出力のサイズを調整します。",
+  "preview.loading": "プレビューを読み込んでいます…",
+  "images.opening": "画像を開いています…",
+  "error.webpDimensions": "WebPの出力は幅・高さともに{maximum}ピクセルを超えることはできません。倍率を小さくするか、別の形式を選んでください。",
+  "models.readinessFailed": "モデルファイルを確認できませんでした。「モデル管理」を開いて再試行してください。",
+  "managedModels.readinessFailed": "モデルファイルを確認できませんでした。フォルダーとアクセス権を確認し、「モデル管理」を開き直して再試行してください。",
+  "notice.configDurabilityUnconfirmed": "設定は保存されましたが、保存内容が確実に保持されることを確認できませんでした。コンピューターの電源が失われると、設定が失われる可能性があります。"
 }

@@ -192,6 +192,9 @@ class ManagedModelsDialog(DialogShell):
         return super().event(event)
 
     def _summary_text(self) -> Message:
+        if not self._manager.readiness_known:
+            return Message("managedModels.readinessFailed" if self._manager.readiness_error
+                           is not None else "managedModels.checking")
         if not self._required_artifacts:
             return Message("managedModels.summary")
         missing = self._manager.missing(self._required_artifacts)
@@ -226,14 +229,16 @@ class ManagedModelsDialog(DialogShell):
             )
             ready = len(ready_names.intersection(bundle.artifact_names))
             total = len(bundle.artifact_names)
-            status = (Message("managedModels.checking")
+            status = (Message("managedModels.readinessFailed" if self._manager.readiness_error
+                              is not None else "managedModels.checking")
                       if not self._manager.readiness_known and in_progress is None
                       else _bundle_status(in_progress, failed, ready, total))
             localize(self.status_labels[row], text=status, tooltip=status)
             missing_required = bool(required.intersection(bundle.artifact_names)) and ready < total
             # Attention styling from the app sheet, without changing the factual
             # status the label states.
-            attention = missing_required and in_progress is None and failed is None
+            attention = (self._manager.readiness_known and missing_required
+                         and in_progress is None and failed is None)
             self.status_labels[row].setProperty("severity", "warning" if attention else None)
             self.status_labels[row].setProperty("emphasis", "strong" if attention else None)
             repolish(self.status_labels[row])
@@ -274,6 +279,8 @@ class ManagedModelsDialog(DialogShell):
         )
         if self._folder_error is not None:
             self._show_error(self._folder_error)
+        elif self._manager.readiness_error is not None:
+            self._show_error(Message("managedModels.readinessFailed"))
         elif errors:
             self._show_error(join("common.sentences", errors))
         else:

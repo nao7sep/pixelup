@@ -123,17 +123,15 @@ class ConfigLoadResult:
 
 @dataclass(frozen=True, slots=True)
 class ConfigSaveResult:
+    """Published settings and an optional warning about their crash durability.
+
+    A durability warning means publication succeeded: the returned config and file
+    are authoritative even though the containing directory could not be synced.
+    """
+
     config: AppConfig
     file: SettingsFile
-
-
-def load_app_config(path: Path | None = None) -> AppConfig:
-    """Load effective settings, quarantining a corrupt file without writing a replacement.
-
-    Thin accessor over :func:`load_app_config_result` for the many callers that only
-    need the ``AppConfig``.
-    """
-    return load_app_config_result(path).config
+    durability_warning: OSError | None = None
 
 
 def load_app_config_result(path: Path | None = None) -> ConfigLoadResult:
@@ -204,15 +202,18 @@ def save_app_config(
         if sets or kept or file.exists
         else {}
     )
+    durability_warning = None
     if data != file.data:
-        write_managed_text(file.path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        durability_warning = write_managed_text(
+            file.path, json.dumps(data, indent=2, sort_keys=True) + "\n"
+        )
     saved = SettingsFile(
         file.path,
         exists=file.exists or bool(data),
         data=MappingProxyType(data),
         unapplied=frozenset(kept),
     )
-    return ConfigSaveResult(candidate, saved)
+    return ConfigSaveResult(candidate, saved, durability_warning)
 
 
 _FORMAT_VERSION_KEY = "format_version"

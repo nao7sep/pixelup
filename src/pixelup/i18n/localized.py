@@ -65,12 +65,6 @@ def unlocalize(widget: QWidget, *roles: str) -> None:
         bound.pop(role, None)
 
 
-def bound_message(widget: QWidget, role: str) -> Message | None:
-    """The message a role is bound to, for tests and owners that re-derive text."""
-    bound = _bindings.get(widget)
-    return None if bound is None else bound.get(role)
-
-
 def _setter(widget: QWidget, role: str) -> Callable[[str], None]:
     match role:
         case "text":

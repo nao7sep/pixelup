@@ -68,3 +68,42 @@ def test_the_manual_reads_on_the_content_surface(qapp: QApplication) -> None:
         assert dialog.body.property("surface") == "content"
     finally:
         dialog.deleteLater()
+
+
+def test_manual_keyboard_scrolls_while_the_footer_stays_fixed(qapp: QApplication) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    dialog = ParametersHelpDialog()
+    try:
+        dialog.show()
+        dialog.activateWindow()
+        qapp.processEvents()
+        close = dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Close)
+        assert dialog.focusWidget() is close
+        QTest.keyClick(close, Qt.Key.Key_Tab)
+        assert dialog.focusWidget() is dialog.body_scroll
+        bar = dialog.body_scroll.verticalScrollBar()
+        assert bar.maximum() > 0
+        footer_position = close.mapTo(dialog, close.rect().topLeft())
+        for key, modifiers, start, expected in (
+            (Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier, 0, bar.singleStep()),
+            (Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier, bar.singleStep(), 0),
+            (Qt.Key.Key_PageDown, Qt.KeyboardModifier.NoModifier, 0, bar.pageStep()),
+            (Qt.Key.Key_PageUp, Qt.KeyboardModifier.NoModifier, bar.pageStep(), 0),
+            (Qt.Key.Key_End, Qt.KeyboardModifier.NoModifier, 0, bar.maximum()),
+            (Qt.Key.Key_Home, Qt.KeyboardModifier.NoModifier, bar.maximum(), 0),
+            (Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier, 0, bar.pageStep()),
+            (Qt.Key.Key_Space, Qt.KeyboardModifier.ShiftModifier, bar.pageStep(), 0),
+        ):
+            bar.setValue(start)
+            QTest.keyClick(dialog.body_scroll, key, modifiers)
+            assert bar.value() == min(bar.maximum(), expected)
+            assert close.mapTo(dialog, close.rect().topLeft()) == footer_position
+        QTest.keyClick(dialog.body_scroll, Qt.Key.Key_Tab)
+        assert dialog.focusWidget() is close
+        QTest.keyClick(close, Qt.Key.Key_Space)
+        assert not dialog.isVisible()
+    finally:
+        dialog.close()
+        dialog.deleteLater()

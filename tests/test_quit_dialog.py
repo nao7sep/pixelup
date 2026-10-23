@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from localization_support import speaking
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton
 
@@ -26,7 +27,7 @@ def test_quit_confirmation_names_model_installations_still_running() -> None:
         "2 active jobs will be abandoned. 2 model installations will be cancelled. "
         "Quit PixelUp?"
     )
-    with localizer.speaking("ja"):
+    with speaking("ja"):
         assert localizer.of(quit_confirmation_text(0, installs=1)) == (
             "開いている画像は閉じられます。モデルのインストール 1 件が取り消されます。"
             "PixelUp を終了しますか？"
@@ -107,7 +108,7 @@ def test_save_failed_dialog_names_the_answer(
 def test_save_failed_dialog_buttons_keep_their_whole_labels(tag: str, qapp: QApplication) -> None:
     # The dialog's width is fixed, so the three labels must fit it in every language
     # rather than be squeezed below what their text needs.
-    with localizer.speaking(tag):
+    with speaking(tag):
         dialog = QuitSaveFailedDialog()
         try:
             dialog.show()

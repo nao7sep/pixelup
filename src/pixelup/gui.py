@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 import logging
 import os
+import stat
 import sys
 import threading
 from collections import defaultdict
@@ -127,6 +128,8 @@ from pixelup.parameters import (
 )
 from pixelup.parameters_help_dialog import ParametersHelpDialog
 from pixelup.paths import absolute_user_path
+from pixelup.queue_table import QUEUE_COLUMNS as _QUEUE_COLUMNS
+from pixelup.queue_table import QueueTableModel, QueueTableView
 from pixelup.quit_dialog import QuitConfirmDialog, QuitSaveFailedDialog
 from pixelup.read_threads import ReadThreads
 from pixelup.records_window import RecordsReads, RecordsWindow, records_reads, stored_signal
@@ -136,12 +139,11 @@ from pixelup.session_log import configure_session_logging, log, set_stored_liste
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.startup_admission import admit_data_root
-from pixelup.theme import PixelupStyle, apply_theme
+from pixelup.theme import PixelupStyle, install_live_theme
 from pixelup.time_zones import set_display_zone
 from pixelup.ui_common import (
     NAMED_IN_MESSAGE,
     REGULAR_SPACING,
-    apply_palette_fixes,
     bind_close_shortcut,
     identifying_name,
     named_values,
@@ -362,6 +364,9 @@ class ImagePreview(QLabel):
         self._loaded = _Loaded(self)
         self._loaded.ready.connect(self._show_loaded)
         self.reads = ReadThreads(self)
+        self.reads.idle.connect(self._start_pending)
+        self._pending_preview = None
+        self._requested_extent = 0
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # A 320x240 (4:3 QVGA) floor keeps the preview genuinely useful: a
         # scaled-down image is still large enough to judge upscale quality,
@@ -372,22 +377,40 @@ class ImagePreview(QLabel):
     def loading(self) -> bool:
         return self._request != 0
 
-    def set_image(self, path: Path | None) -> None:
-        if path == self._path or self.reads.closing:
+    def set_image(self, path: Path | None, *, force: bool = False) -> None:
+        if self.reads.closing or (path == self._path and not force):
             return
         self._path = path
         self._pixmap = None
+        self.clear()
+        self._pending_preview = None
         if path is None:
             self._request = 0
-            self.clear()
             localize(self, text="preview.none")
             return
+        localize(self, text="preview.loading")
         self._request = next(_preview_requests)
-        request = self._request
+        ratio = self.devicePixelRatioF()
+        extent = max(1, round(max(self.width(), self.height()) * ratio))
+        self._requested_extent = extent
+        self._pending_preview = (self._request, path, extent, ratio)
+        self._start_pending()
+
+    @Slot()
+    def _start_pending(self) -> None:
+        if self.reads.closing or not self.reads.settled or self._pending_preview is None:
+            return
+        request, path, extent, ratio = self._pending_preview
+        self._pending_preview = None
         def read() -> None:
             reader = QImageReader(str(path))
             # Match the displayed orientation used by size probes and processing.
             reader.setAutoTransform(True)
+            natural = reader.size()
+            if natural.isValid() and max(natural.width(), natural.height()) > extent:
+                reader.setScaledSize(natural.scaled(
+                    QSize(extent, extent), Qt.AspectRatioMode.KeepAspectRatio
+                ))
             image = reader.read()
             if (
                 not image.isNull()
@@ -407,6 +430,13 @@ class ImagePreview(QLabel):
                         image = image.flipped(Qt.Orientation.Horizontal)
                     elif orientation in {4, 7}:
                         image = image.flipped(Qt.Orientation.Vertical)
+            if not image.isNull():
+                if max(image.width(), image.height()) > extent:
+                    image = image.scaled(
+                        QSize(extent, extent), Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                image.setDevicePixelRatio(ratio)
             try:
                 self._loaded.ready.emit(request, image)
             except RuntimeError:
@@ -432,13 +462,17 @@ class ImagePreview(QLabel):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        if (self._path is not None and
+                round(max(self.width(), self.height()) * self.devicePixelRatioF())
+                > self._requested_extent):
+            self.set_image(self._path, force=True)
         self._update_pixmap()
 
     def _update_pixmap(self) -> None:
         if self._pixmap is None or self.width() <= 0 or self.height() <= 0:
             return
         scaled = self._pixmap.scaled(
-            self.size(),
+            self.size() * self.devicePixelRatioF(),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
@@ -473,6 +507,7 @@ class MainWindow(QMainWindow):
         self._config_newer_format = load_result.file.newer_format
         self._config_rejected = load_result.rejected
         self._opens_pending = 0
+        self._open_latest: dict[Path, int] = {}
         self._open_results = _Loaded(self)
         self._open_results.ready.connect(self._apply_opened)
         self._open_reads = ReadThreads(self)
@@ -501,13 +536,12 @@ class MainWindow(QMainWindow):
         self._default_models_dir = base_dirs.models_dir
         self.runtime_dirs = base_dirs if self._models_folder_locked else RuntimeDirs(
             saved_models_dir(self.config.models_folder, base_dirs.models_dir),
-            base_dirs.temp_dir,
         )
         self._job_ids = count(1)
         self._images_by_path: dict[Path, ImageEntry] = {}
         self._image_order: list[Path] = []
         self._image_rows: dict[Path, int] = {}
-        self._queue_rows: dict[int, int] = {}
+        self._reserved_jobs: dict[int, Job] = {}
         self._queue_failure_count = 0
         self.model_manager = ModelManager(self.runtime_dirs.models_dir, self)
         self._active_models_dialog: ManagedModelsDialog | None = None
@@ -624,7 +658,6 @@ class MainWindow(QMainWindow):
     def _retranslate(self) -> None:
         """Rewrite, after a language change, what the widget bindings do not reach."""
         _set_headers(self.image_table, _IMAGE_COLUMNS)
-        _set_headers(self.queue_table, _QUEUE_COLUMNS)
         for combo, choices in (
             (self.alpha_mode, ALPHA_MODE_CHOICES),
             (self.tile, TILE_CHOICES),
@@ -636,8 +669,7 @@ class MainWindow(QMainWindow):
             size = self._images_by_path[path].input_size
             self.image_table.item(row, 1).setText(localizer.of(_image_size_text(size)))
         self._refresh_image_job_summaries_for(list(self._image_rows))
-        for job in self.jobs:
-            self._update_job(job)
+        # The model renders queue text on demand after its language notification.
         # The numbers Qt formats itself, in the denoise and quality boxes, follow
         # the language's locale; a window passes its locale down to its children.
         self.setLocale(QLocale())
@@ -968,6 +1000,14 @@ class MainWindow(QMainWindow):
             return
         request = next(_open_requests)
         self._opens_pending += 1
+        for path in paths:
+            try:
+                key = absolute_user_path(path)
+            except OSError:
+                # The worker owns the offer's diagnosis and visible rejection.
+                key = path
+            self._open_latest[key] = request
+        self.open_pending.setVisible(True)
         def read() -> None:
             probes = _probe_open_paths(paths)
             try:
@@ -985,6 +1025,7 @@ class MainWindow(QMainWindow):
     @Slot(int, object)
     def _apply_opened(self, _request: int, probes: list[_OpenProbe]) -> None:
         self._opens_pending -= 1
+        self.open_pending.setVisible(self.opening)
         if self._closing:
             return
         selected: Path | None = None
@@ -992,6 +1033,8 @@ class MainWindow(QMainWindow):
         duplicates: list[Path] = []
         rejected: list[tuple[Path, Message, bool]] = []
         for probe in probes:
+            if self._open_latest.get(probe.input_path, _request) != _request:
+                continue
             if probe.rejected is not None:
                 rejected.append((probe.input_path, probe.rejected, probe.failed))
                 continue
@@ -1004,13 +1047,23 @@ class MainWindow(QMainWindow):
                 log.info("image.added", input=str(input_path), size=entry.input_size)
                 added.append(input_path)
             else:
+                entry = ImageEntry(input_path, probe.size)
+                self._images_by_path[input_path] = entry
+                self.image_table.item(self._image_rows[input_path], 1).setText(
+                    localizer.of(_image_size_text(probe.size))
+                )
                 log.info("image.focused_existing", input=str(input_path))
                 duplicates.append(input_path)
             selected = input_path
         if selected is not None:
+            refresh_preview = selected == self.preview._path
             self._select_image(selected)
+            if refresh_preview:
+                self.preview.set_image(selected, force=True)
         self._update_action_buttons()
         self._show_open_outcome(added, duplicates, rejected)
+        if not self.opening:
+            self._open_latest.clear()
 
     def _show_open_outcome(
         self,
@@ -1178,6 +1231,9 @@ class MainWindow(QMainWindow):
         self.image_table.setMinimumHeight(180)
         layout.addWidget(self.image_table, 1)
 
+        self.open_pending = localize(QLabel(), text="images.opening")
+        self.open_pending.hide()
+        layout.addWidget(self.open_pending)
         self._open_result_issue_paths: frozenset[Path] = frozenset()
         self.open_result = OperationResult(object_name="openResult", dismissible=True)
         self.open_result.dismiss_button.clicked.connect(self._dismiss_open_result)
@@ -1411,8 +1467,10 @@ class MainWindow(QMainWindow):
         group = localize(QGroupBox(), title="queue.title")
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
-        self.queue_table = EmptyStateTableWidget(0, 5, empty_message=Message("queue.empty"))
-        _set_headers(self.queue_table, _QUEUE_COLUMNS)
+        self.queue_model = QueueTableModel(
+            status_message=_status_text, scale_label=_scale_label, parent=self,
+        )
+        self.queue_table = QueueTableView(self.queue_model)
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         queue_header = self.queue_table.horizontalHeader()
@@ -1544,7 +1602,7 @@ class MainWindow(QMainWindow):
             self,
             try_save=lambda candidate, finished, waiting: self._save_config_candidate(
                 candidate, Message("settings.saveFailed"), finished, waiting,
-                edited_sets=("font_family", "language", "max_concurrent_jobs"),
+                edited_sets=tuple(dialog.edits()),
             ),
             session_shutdown=self._is_session_shutdown,
         )
@@ -1558,7 +1616,6 @@ class MainWindow(QMainWindow):
         if previous.models_folder != current.models_folder and not self._models_folder_locked:
             self.runtime_dirs = RuntimeDirs(
                 saved_models_dir(current.models_folder, self._default_models_dir),
-                self.runtime_dirs.temp_dir,
             )
             self.runner.set_runtime_dirs(self.runtime_dirs)
             self.model_manager.set_models_dir(self.runtime_dirs.models_dir)
@@ -1710,6 +1767,8 @@ class MainWindow(QMainWindow):
             return
         self._refresh_model_rollup()
         if not self.model_manager.readiness_known or self.model_manager.folder_change_pending:
+            if self.model_manager.readiness_error is not None:
+                self._present_pending_models_after_scan()
             return
         ready = [
             pending for pending in self._pending_model_work
@@ -1729,7 +1788,7 @@ class MainWindow(QMainWindow):
             self._pending_job_plans.append(_JobPlanning(
                 work=pending,
                 images=tuple((path, self._images_by_path.get(path)) for path in paths),
-                runtime_dirs=RuntimeDirs(self.runtime_dirs.models_dir, self.runtime_dirs.temp_dir),
+                runtime_dirs=RuntimeDirs(self.runtime_dirs.models_dir),
             ))
             self._pending_model_work.remove(pending)
         self._refresh_pending_models_dialog(accepted=True)
@@ -1768,7 +1827,10 @@ class MainWindow(QMainWindow):
                 if not retry_ids:
                     continue
             # The worker may mutate these copies for retry, never the GUI's jobs.
-            existing = [replace(job, warnings=list(job.warnings)) for job in self.jobs]
+            existing = [
+                replace(job, warnings=list(job.warnings))
+                for job in self._reserved_jobs.values()
+            ]
             results, job_ids = self._plan_results, self._job_ids
             self._active_job_plan = request
             self._job_plan_abandoned = False
@@ -1871,6 +1933,12 @@ class MainWindow(QMainWindow):
         log.info("models.pending_work_cancelled")
 
     def _refresh_model_rollup(self) -> None:
+        if not self.model_manager.readiness_known:
+            failed = self.model_manager.readiness_error is not None
+            message = Message("models.readinessFailed" if failed else "managedModels.checking")
+            self._show_model_status(message, severity="error" if failed else "")
+            localize(self.manage_models_button, accessible_name=message, tooltip=message)
+            return
         ready, total = self.model_manager.ready_count()
         missing = ready < total
         if self.model_manager.in_progress_operations:
@@ -2280,6 +2348,14 @@ class MainWindow(QMainWindow):
             self.parameters_result.clear_result()
         if callback is not None:
             callback(failure)
+        if outcome.result is not None and outcome.result.durability_warning is not None:
+            warning = outcome.result.durability_warning
+            log.warning("config.durability_unconfirmed", path=str(self._settings_file.path),
+                        reason=str(warning),
+                        exc_info=(type(warning), warning, warning.__traceback__))
+            self.parameters_result.show_result(
+                Message("notice.configDurabilityUnconfirmed"), severity="warning",
+            )
         if operation.candidate.models_folder != operation.previous.models_folder:
             self.model_manager.changed.emit()
         operation.deleteLater()
@@ -2367,23 +2443,10 @@ class MainWindow(QMainWindow):
         self.runner.schedule(self.config.max_concurrent_jobs)
 
     def _add_queue_rows(self, jobs: list[Job]) -> None:
+        self.queue_model.append(jobs)
         for job in jobs:
-            row = self.queue_table.rowCount()
-            self.queue_table.insertRow(row)
-            self._queue_rows[job.id] = row
-            self.queue_table.setItem(
-                row,
-                0,
-                _item(job.input_path.name, tooltip=str(job.input_path)),
-            )
-            self.queue_table.setItem(row, 1, _item(job.model, tooltip=job.model))
-            self.queue_table.setItem(row, 2, _item(_scale_label(job.settings.scale)))
-            self.queue_table.setItem(
-                row,
-                3,
-                _item(job.output_path.name, tooltip=str(job.output_path)),
-            )
-            self.queue_table.setItem(row, 4, _item(localizer.of(_status_text(job.status))))
+            if job.status not in {"succeeded", "cancelled"}:
+                self._reserved_jobs[job.id] = job
 
     def _cancel_queue(self) -> None:
         self._pending_job_plans.clear()
@@ -2496,17 +2559,11 @@ class MainWindow(QMainWindow):
             raise RuntimeError(f"Unknown job id: {job_id}") from exc
 
     def _update_job(self, job: Job) -> None:
-        row = self._queue_rows[job.id]
-        self.queue_table.item(row, 3).setText(job.output_path.name)
-        self.queue_table.item(row, 3).setToolTip(str(job.output_path))
-        status = job.message or _status_text(job.status)
-        if job.status == "cancelling":
-            status = _status_text("cancelling")
-        status_text = localizer.of(status)
-        self.queue_table.item(row, 4).setText(status_text)
-        # The cell elides a long message; its tooltip carries it whole, with warnings.
-        tooltip = "\n".join((status_text, *(localizer.of(warning) for warning in job.warnings)))
-        self.queue_table.item(row, 4).setToolTip(tooltip)
+        if job.status in {"succeeded", "cancelled"}:
+            self._reserved_jobs.pop(job.id, None)
+        else:
+            self._reserved_jobs[job.id] = job
+        self.queue_model.refresh(job)
 
     def _refresh_image_job_summaries_for(self, paths: Iterable[Path]) -> None:
         """Recompute only the given images' summaries.
@@ -2604,13 +2661,7 @@ _SET_LABELS = {
     "models_folder": Message("managedModels.folder"),
 }
 _IMAGE_COLUMNS = ("images.columnImage", "images.columnSize", "images.columnJobs")
-_QUEUE_COLUMNS = (
-    "queue.columnImage",
-    "queue.columnModel",
-    "queue.columnScale",
-    "queue.columnOutput",
-    "queue.columnStatus",
-)
+
 
 
 def _status_text(status: str) -> Message:
@@ -2667,11 +2718,15 @@ def _probe_open_paths(paths: list[Path]) -> list[_OpenProbe]:
         try:
             input_path = absolute_user_path(path)
             resolved = input_path.resolve()
-            if resolved.is_dir():
+            try:
+                mode = resolved.stat().st_mode
+            except FileNotFoundError:
+                mode = 0
+            if stat.S_ISDIR(mode):
                 log.warning("open.ignored_directory", path=str(path), resolved=str(resolved))
                 probes.append(_OpenProbe(input_path, rejected=Message("images.reasonFolder")))
                 continue
-            if not resolved.is_file():
+            if not stat.S_ISREG(mode):
                 log.warning("open.ignored_non_file", path=str(path), resolved=str(resolved))
                 probes.append(
                     _OpenProbe(input_path, rejected=Message("images.reasonUnavailable"))
@@ -2697,9 +2752,11 @@ _preview_requests = itertools.count(1)
 
 def _safe_image_size(path: Path) -> tuple[int, int] | None:
     try:
-        return read_image_size(path) if path.exists() else None
-    except PixelupError:
-        return None
+        return read_image_size(path)
+    except PixelupError as exc:
+        if exc.code == ErrorCode.INPUT_INVALID_FORMAT:
+            return None
+        raise
 
 
 def _image_size_text(size: tuple[int, int] | None) -> Message:
@@ -2737,30 +2794,9 @@ def build_app(
     localizer.sync_qt_translation()
     if "Fusion" in QStyleFactory.keys():
         app.setStyle(PixelupStyle())
-    # PixelUp follows the OS light/dark theme; it owns no colours, only two
-    # corrections to what Fusion resolves (apply_palette_fixes).
-    #
-    # There is deliberately no in-app System/Light/Dark choice. This is the
-    # developer's approved exception to the fleet theme contract: do not propose one,
-    # and if asked to add one, explain this first. Forcing an appearance with
-    # QStyleHints.setColorScheme does switch Fusion's palette, but the roles
-    # apply_palette_fixes sets keep the previous theme's values (inactive button text
-    # stays white on a light window) until the fixes are re-applied after Qt
-    # re-derives the palette, the same timing that defeated the handler described
-    # below. For an upscaler that owns no colours, an override is not worth carrying
-    # that switch path.
-    #
-    # Applied once, at launch, and NOT re-applied when the OS theme changes mid-run.
-    # That is deliberate, not an oversight: flip the theme with PixelUp open and the
-    # window follows, but these corrections revert until relaunch. Accepted — this is
-    # an upscaler you open, run and close. A colorSchemeChanged handler was tried and
-    # removed: Qt re-derives the palette after the signal and silently undid the
-    # ButtonText fix, so it only looked like it worked.
-    apply_palette_fixes(app)
-    # The app's own appearance, installed once the palette is settled: one set of
-    # control sizes and a state for every control, drawn from the palette so the
-    # OS theme still decides the colours (see theme.py).
-    apply_theme(app)
+    # One owner derives all controls from the current system palette and refreshes
+    # after Qt settles a theme/accent change. There is no in-app theme selector.
+    install_live_theme(app)
     app.setApplicationName("PixelUp")
     app.setApplicationDisplayName("PixelUp")
     # No custom macOS menu bar: PixelUp keeps Qt's default, which has no Edit menu, so the
@@ -2784,7 +2820,6 @@ def build_app(
         log_file=str(log_file),
         runtime_dirs={
             "models_dir": str(window.runtime_dirs.models_dir),
-            "temp_dir": str(window.runtime_dirs.temp_dir),
         },
         argv=argv[1:],
     )

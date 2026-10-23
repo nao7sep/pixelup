@@ -18,8 +18,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from localization_support import speaking
 from PIL import Image
-from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -29,7 +30,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QLineEdit,
-    QTableWidget,
+    QTableView,
     QWidget,
 )
 
@@ -47,6 +48,7 @@ from pixelup.model_management import GENERAL_DENOISE_MODEL, UPSCALE_MODELS
 from pixelup.model_manager import ModelManager
 from pixelup.model_registry import ALL_MODELS
 from pixelup.parameters_help_dialog import ParametersHelpDialog
+from pixelup.queue_table import QueueTableView
 from pixelup.quit_dialog import QuitConfirmDialog, QuitSaveFailedDialog
 from pixelup.runner import JobRunner
 from pixelup.session_log import configure_session_logging
@@ -148,7 +150,7 @@ def window(
     for info in ALL_MODELS:
         if info.name != GENERAL_DENOISE_MODEL:
             (models_dir / info.filename).write_bytes(b"ready")
-    runtime_dirs = SimpleNamespace(models_dir=models_dir, temp_dir=tmp_path / "home" / "temp")
+    runtime_dirs = SimpleNamespace(models_dir=models_dir)
     main = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
     try:
         _populate(main, tmp_path)
@@ -318,17 +320,19 @@ def _texts(root: QWidget, *, include_cells: bool = True) -> list[str]:
                 texts.append(widget.placeholderText())
         elif isinstance(widget, QComboBox):
             texts += [widget.itemText(index) for index in range(widget.count())]
-        if isinstance(widget, EmptyStateTableWidget):
+        if isinstance(widget, (EmptyStateTableWidget, QueueTableView)):
             texts.append(widget.empty_text)
-        if isinstance(widget, QTableWidget):
+        if isinstance(widget, QTableView):
+            model = widget.model()
             texts += [
-                widget.horizontalHeaderItem(column).text() for column in range(widget.columnCount())
+                model.headerData(column, Qt.Orientation.Horizontal)
+                for column in range(model.columnCount())
             ]
             if include_cells:
-                for row in range(widget.rowCount()):
-                    for column in range(widget.columnCount()):
-                        item = widget.item(row, column)
-                        texts += [item.text(), item.toolTip()]
+                for row in range(model.rowCount()):
+                    for column in range(model.columnCount()):
+                        index = model.index(row, column)
+                        texts += [index.data(), index.data(Qt.ItemDataRole.ToolTipRole)]
     return [text for text in texts if text]
 
 
@@ -344,7 +348,8 @@ def _english_left_over(text: str) -> list[str]:
 
 def _status_cells(main: MainWindow) -> list[str]:
     table = main.queue_table
-    return [table.item(row, 4).text() for row in range(table.rowCount())] + [
+    model = table.model()
+    return [model.index(row, 4).data() for row in range(model.rowCount())] + [
         main.image_table.item(row, 2).text() for row in range(main.image_table.rowCount())
     ]
 
@@ -360,7 +365,7 @@ def test_no_key_and_no_english_reaches_any_surface(
     records = window._records_window
     assert records is not None
     process_until(lambda: records.launch_filter.count() > 1, timeout_s=5, what="the Records window")
-    with localizer.speaking(tag):
+    with speaking(tag):
         qapp.processEvents()
         dialogs = _dialogs(manager)
         try:
@@ -385,7 +390,7 @@ def test_a_language_change_rewrites_what_is_already_on_screen(
 ) -> None:
     gc.collect()
     assert window.open_images_button.text() == "Open"
-    with localizer.speaking("de"):
+    with speaking("de"):
         qapp.processEvents()
         assert window.open_images_button.text() == "Öffnen"
         assert window.findChild(QGroupBox).title() in {"Bilder", "Vorschau", "Modelle"}
@@ -440,7 +445,7 @@ def test_a_closed_dialog_is_left_alone_by_a_language_change(qapp: QApplication) 
     kept = AboutDialog()
     kept.show()
     kept.close()
-    with localizer.speaking("ru"):
+    with speaking("ru"):
         qapp.processEvents()
         assert kept.windowTitle() == "О программе PixelUp"
     kept.deleteLater()
@@ -449,7 +454,7 @@ def test_a_closed_dialog_is_left_alone_by_a_language_change(qapp: QApplication) 
 def test_the_settings_picker_offers_system_then_each_language_in_its_own_name(
     qapp: QApplication,
 ) -> None:
-    with localizer.speaking("ja"):
+    with speaking("ja"):
         dialog = SettingsDialog(AppConfig(language="ko"))
         try:
             items = [
@@ -472,7 +477,7 @@ def test_labels_fit_the_dialogs_that_cannot_grow(
     # Every dialog has one chosen width and wraps its prose; what cannot wrap —
     # a row label, a column of statuses, a footer of buttons — must fit it.
     manager = ModelManager(tmp_path / "models")
-    with localizer.speaking(tag):
+    with speaking(tag):
         dialogs = _dialogs(manager)
         try:
             for dialog in dialogs:
@@ -509,7 +514,7 @@ def test_system_entries_name_what_they_resolve_to_in_the_interface_language(
     zone: str,
 ) -> None:
     monkeypatch.setattr(localizer, "system_language", lambda: computer)
-    with localizer.speaking(tag):
+    with speaking(tag):
         dialog = SettingsDialog(AppConfig(language=tag))
         try:
             assert dialog.language.itemText(0) == language
@@ -522,6 +527,6 @@ def test_every_language_names_every_language(qapp: QApplication) -> None:
     from pixelup.i18n.languages import name_key
 
     for tag in TAGS:
-        with localizer.speaking(tag):
+        with speaking(tag):
             names = [localizer.t(name_key(other)) for other in TAGS]
         assert len(set(names)) == len(TAGS), tag
