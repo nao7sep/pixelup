@@ -11,8 +11,8 @@ draining pending writes, and no restore path; recovery is manual.
 
 SQLite binding: Python's built-in ``sqlite3`` module. A ``BLOB`` round-trips through
 ``sqlite3.Binary``/``bytes`` byte-for-byte, so CR/LF, a BOM and non-UTF-8 bytes are
-stored verbatim. ``config.json`` is far below SQLite's value limit, so no
-``backup_parts`` table exists.
+stored verbatim. Each file is one value; a file beyond SQLite's value limit fails
+to record with a diagnostic.
 
 Two absolute musts drive every line below:
 
