@@ -31,7 +31,7 @@ from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
-from pixelup.jobs import Job, JobSettings
+from pixelup.jobs import JobSettings
 from pixelup.model_registry import ALL_MODELS
 from pixelup.models import model_file
 from pixelup.parameters import DEFAULT_SCALE, TILE_VALUES
@@ -3491,7 +3491,7 @@ atexit.register(lambda: print(
     assert "saved True" in result.stdout.splitlines()
 
 
-@pytest.mark.parametrize("read_kind", ["listing", "historical_resolve", "retry_listing"])
+@pytest.mark.parametrize("read_kind", ["listing", "retry_listing"])
 def test_output_planning_keeps_the_window_live_while_storage_is_held(
     make_window, tmp_path, monkeypatch, process_until, read_kind
 ):
@@ -3505,17 +3505,10 @@ def test_output_planning_keeps_the_window_live_while_storage_is_held(
         window._enqueue_jobs([image], [model])
         _settle_models(window)
         window.jobs[0].status = "failed"
-    historical = Job(
-        id=9000, input_path=tmp_path / "old-volume" / "old.png", model=model,
-        output_path=tmp_path / "old-volume" / "old-output.png", settings=JobSettings(),
-        status="succeeded",
-    )
-    if read_kind == "historical_resolve":
-        window.jobs.append(historical)
     entered, release = threading.Event(), threading.Event()
     readers = []
     main_thread = threading.current_thread()
-    real_iterdir, real_resolve = Path.iterdir, Path.resolve
+    real_iterdir = Path.iterdir
 
     def hold():
         readers.append(threading.current_thread())
@@ -3530,23 +3523,12 @@ def test_output_planning_keeps_the_window_live_while_storage_is_held(
             hold()
         return real_iterdir(path)
 
-    def resolve(path, *args, **kwargs):
-        if path == historical.output_path:
-            hold()
-        return real_resolve(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "resolve" if read_kind == "historical_resolve" else "iterdir",
-                        resolve if read_kind == "historical_resolve" else iterdir)
+    monkeypatch.setattr(Path, "iterdir", iterdir)
     try:
         if read_kind == "retry_listing":
             window._retry_failed()
         else:
             window._enqueue_jobs([image], [model])
-        if read_kind == "historical_resolve":
-            _settle_models(window)
-            assert not entered.is_set(), "Completed history must not read its old volume"
-            assert any(job.input_path == image for job in window.jobs)
-            return
         process_until(entered.is_set, timeout_s=5, what="Held planning filesystem read")
         assert readers[0] is not main_thread, "Output planning read storage on the window thread"
         tick = threading.Event()

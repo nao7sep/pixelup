@@ -507,7 +507,6 @@ class MainWindow(QMainWindow):
         self._config_newer_format = load_result.file.newer_format
         self._config_rejected = load_result.rejected
         self._opens_pending = 0
-        self._open_latest: dict[Path, int] = {}
         self._open_results = _Loaded(self)
         self._open_results.ready.connect(self._apply_opened)
         self._open_reads = ReadThreads(self)
@@ -541,7 +540,6 @@ class MainWindow(QMainWindow):
         self._images_by_path: dict[Path, ImageEntry] = {}
         self._image_order: list[Path] = []
         self._image_rows: dict[Path, int] = {}
-        self._reserved_jobs: dict[int, Job] = {}
         self._queue_failure_count = 0
         self.model_manager = ModelManager(self.runtime_dirs.models_dir, self)
         self._active_models_dialog: ManagedModelsDialog | None = None
@@ -1000,13 +998,6 @@ class MainWindow(QMainWindow):
             return
         request = next(_open_requests)
         self._opens_pending += 1
-        for path in paths:
-            try:
-                key = absolute_user_path(path)
-            except OSError:
-                # The worker owns the offer's diagnosis and visible rejection.
-                key = path
-            self._open_latest[key] = request
         self.open_pending.setVisible(True)
         def read() -> None:
             probes = _probe_open_paths(paths)
@@ -1033,8 +1024,6 @@ class MainWindow(QMainWindow):
         duplicates: list[Path] = []
         rejected: list[tuple[Path, Message, bool]] = []
         for probe in probes:
-            if self._open_latest.get(probe.input_path, _request) != _request:
-                continue
             if probe.rejected is not None:
                 rejected.append((probe.input_path, probe.rejected, probe.failed))
                 continue
@@ -1062,8 +1051,6 @@ class MainWindow(QMainWindow):
                 self.preview.set_image(selected, force=True)
         self._update_action_buttons()
         self._show_open_outcome(added, duplicates, rejected)
-        if not self.opening:
-            self._open_latest.clear()
 
     def _show_open_outcome(
         self,
@@ -1827,10 +1814,7 @@ class MainWindow(QMainWindow):
                 if not retry_ids:
                     continue
             # The worker may mutate these copies for retry, never the GUI's jobs.
-            existing = [
-                replace(job, warnings=list(job.warnings))
-                for job in self._reserved_jobs.values()
-            ]
+            existing = [replace(job, warnings=list(job.warnings)) for job in self.jobs]
             results, job_ids = self._plan_results, self._job_ids
             self._active_job_plan = request
             self._job_plan_abandoned = False
@@ -2436,9 +2420,6 @@ class MainWindow(QMainWindow):
 
     def _add_queue_rows(self, jobs: list[Job]) -> None:
         self.queue_model.append(jobs)
-        for job in jobs:
-            if job.status not in {"succeeded", "cancelled"}:
-                self._reserved_jobs[job.id] = job
 
     def _cancel_queue(self) -> None:
         self._pending_job_plans.clear()
@@ -2551,10 +2532,6 @@ class MainWindow(QMainWindow):
             raise RuntimeError(f"Unknown job id: {job_id}") from exc
 
     def _update_job(self, job: Job) -> None:
-        if job.status in {"succeeded", "cancelled"}:
-            self._reserved_jobs.pop(job.id, None)
-        else:
-            self._reserved_jobs[job.id] = job
         self.queue_model.refresh(job)
 
     def _refresh_image_job_summaries_for(self, paths: Iterable[Path]) -> None:
