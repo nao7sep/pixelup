@@ -466,40 +466,6 @@ def test_logging_never_waits_on_a_stuck_store(monkeypatch: pytest.MonkeyPatch) -
     ]
 
 
-def test_a_full_queue_counts_what_it_drops(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pixelup import session_log
-
-    database = configure_session_logging()
-    assert flush_records(5)
-    entered = threading.Event()
-    release = threading.Event()
-    handler = session_log._records_handler()
-    real_insert = handler._insert
-
-    def stuck_insert(entry: dict) -> None:
-        entered.set()
-        assert release.wait(5)
-        real_insert(entry)
-
-    monkeypatch.setattr(handler, "_insert", stuck_insert)
-    monkeypatch.setattr(session_log, "_PENDING_LIMIT", 2)
-    log.info("held.line")
-    assert entered.wait(5)
-    for index in range(5):
-        log.info("burst.line", index=index)
-    release.set()
-    assert flush_records(5)
-
-    messages = [entry for entry in _records(database) if entry["message"] != "log.session_started"]
-    assert [entry["message"] for entry in messages] == [
-        "held.line",
-        "burst.line",
-        "burst.line",
-        "log.dropped",
-    ]
-    assert messages[3]["count"] == 3
-
-
 def test_a_field_changed_after_logging_is_recorded_as_it_was(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

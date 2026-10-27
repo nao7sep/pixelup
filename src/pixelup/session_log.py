@@ -130,12 +130,6 @@ def _open_records(database: Path) -> sqlite3.Connection:
     return open_sqlite_store(database, RECORDS_FORMAT_VERSION, _SCHEMA)
 
 
-# How many lines may wait for the writer. A logging burst beyond this while the store
-# stalls is counted, not queued, so memory stays bounded; the count is written as one
-# `log.dropped` line once the writer catches up.
-_PENDING_LIMIT = 10_000
-
-
 class RecordsHandler(logging.Handler):
     """Writes each log line as one row of this launch's session in the records
     database (logging-conventions, data-lifecycle-conventions).
@@ -158,7 +152,6 @@ class RecordsHandler(logging.Handler):
         self.stored_listener: Callable[[], None] | None = None
         self._condition = threading.Condition()
         self._pending: deque[dict[str, Any]] = deque()
-        self._dropped = 0
         self._writing = False
         self._closed = False
         self._writer = threading.Thread(target=self._run, name="pixelup-records", daemon=True)
@@ -174,9 +167,6 @@ class RecordsHandler(logging.Handler):
         entry = json.loads(_dumps(_entry(record)))
         with self._condition:
             if self._closed:
-                return True
-            if len(self._pending) >= _PENDING_LIMIT:
-                self._dropped += 1
                 return True
             self._pending.append(entry)
             self._condition.notify_all()
@@ -199,16 +189,9 @@ class RecordsHandler(logging.Handler):
                 if not self._pending:
                     return
                 entry = self._pending.popleft()
-                # Lines are dropped only while the queue is full, so the count
-                # follows the last line that was queued before them.
-                dropped = 0
-                if not self._pending:
-                    dropped, self._dropped = self._dropped, 0
                 self._writing = True
             try:
                 self._write(entry)
-                if dropped:
-                    self._write(_dropped_entry(dropped))
             except Exception:  # noqa: BLE001 - the writer outlives one bad record.
                 traceback.print_exc(file=sys.stderr)
             finally:
@@ -297,15 +280,6 @@ class RecordsHandler(logging.Handler):
 
 # Shutdown's bounded best-effort flush; the quit watchdog still owns the hard exit.
 _CLOSE_FLUSH_SECONDS = 1.0
-
-
-def _dropped_entry(count: int) -> dict[str, Any]:
-    return {
-        "time": to_utc_iso_ms(datetime.now(UTC)),
-        "level": "warn",
-        "message": "log.dropped",
-        "count": count,
-    }
 
 
 def flush_records(timeout: float) -> bool:
