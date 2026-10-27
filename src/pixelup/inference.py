@@ -45,7 +45,6 @@ def run_inference(
     on_tile: TileCallback | None = None,
     should_cancel: CancelCheck | None = None,
 ) -> Any:
-    failure: BaseException | None = None
     try:
         try:
             return _run_inference(
@@ -74,20 +73,10 @@ def run_inference(
                 details={"reason": str(exc)},
             ) from exc
     except BaseException as exc:
-        failure = exc
         _clear_failure_frames(exc)
         raise
     finally:
-        try:
-            _release_device_cache(config.device)
-        except Exception as cleanup_error:
-            if failure is None:
-                raise PixelupError(
-                    ErrorCode.INTERNAL_ERROR,
-                    "Device memory cleanup failed.",
-                    details={"reason": str(cleanup_error)},
-                ) from cleanup_error
-            failure.add_note(f"Device memory cleanup also failed: {cleanup_error}")
+        _release_device_cache(config.device)
 
 
 def _clear_failure_frames(failure: BaseException) -> None:

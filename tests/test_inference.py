@@ -121,22 +121,3 @@ def test_cache_cleanup_follows_tensor_lifetime(monkeypatch, tmp_path: Path, stag
             assert caught.value.details["reason"] == str(cause)
     assert cleanup_devices == ["cpu"]
 
-
-def test_cleanup_failure_preserves_the_primary_error(monkeypatch) -> None:
-    from pixelup import inference
-    from pixelup.errors import ErrorCode
-
-    primary = PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
-
-    def fail(*_args, **_kwargs):
-        raise primary
-
-    def cleanup(_device):
-        raise RuntimeError("cache diagnostic")
-
-    monkeypatch.setattr(inference, "_run_inference", fail)
-    monkeypatch.setattr(inference, "_release_device_cache", cleanup)
-    with pytest.raises(PixelupError) as caught:
-        inference.run_inference(SimpleNamespace(device="cpu"), None)
-    assert caught.value is primary
-    assert any("cache diagnostic" in note for note in caught.value.__notes__)
