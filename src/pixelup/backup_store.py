@@ -39,11 +39,11 @@ from pixelup.timestamps import utc_now_iso_ms
 STORE_FILE_NAME = "backups.sqlite3"
 
 # The one table. `content` is a BLOB of the exact bytes written — never decoded
-# text. `session_id` is the launch's records session; rows recorded before sessions
-# (format 1) keep NULL. `written_at_utc` is the serialized ISO-8601-ms form
-# (2026-07-06T04:05:12.345Z) of the row's latest save, a data value — NEVER the
-# yyyymmdd-hhmmss-utc filename stamp. The unique (path, session_id) key owns the
-# per-session row; the (path, id) index serves the latest-row lookup.
+# text. `session_id` is the launch's records session. `written_at_utc` is the
+# serialized ISO-8601-ms form (2026-07-06T04:05:12.345Z) of the row's latest save,
+# a data value — NEVER the yyyymmdd-hhmmss-utc filename stamp. The unique
+# (path, session_id) key owns the per-session row; the (path, id) index serves the
+# latest-row lookup.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS backups (
   id             INTEGER PRIMARY KEY,
@@ -58,14 +58,6 @@ CREATE INDEX IF NOT EXISTS idx_backups_path_id ON backups (path, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_backups_path_session ON backups (path, session_id);
 """
 
-# Format 1 had one row per distinct save and no session. Its rows stay as earlier
-# history (session_id NULL); the column and the per-session key are added in place.
-_CONVERT_FROM_1 = """
-ALTER TABLE backups ADD COLUMN session_id TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_backups_path_session ON backups (path, session_id);
-"""
-
-
 def _store_file() -> Path:
     """The store file under the resolved storage root. Computed lazily (not frozen
     into a module constant at import time) so ``PIXELUP_DATA_DIR`` is read after the
@@ -77,19 +69,7 @@ def _store_file() -> Path:
 def _open_store() -> sqlite3.Connection:
     # not recorded: backups.sqlite3 is the store itself, written by this layer and
     # not through the managed-text path, so it never records itself.
-    connection = open_sqlite_store(_store_file(), BACKUPS_FORMAT_VERSION, _SCHEMA)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
-            for statement in _CONVERT_FROM_1.split(";"):
-                if statement.strip():
-                    connection.execute(statement)
-            connection.execute(f"PRAGMA user_version = {int(BACKUPS_FORMAT_VERSION)}")
-        connection.commit()
-    except BaseException:
-        connection.close()
-        raise
-    return connection
+    return open_sqlite_store(_store_file(), BACKUPS_FORMAT_VERSION, _SCHEMA)
 
 
 def _sha256(data: bytes) -> str:

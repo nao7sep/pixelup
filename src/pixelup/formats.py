@@ -4,8 +4,8 @@
 Saved settings (``config.json``) and the records history (``records.sqlite3``) are
 durable: they survive PixelUp updates (developer decision), so a change to either
 format converts existing data with a small targeted conversion rather than
-resetting it. The backup history keeps its existing rows across format changes too
-(data-backup-conventions), converted in place by its owner. The output sidecar is a
+resetting it. The backup history reads only its current format: any other store
+is left in place and recording stays off for that session. The output sidecar is a
 published format. ``window.ini`` holds only
 disposable window state and carries no marker.
 """
@@ -48,6 +48,8 @@ def check_sqlite_format(connection: sqlite3.Connection, path: Path, supported: i
     stored = connection.execute("PRAGMA user_version").fetchone()[0]
     if stored < 1:
         raise ValueError(f"{path} has no format version")
+    if stored < supported:
+        raise ValueError(f"{path} has format version {stored}, older than this build reads")
     if stored > supported:
         raise NewerFormatError(path, stored)
 

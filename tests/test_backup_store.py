@@ -264,47 +264,6 @@ def test_two_paths_keep_rows_independently(
     assert len(_all_rows(home)) == 2
 
 
-def test_a_format_1_store_keeps_its_rows_as_earlier_history(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    home = _home(tmp_path, monkeypatch)
-    target = home / "config.json"
-    store = _store_path(home)
-    connection = sqlite3.connect(store)
-    connection.executescript(
-        """
-        CREATE TABLE backups (
-          id INTEGER PRIMARY KEY, path TEXT NOT NULL, content BLOB NOT NULL,
-          content_sha256 TEXT NOT NULL, byte_size INTEGER NOT NULL,
-          written_at_utc TEXT NOT NULL
-        );
-        CREATE INDEX idx_backups_path_id ON backups (path, id);
-        """
-    )
-    import hashlib
-
-    for content in (b"old one\n", b"old two\n"):
-        connection.execute(
-            "INSERT INTO backups (path, content, content_sha256, byte_size, written_at_utc)"
-            " VALUES (?, ?, ?, ?, '2026-01-01T00:00:00.000Z')",
-            (str(target), content, hashlib.sha256(content).hexdigest(), len(content)),
-        )
-    connection.execute("PRAGMA user_version = 1")
-    connection.commit()
-    connection.close()
-
-    record(target, b"old two\n")  # equal to the latest earlier row: nothing written
-    record(target, b"new\n")
-
-    rows = _rows(home, target)
-    assert [(bytes(row[1]), row[5]) for row in rows] == [
-        (b"old one\n", None),
-        (b"old two\n", None),
-        (b"new\n", "session-1"),
-    ]
-    assert _user_version(store) == 2
-
-
 def test_record_failure_is_one_warn_and_never_reaches_the_save(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -510,8 +469,8 @@ def test_a_new_store_records_its_format_version(
     assert _user_version(_store_path(home)) == 2
 
 
-@pytest.mark.parametrize("version", [0, 3])
-def test_an_unmarked_or_newer_store_is_left_untouched_with_one_warn(
+@pytest.mark.parametrize("version", [0, 1, 3])
+def test_an_unmarked_older_or_newer_store_is_left_untouched_with_one_warn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: int
 ) -> None:
     # A user_version of 0 on a database that has tables is a missing marker.
