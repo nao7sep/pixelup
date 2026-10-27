@@ -9,85 +9,14 @@ off-screen back onto one.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
-from threading import Lock, Thread
-from weakref import WeakValueDictionary
 
 from PySide6.QtCore import QByteArray, QSettings, Qt
 from PySide6.QtWidgets import QWidget
 
 from pixelup.config import window_settings_path
 from pixelup.session_log import log
-
-
-class _WindowStateWriter:
-    """One coalescing write owner for each configured window-state path."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._lock = Lock()
-        self._pending: dict[str, object] = {}
-        self._running = False
-        self._threads: list[Thread] = []
-
-    def submit(self, key: str, value: object) -> None:
-        if isinstance(value, QByteArray):
-            value = QByteArray(value)
-        with self._lock:
-            self._pending[key] = value
-            # Keep physical threads owned through return, including the short
-            # interval after a worker has released its storage ownership.
-            self._threads = [thread for thread in self._threads if thread.is_alive()]
-            if self._running:
-                return
-            self._running = True
-            thread = Thread(target=self._drain, name="pixelup-window-state", daemon=True)
-            self._threads.append(thread)
-            try:
-                thread.start()
-            except RuntimeError:
-                self._running = False
-                log.warning("window.state_save_failed", key=key, exc_info=True)
-
-    def _drain(self) -> None:
-        while True:
-            with self._lock:
-                if not self._pending:
-                    self._running = False
-                    return
-                pending, self._pending = self._pending, {}
-            self._write(pending)
-
-    def _write(self, pending: dict[str, object]) -> None:
-        # This helper returns only after QSettings is destroyed on its owning
-        # thread. A retiring worker can then hand storage ownership to another.
-        try:
-            settings = QSettings(str(self.path), QSettings.Format.IniFormat)
-            try:
-                for key, value in pending.items():
-                    settings.setValue(key, value)
-                settings.sync()
-                if settings.status() != QSettings.Status.NoError:
-                    log.warning("window.state_save_failed", keys=list(pending))
-            finally:
-                del settings
-        except Exception:
-            log.warning("window.state_save_failed", keys=list(pending), exc_info=True)
-
-
-_WRITERS: WeakValueDictionary[Path, _WindowStateWriter] = WeakValueDictionary()
-_WRITERS_LOCK = Lock()
-
-
-def _writer_for(path: Path) -> _WindowStateWriter:
-    with _WRITERS_LOCK:
-        writer = _WRITERS.get(path)
-        if writer is None:
-            writer = _WindowStateWriter(path)
-            _WRITERS[path] = writer
-        return writer
 
 
 class WindowState:
@@ -100,9 +29,8 @@ class WindowState:
     """
 
     def __init__(self, path: Path) -> None:
-        self.path = Path(os.path.abspath(path))
-        self._writer = _writer_for(self.path)
-        self._settings = QSettings(str(self.path), QSettings.Format.IniFormat)
+        self.path = path
+        self._settings = QSettings(str(path), QSettings.Format.IniFormat)
 
     def value(self, key: str) -> object | None:
         """The saved value, or ``None`` when there is none this build may use."""
@@ -113,8 +41,10 @@ class WindowState:
         return value
 
     def save(self, key: str, value: object) -> None:
-        # Geometry is disposable; neither close nor OS shutdown waits for storage.
-        self._writer.submit(key, value)
+        self._settings.setValue(key, value)
+        self._settings.sync()
+        if self._settings.status() != QSettings.Status.NoError:
+            log.warning("window.state_save_failed", key=key)
 
 
 def window_state() -> WindowState:

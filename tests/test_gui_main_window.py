@@ -1534,7 +1534,6 @@ def test_failed_quit_save_settles_without_resolving_the_unavailable_root(
 def test_close_waits_for_worker_ownership_to_end(
     make_window,
     monkeypatch: pytest.MonkeyPatch,
-    process_until,
 ) -> None:
     window = make_window()
     cleanup_results = iter((False, True))
@@ -1557,10 +1556,7 @@ def test_close_waits_for_worker_ownership_to_end(
     second = QCloseEvent()
     window.closeEvent(second)
     assert second.isAccepted() is True
-    process_until(
-        lambda: window._window_state.value(window._GEOMETRY_KEY) is not None,
-        timeout_s=5, what="Accepted-close geometry persistence",
-    )
+    assert window._window_state.value(window._GEOMETRY_KEY) is not None
 
 
 class _ChoicesDialog:
@@ -1948,30 +1944,19 @@ logging.shutdown()
     assert "logging tail entered" in result.stdout
 
 
-def _await_saved_geometry(window: MainWindow, expected, process_until) -> None:
-    def saved() -> bool:
-        settings = QSettings(str(window._window_state.path), QSettings.Format.IniFormat)
-        settings.sync()
-        return settings.value(window._GEOMETRY_KEY) == expected
-
-    process_until(saved, timeout_s=10, what="Physical window geometry persistence")
-
-
-def test_main_window_restores_geometry_saved_on_normal_close(make_window, process_until) -> None:
+def test_main_window_restores_geometry_saved_on_normal_close(make_window) -> None:
     first = make_window()
     # The offscreen Qt test screen is only 800 px wide and the content-derived
     # minimum is nearly that wide, so keep the fixture geometry wholly on-screen.
     first.setGeometry(1, 40, first.minimumWidth(), 650)
-    expected = first.saveGeometry()
     first._is_session_shutdown = lambda: True
     assert first.close()
-    _await_saved_geometry(first, expected, process_until)
 
     second = make_window()
     assert second.geometry() == first.geometry()
 
 
-def test_main_window_saves_and_restores_normal_geometry(make_window, process_until) -> None:
+def test_main_window_saves_and_restores_normal_geometry(make_window) -> None:
     first = make_window()
     first.setGeometry(1, 40, first.minimumWidth(), 650)
     expected = first.saveGeometry()
@@ -1979,7 +1964,8 @@ def test_main_window_saves_and_restores_normal_geometry(make_window, process_unt
 
     assert first.close()
 
-    _await_saved_geometry(first, expected, process_until)
+    settings = QSettings(str(first._window_state.path), QSettings.Format.IniFormat)
+    assert settings.value(first._GEOMETRY_KEY) == expected
 
     second = make_window()
     assert second.saveGeometry() == expected
@@ -2014,9 +2000,7 @@ def test_restored_window_state_is_platform_appropriate(
         Qt.WindowState.WindowFullScreen,
     ],
 )
-def test_main_window_saves_geometry_on_every_accepted_close(
-    make_window, window_state, process_until,
-) -> None:
+def test_main_window_saves_geometry_on_every_accepted_close(make_window, window_state) -> None:
     window = make_window()
     window.setGeometry(1, 40, window.minimumWidth(), 650)
     window.setWindowState(window_state)
@@ -2025,24 +2009,21 @@ def test_main_window_saves_geometry_on_every_accepted_close(
 
     assert window.close()
 
-    _await_saved_geometry(window, expected, process_until)
+    settings = QSettings(str(window._window_state.path), QSettings.Format.IniFormat)
+    assert settings.value(window._GEOMETRY_KEY) == expected
 
 
 @pytest.mark.parametrize(
     "window_state",
     [Qt.WindowState.WindowMaximized, Qt.WindowState.WindowFullScreen],
 )
-def test_main_window_restores_native_state_according_to_platform(
-    make_window, window_state, process_until,
-) -> None:
+def test_main_window_restores_native_state_according_to_platform(make_window, window_state) -> None:
     first = make_window()
     first.setGeometry(1, 40, first.minimumWidth(), 650)
     normal_geometry = first.normalGeometry()
     first.setWindowState(window_state)
-    expected = first.saveGeometry()
     first._is_session_shutdown = lambda: True
     assert first.close()
-    _await_saved_geometry(first, expected, process_until)
 
     second = make_window()
     assert second.windowState() == restored_window_state(window_state, sys.platform)

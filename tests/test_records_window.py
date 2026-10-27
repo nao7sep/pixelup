@@ -497,7 +497,7 @@ def test_an_open_window_settles_instead_of_reading_its_own_reads_forever(
 
 
 def test_saves_the_list_width_once_when_a_drag_ends(
-    open_records, settings: QSettings, qapp: QApplication, process_until
+    open_records, settings: QSettings, qapp: QApplication
 ) -> None:
     window = open_records()
     window.splitter.moveSplitter(LIST_WIDTH_MIN + 20, 1)
@@ -506,12 +506,11 @@ def test_saves_the_list_width_once_when_a_drag_ends(
 
     QTest.mouseRelease(window.splitter.handle(1), Qt.MouseButton.LeftButton)
 
-    _until(process_until, lambda: settings.value(LIST_WIDTH_KEY) is not None, "saved width")
     assert int(settings.value(LIST_WIDTH_KEY)) == window.list_pane.width() == LIST_WIDTH_MIN + 20
 
 
 def test_the_keyboard_moves_the_list_edge_and_saves_once_on_release(
-    open_records, settings: QSettings, qapp: QApplication, process_until
+    open_records, settings: QSettings, qapp: QApplication
 ) -> None:
     window = open_records()
     window.resize(LIST_WIDTH_MAX + records_window.DETAIL_MIN_WIDTH + 200, window.height())
@@ -527,7 +526,6 @@ def test_the_keyboard_moves_the_list_edge_and_saves_once_on_release(
     assert not settings.contains(LIST_WIDTH_KEY)
 
     QTest.keyRelease(handle, Qt.Key.Key_Right)
-    _until(process_until, lambda: settings.value(LIST_WIDTH_KEY) is not None, "saved width")
     assert int(settings.value(LIST_WIDTH_KEY)) == start + 2 * records_window.KEY_RESIZE_STEP
 
     QTest.keyPress(handle, Qt.Key.Key_End)
@@ -542,7 +540,7 @@ def test_the_keyboard_moves_the_list_edge_and_saves_once_on_release(
 
 
 def test_a_keyed_move_is_saved_when_the_handle_loses_focus(
-    open_records, settings: QSettings, qapp: QApplication, process_until
+    open_records, settings: QSettings, qapp: QApplication
 ) -> None:
     window = open_records()
     handle = window.splitter.handle(1)
@@ -554,7 +552,6 @@ def test_a_keyed_move_is_saved_when_the_handle_loses_focus(
     window.search.setFocus()
     qapp.processEvents()
 
-    _until(process_until, lambda: settings.value(LIST_WIDTH_KEY) is not None, "saved width")
     assert int(settings.value(LIST_WIDTH_KEY)) == LIST_WIDTH_MIN
 
 
