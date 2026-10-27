@@ -168,7 +168,7 @@ def test_native_windows_transfer_failure_closes_handle_and_removes_only_new_clai
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary output mode contract")
-@pytest.mark.parametrize("publication", ["hardlink", "native_rename"])
+@pytest.mark.parametrize("publication", ["hardlink", "rename"])
 def test_completed_output_keeps_ordinary_creation_mode_and_staging_is_private(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -186,7 +186,7 @@ def test_completed_output_keeps_ordinary_creation_mode_and_staging_is_private(
         original_save(image, stream, **kwargs)
 
     monkeypatch.setattr(Image.Image, "save", save)
-    if publication == "native_rename":
+    if publication == "rename":
         monkeypatch.setattr(
             imaging.os,
             "link",
@@ -231,7 +231,7 @@ def test_staging_close_failure_preserves_primary_and_still_removes_owned_path(
     assert not stage.exists()
 
 
-@pytest.mark.parametrize("stage", ["encode", "native_rename"])
+@pytest.mark.parametrize("stage", ["encode", "rename"])
 def test_quit_removes_only_active_owned_staging_before_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
 ) -> None:
@@ -242,7 +242,7 @@ def test_quit_removes_only_active_owned_staging_before_publication(
     release = threading.Event()
     errors = []
     original_save = Image.Image.save
-    original_rename = output_publication.rename_no_replace
+    original_rename = os.rename
 
     def held_encode(image, stream, **kwargs):
         stream.write(b"partial")
@@ -268,7 +268,7 @@ def test_quit_removes_only_active_owned_staging_before_publication(
             "link",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(errno.EPERM, "unsupported")),
         )
-        monkeypatch.setattr(output_publication, "rename_no_replace", held_rename)
+        monkeypatch.setattr(output_publication.os, "rename", held_rename)
 
     def save():
         try:
@@ -314,7 +314,7 @@ def test_publication_treats_einval_from_link_as_no_hard_links(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Windows reports CreateHardLink on exFAT as EINVAL; publication falls back to
-    # a complete no-replace rename instead of failing every output on such a drive.
+    # a complete rename instead of failing every output on such a drive.
     output = tmp_path / "out.png"
     monkeypatch.setattr(
         imaging.os,

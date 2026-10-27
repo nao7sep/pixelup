@@ -379,15 +379,10 @@ def test_managed_write_syncs_flushed_bytes_before_publication_and_records_after(
     replace = config_module.os.replace
 
     def observe_sync(descriptor: int) -> None:
-        status = config_module.os.fstat(descriptor)
-        if stat.S_ISDIR(status.st_mode):
-            events.append("directory sync")
-            assert target.read_bytes() == data
-        else:
-            events.append("file sync")
-            # fstat observes bytes flushed out of Python's buffer.
-            assert status.st_size == len(data)
-            assert target.read_text(encoding="utf-8") == "old"
+        events.append("file sync")
+        # fstat observes bytes flushed out of Python's buffer.
+        assert config_module.os.fstat(descriptor).st_size == len(data)
+        assert target.read_text(encoding="utf-8") == "old"
         fsync(descriptor)
 
     def observe_replace(source: Path, destination: Path) -> None:
@@ -403,11 +398,8 @@ def test_managed_write_syncs_flushed_bytes_before_publication_and_records_after(
     monkeypatch.setattr(config_module.os, "fsync", observe_sync)
     monkeypatch.setattr(config_module.os, "replace", observe_replace)
     monkeypatch.setattr("pixelup.backup_store.record", observe_backup)
-    assert config_module.write_managed_text(target, data.decode()) is None
-    expected = ["file sync", "replace"]
-    if sys.platform != "win32":
-        expected.append("directory sync")
-    assert events == [*expected, "backup"]
+    config_module.write_managed_text(target, data.decode())
+    assert events == ["file sync", "replace", "backup"]
     assert list(tmp_path.iterdir()) == [target]
 
 
@@ -455,99 +447,3 @@ def test_staging_cleanup_does_not_replace_the_primary_error(
     assert exc_info.value is failure
     assert target.read_text(encoding="utf-8") == "old"
 
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not sync directories")
-def test_failed_directory_sync_returns_published_warning_and_records_new_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import errno
-
-    target = tmp_path / "config.json"
-    target.write_text("old", encoding="utf-8")
-    failure = OSError(errno.EIO, "directory sync failed")
-    fsync = config_module.os.fsync
-    backups: list[bytes] = []
-
-    def fail_directory_sync(descriptor: int) -> None:
-        if stat.S_ISDIR(config_module.os.fstat(descriptor).st_mode):
-            raise failure
-        fsync(descriptor)
-
-    monkeypatch.setattr(config_module.os, "fsync", fail_directory_sync)
-    monkeypatch.setattr("pixelup.backup_store.record", lambda _path, data: backups.append(data))
-    warning = config_module.write_managed_text(target, "new")
-    assert warning is failure
-    assert target.read_text(encoding="utf-8") == "new"
-    assert backups == [b"new"]
-    assert list(tmp_path.iterdir()) == [target]
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not sync directories")
-@pytest.mark.parametrize("unsupported", ["EINVAL", "ENOTSUP", "ENOSYS"])
-def test_unsupported_directory_sync_is_a_platform_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsupported: str
-) -> None:
-    import errno
-
-    fsync = config_module.os.fsync
-
-    def unsupported_directory_sync(descriptor: int) -> None:
-        if stat.S_ISDIR(config_module.os.fstat(descriptor).st_mode):
-            raise OSError(getattr(errno, unsupported), "directory sync unsupported")
-        fsync(descriptor)
-
-    monkeypatch.setattr(config_module.os, "fsync", unsupported_directory_sync)
-    monkeypatch.setattr("pixelup.backup_store.record", lambda *_args: None)
-    target = tmp_path / "config.json"
-    assert config_module.write_managed_text(target, "saved") is None
-    assert target.read_text(encoding="utf-8") == "saved"
-
-
-def test_windows_skips_directory_sync(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(config_module.sys, "platform", "win32")
-    monkeypatch.setattr(config_module.os, "open", lambda *_args: pytest.fail("opened directory"))
-    config_module._sync_directory(tmp_path)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not sync directories")
-def test_directory_open_failure_is_a_published_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = tmp_path / "config.json"
-    failure = PermissionError("directory unavailable")
-    open_file = config_module.os.open
-    recorded: list[bytes] = []
-
-    def fail_directory_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
-        if path == tmp_path:
-            raise failure
-        return open_file(path, flags, *args, **kwargs)
-
-    monkeypatch.setattr(config_module.os, "open", fail_directory_open)
-    monkeypatch.setattr("pixelup.backup_store.record", lambda _path, data: recorded.append(data))
-    assert config_module.write_managed_text(target, "saved") is failure
-    assert target.read_text(encoding="utf-8") == "saved"
-    assert recorded == [b"saved"]
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not sync directories")
-def test_directory_cleanup_does_not_replace_its_sync_diagnostic(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    failure = OSError("directory sync failed")
-    close_file = config_module.os.close
-
-    def fail_sync(_descriptor: int) -> None:
-        raise failure
-
-    def close_then_fail(descriptor: int) -> None:
-        close_file(descriptor)
-        raise OSError("close failed")
-
-    monkeypatch.setattr(config_module.os, "fsync", fail_sync)
-    monkeypatch.setattr(config_module.os, "close", close_then_fail)
-    with pytest.raises(OSError) as exc_info:
-        config_module._sync_directory(tmp_path)
-    assert exc_info.value is failure

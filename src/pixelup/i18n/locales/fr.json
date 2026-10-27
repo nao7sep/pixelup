@@ -350,6 +350,5 @@
   "images.opening": "Ouverture des images…",
   "error.webpDimensions": "La sortie WebP ne peut pas dépasser {maximum} pixels en largeur ou en hauteur. Choisissez une échelle plus petite ou un autre format.",
   "models.readinessFailed": "Impossible de vérifier les fichiers des modèles. Ouvrez Modèles gérés pour réessayer.",
-  "managedModels.readinessFailed": "Impossible de vérifier les fichiers des modèles. Vérifiez le dossier et ses autorisations, puis rouvrez Modèles gérés pour réessayer.",
-  "notice.configDurabilityUnconfirmed": "Les paramètres ont été enregistrés, mais leur stockage durable n’a pas pu être confirmé. Ils risquent d’être perdus si l’ordinateur n’est plus alimenté."
+  "managedModels.readinessFailed": "Impossible de vérifier les fichiers des modèles. Vérifiez le dossier et ses autorisations, puis rouvrez Modèles gérés pour réessayer."
 }

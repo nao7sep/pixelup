@@ -360,7 +360,7 @@ def test_save_output_image_treats_a_broken_symlink_as_occupied(
     assert Path(target) == tmp_path / "missing.png"
 
 
-def test_save_output_image_failed_native_publication_leaves_no_output(
+def test_save_output_image_failed_rename_publication_leaves_no_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -372,11 +372,11 @@ def test_save_output_image_failed_native_publication_leaves_no_output(
     def rename_failure(source: Path, target: Path) -> None:
         assert source.is_file()
         assert not target.exists()
-        raise OSError(errno.EIO, "native publication failed")
+        raise OSError(errno.EIO, "rename publication failed")
 
     monkeypatch.setattr("pixelup.imaging.os.link", unsupported_link)
     monkeypatch.setattr("pixelup.output_reservation.os.link", unsupported_link)
-    monkeypatch.setattr("pixelup.output_publication.rename_no_replace", rename_failure)
+    monkeypatch.setattr("pixelup.output_publication.os.rename", rename_failure)
 
     with pytest.raises(PixelupError) as excinfo:
         save_output_image(
@@ -394,7 +394,7 @@ def test_save_output_image_failed_native_publication_leaves_no_output(
     assert list(tmp_path.iterdir()) == []
 
 
-def test_save_output_image_uses_native_no_replace_rename_without_hard_links(
+def test_save_output_image_renames_without_hard_links(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

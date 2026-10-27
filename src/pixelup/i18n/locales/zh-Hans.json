@@ -320,6 +320,5 @@
   "images.opening": "正在打开图片…",
   "error.webpDimensions": "WebP 输出的宽度或高度不能超过 {maximum} 像素。请选择更小的缩放倍数或其他格式。",
   "models.readinessFailed": "无法检查模型文件。请打开“模型管理”以重试。",
-  "managedModels.readinessFailed": "无法检查模型文件。请检查文件夹及其权限，然后重新打开“模型管理”以重试。",
-  "notice.configDurabilityUnconfirmed": "设置已保存，但无法确认其是否已持久写入。电脑断电时，这些设置可能会丢失。"
+  "managedModels.readinessFailed": "无法检查模型文件。请检查文件夹及其权限，然后重新打开“模型管理”以重试。"
 }

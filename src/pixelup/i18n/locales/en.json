@@ -335,6 +335,5 @@
   "images.opening": "Opening images…",
   "error.webpDimensions": "WebP output cannot exceed {maximum} pixels in width or height. Choose a smaller scale or another format.",
   "models.readinessFailed": "Could not check model files. Open Managed models to try again.",
-  "managedModels.readinessFailed": "Could not check model files. Check the folder and its permissions, then reopen Managed models to try again.",
-  "notice.configDurabilityUnconfirmed": "Settings were saved, but their durability could not be confirmed. They may be lost if the computer loses power."
+  "managedModels.readinessFailed": "Could not check model files. Check the folder and its permissions, then reopen Managed models to try again."
 }

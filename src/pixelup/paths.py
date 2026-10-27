@@ -28,7 +28,7 @@ class NamePlanCache:
     """One planning pass's folder snapshots and normalized bundle reservations.
 
     Reservations enter once when a job is accepted, so checking another name does
-    not revisit every earlier job. Publication still claims every name no-clobber.
+    not revisit every earlier job. Publication checks every name again just before it.
     """
 
     names: dict[Path, frozenset[str]] = field(default_factory=dict)

@@ -4254,52 +4254,6 @@ def test_reoffering_selected_path_refreshes_dimensions_and_preview_from_replaced
     assert decoded == [str(source), str(source)]
 
 
-def test_published_config_durability_warning_applies_saved_state_and_warns_without_retry(
-    make_window, monkeypatch,
-) -> None:
-    from pixelup import config as config_module
-
-    window = make_window()
-    sentinel = "EIO /internal/config ORIGINAL-DURABILITY-SENTINEL"
-    warning = OSError(sentinel)
-    published = []
-    path = window._settings_file.path
-
-    def fail_directory_sync(_directory):
-        published.append(json.loads(path.read_text(encoding="utf-8")))
-        raise warning
-
-    monkeypatch.setattr(config_module, "_sync_directory", fail_directory_sync)
-    monkeypatch.setattr("pixelup.backup_store.record", lambda *_args: None)
-    window.quality.setValue(72)
-
-    assert _flush(window) is True
-
-    assert published and published[0]["parameters"]["quality"] == 72
-    assert window.config.parameters.quality == 72
-    assert load_app_config(path) == window.config
-    assert window._settings_file.exists
-    assert not window._unsaved_config_changes
-    assert window._config_save is None
-    assert window.parameters_result.isVisibleTo(window)
-    assert window.parameters_result.property("severity") == "warning"
-    assert window.parameters_result.message_label.text() == english().of(
-        Message("notice.configDurabilityUnconfirmed")
-    )
-    assert sentinel not in window.parameters_result.message_label.text()
-    assert flush_records(5)
-    with sqlite3.connect(config_path().parent / "records.sqlite3") as connection:
-        rows = connection.execute(
-            "SELECT fields FROM logs WHERE message = 'config.durability_unconfirmed'"
-        ).fetchall()
-        failed = connection.execute(
-            "SELECT COUNT(*) FROM logs WHERE message = 'config.save_failed'"
-        ).fetchone()[0]
-    assert failed == 0
-    assert len(rows) == 1
-    assert json.loads(rows[0][0])["error"]["message"] == sentinel
-
-
 def test_failed_model_scan_shows_safe_main_rollup_and_recovers_after_retry(
     make_window, monkeypatch, process_until,
 ) -> None:

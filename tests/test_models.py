@@ -800,18 +800,12 @@ def test_download_syncs_stage_before_publish_and_directory_after(
         order.append("publish")
         real_replace(source_path, target_path)
 
-    def sync_directory(path: Path) -> None:
-        assert path == models_dir
-        assert target.is_file()
-        order.append("sync-directory")
-
     monkeypatch.setattr(models_module, "_sync_staged_file", sync_stage)
     monkeypatch.setattr(models_module.os, "replace", replace)
-    monkeypatch.setattr(models_module, "_sync_directory_best_effort", sync_directory)
 
     download_model_info(models_dir, info, download_timeout=10)
 
-    assert order == ["sync-stage", "publish", "sync-directory"]
+    assert order == ["sync-stage", "publish"]
 
 
 def test_sync_staged_file_calls_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

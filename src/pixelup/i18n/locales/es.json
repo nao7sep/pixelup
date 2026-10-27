@@ -350,6 +350,5 @@
   "images.opening": "Abriendo imágenes…",
   "error.webpDimensions": "La salida WebP no puede superar los {maximum} píxeles de ancho o alto. Elige una escala menor u otro formato.",
   "models.readinessFailed": "No se pudieron comprobar los archivos de los modelos. Abre Modelos administrados para volver a intentarlo.",
-  "managedModels.readinessFailed": "No se pudieron comprobar los archivos de los modelos. Revisa la carpeta y sus permisos y vuelve a abrir Modelos administrados para intentarlo de nuevo.",
-  "notice.configDurabilityUnconfirmed": "Se guardó la configuración, pero no se pudo confirmar que se haya almacenado de forma duradera. Puede perderse si la computadora se queda sin energía."
+  "managedModels.readinessFailed": "No se pudieron comprobar los archivos de los modelos. Revisa la carpeta y sus permisos y vuelve a abrir Modelos administrados para intentarlo de nuevo."
 }

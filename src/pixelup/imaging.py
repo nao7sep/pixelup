@@ -309,8 +309,8 @@ def save_output_image(
             # app owns and reloads as state. Binaries are out of scope for the text
             # backup, and output is never recorded (data-backup-conventions).
             # Revalidate every member of the shared-stem bundle after encoding,
-            # immediately before publication. The final path itself is still
-            # claimed atomically below, so an exact-boundary winner is preserved.
+            # immediately before publication. A hard link then claims the final
+            # path without replacing a file; without hard links, a rename follows.
             assert_output_bundle_available(output_path)
             if os.name != "nt":
                 os.fchmod(staged.fileno(), final_mode & (read_permissions | 0o222))

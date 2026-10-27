@@ -2348,14 +2348,6 @@ class MainWindow(QMainWindow):
             self.parameters_result.clear_result()
         if callback is not None:
             callback(failure)
-        if outcome.result is not None and outcome.result.durability_warning is not None:
-            warning = outcome.result.durability_warning
-            log.warning("config.durability_unconfirmed", path=str(self._settings_file.path),
-                        reason=str(warning),
-                        exc_info=(type(warning), warning, warning.__traceback__))
-            self.parameters_result.show_result(
-                Message("notice.configDurabilityUnconfirmed"), severity="warning",
-            )
         if operation.candidate.models_folder != operation.previous.models_folder:
             self.model_manager.changed.emit()
         operation.deleteLater()

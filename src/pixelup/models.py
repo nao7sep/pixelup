@@ -156,7 +156,6 @@ def download_model_info(
             # models/ is a binary-bearing directory excluded wholesale
             # (data-backup-conventions).
             os.replace(temp_path, target)
-            _sync_directory_best_effort(models_dir)
         except (HTTPError, URLError, TimeoutError, OSError, HTTPException) as exc:
             raise PixelupError(
                 ErrorCode.MODEL_DOWNLOAD_FAILED,
@@ -404,22 +403,6 @@ def _sync_staged_file(
     with path.open("r+b") as file:
         os.fsync(file.fileno())
     _check_acquisition(deadline, should_cancel)
-
-
-def _sync_directory_best_effort(path: Path) -> None:
-    """Persist the rename on platforms that permit directory fsync."""
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        try:
-            os.fsync(descriptor)
-        except OSError:
-            # Windows cannot fsync directories and macOS may treat it as a no-op.
-            pass
-    finally:
-        os.close(descriptor)
 
 
 def _remove_staged_file(path: Path, model: str) -> None:

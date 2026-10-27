@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import os
 import re
 import stat
@@ -229,7 +228,7 @@ def quarantine_corrupt_file(path: Path) -> Path:
     return target
 
 
-def write_managed_text(path: Path, text: str) -> OSError | None:
+def write_managed_text(path: Path, text: str) -> None:
     """The single managed-text atomic-write choke point for PixelUp.
 
     Every durable text file the app owns, including ``config.json``, is written
@@ -240,13 +239,7 @@ def write_managed_text(path: Path, text: str) -> OSError | None:
     beside ``path`` (``<stem>-<random>.tmp``, the storage-path conventions'
     derived-filename grammar), then atomically renames it over ``path``, so a crash
     mid-write cannot corrupt the target. Flushes and syncs the staged bytes before
-    publication, then syncs the containing directory where supported (Windows
-    and filesystems that reject directory sync cannot provide that final flush).
-
-    Raises on a failure before publication, preserving the previous target. Returns
-    an OSError only when directory sync fails AFTER the new bytes were published;
-    callers must apply the saved state and report durability as unconfirmed rather
-    than claim the replacement failed. Returns None when no such warning remains.
+    the rename. Raises on failure, preserving the previous target.
 
     **The data-backup record fires strictly AFTER the rename lands
     (data-backup-conventions).** Recording before the rename would risk a "backup of
@@ -273,11 +266,6 @@ def write_managed_text(path: Path, text: str) -> OSError | None:
         with suppress(OSError):
             temp_path.unlink(missing_ok=True)
         raise
-    durability_warning = None
-    try:
-        _sync_directory(path.parent)
-    except OSError as exc:
-        durability_warning = exc
     # After the rename: the file is exactly where it belongs, so record the bytes we
     # just wrote. Imported lazily to avoid a config <-> backup_store import cycle
     # (backup_store resolves its store path through resolve_state_dir here). record()
@@ -286,25 +274,6 @@ def write_managed_text(path: Path, text: str) -> OSError | None:
     from pixelup.backup_store import record
 
     record(path, data)
-    return durability_warning
-
-
-def _sync_directory(path: Path) -> None:
-    """Sync a published directory entry on platforms/filesystems supporting it."""
-    if sys.platform == "win32":
-        return
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(descriptor)
-        finally:
-            # A directory descriptor owns no pending writes; closing it is cleanup
-            # and must not replace a failed fsync diagnostic.
-            with suppress(OSError):
-                os.close(descriptor)
-    except OSError as exc:
-        if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.ENOSYS}:
-            raise
 
 
 def _keep_replaced_file_mode(path: Path, temp_path: Path) -> None:
