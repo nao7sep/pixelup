@@ -266,7 +266,7 @@ class _ReadWorker(QObject):
 
 
 class RecordsReads(QObject):
-    """One active read and a replaceable pending request for each read kind.
+    """The one thread every records read runs on, one read at a time.
 
     Answers arrive on the GUI thread as ``answered`` or ``failed`` with the id
     ``request`` returned. ``stop`` cancels the read in flight and is part of
@@ -276,78 +276,30 @@ class RecordsReads(QObject):
     answered = Signal(int, object)
     failed = Signal(int, object)
     stopped = Signal()
-    discarded = Signal(int)
     _requested = Signal(int, str, object)
 
     def __init__(self, reader: RecordsReader, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._reader = reader
         self._ids = count(1)
-        self._active: int | None = None
-        self._pending: dict[str, tuple[int, str, object]] = {}
-        self._stopping = False
         self._thread = QThread(self)
         self._worker = _ReadWorker(reader)
         self._worker.moveToThread(self._thread)
         self._requested.connect(self._worker.run)
-        self._worker.answered.connect(self._answered)
-        self._worker.failed.connect(self._failed)
+        self._worker.answered.connect(self.answered)
+        self._worker.failed.connect(self.failed)
         # The connection is closed on the thread that opened it, as it ends.
         self._thread.finished.connect(self._worker.close, Qt.ConnectionType.DirectConnection)
         self._thread.finished.connect(self.stopped)
         self._thread.start()
 
-    @staticmethod
-    def _key(op: str, argument: object) -> str:
-        if op == "page":
-            _query, after = argument
-            return "newest" if after is None else "older"
-        return op
-
     def request(self, op: str, argument: object = None) -> int:
         request_id = next(self._ids)
-        if self._stopping:
-            raise RuntimeError("records reads have stopped")
-        key = self._key(op, argument)
-        previous = self._pending.get(key)
-        self._pending[key] = (request_id, op, argument)
-        if previous is not None:
-            self.discarded.emit(previous[0])
-        self._dispatch()
-        return request_id
-
-    def invalidate(self, *keys: str) -> None:
-        """Discard superseded unstarted reads while retaining the physical read."""
-        for key in keys:
-            request = self._pending.pop(key, None)
-            if request is not None:
-                self.discarded.emit(request[0])
-
-    def _dispatch(self) -> None:
-        if self._stopping or self._active is not None or not self._pending:
-            return
-        key = next(iter(self._pending))
-        request_id, op, argument = self._pending.pop(key)
-        self._active = request_id
         self._requested.emit(request_id, op, argument)
-
-    @Slot(int, object)
-    def _answered(self, request_id: int, result: object) -> None:
-        # Keep the active claim while callbacks enqueue their follow-on reads.
-        self.answered.emit(request_id, result)
-        self._active = None
-        self._dispatch()
-
-    @Slot(int, object)
-    def _failed(self, request_id: int, error: object) -> None:
-        self.failed.emit(request_id, error)
-        self._active = None
-        self._dispatch()
+        return request_id
 
     def stop(self) -> bool:
         """Cancel what is in flight and end the thread; whether it ended within the bound."""
-        self._stopping = True
-        self.invalidate(*tuple(self._pending))
         self._reader.cancel()
         self._thread.quit()
         return self._thread.wait(STOP_WAIT_MS)
@@ -395,26 +347,16 @@ class RecordsListModel(QAbstractListModel):
         self.endInsertRows()
 
     def merge(self, records: list[RecordSummary]) -> None:
-        """Insert newest rows and retire the tail with native index notifications."""
-        if records == self.records:
+        """Show ``records``; new rows ahead of the ones shown are inserted, so the
+        view keeps its selection and scroll position."""
+        added = len(records) - len(self.records)
+        if added >= 0 and records[added:] == self.records:
+            if added:
+                self.beginInsertRows(QModelIndex(), 0, added - 1)
+                self.records = records
+                self.endInsertRows()
             return
-        old_ids = {record.id for record in self.records}
-        first_retained = next(
-            (row for row, record in enumerate(records) if record.id in old_ids),
-            len(records),
-        )
-        retained = records[first_retained:]
-        if not retained or retained != self.records[:len(retained)]:
-            self.replace(records)
-            return
-        if len(retained) < len(self.records):
-            self.beginRemoveRows(QModelIndex(), len(retained), len(self.records) - 1)
-            del self.records[len(retained):]
-            self.endRemoveRows()
-        if first_retained:
-            self.beginInsertRows(QModelIndex(), 0, first_retained - 1)
-            self.records[:0] = records[:first_retained]
-            self.endInsertRows()
+        self.replace(records)
 
     def row_of(self, record_id: int) -> int | None:
         return next(
@@ -716,8 +658,6 @@ class RecordsWindow(QWidget):
         self._query = RecordsQuery()
         self._sessions: tuple[str, ...] = ()
         self._this_session = current_session()
-        self._current_session_stored = False
-        self._sessions_failed = False
         # A page applies only while the filters it was read for are still the
         # newest ones asked for.
         self._generation = 0
@@ -729,6 +669,9 @@ class RecordsWindow(QWidget):
         self._fetching_more = False
         # New records arrived while the list was scrolled away from the top.
         self._newest_pending = False
+        # A newest-page read is in flight; live ticks wait for it rather than
+        # queuing more reads behind a slow one.
+        self._newest_reading = False
         # A failed read is itself logged as a record, whose signal would start the
         # next read; live reads stop after a failure and resume after a read succeeds.
         self._live_suspended = False
@@ -750,7 +693,6 @@ class RecordsWindow(QWidget):
 
         reads.answered.connect(self._answered)
         reads.failed.connect(self._failed)
-        reads.discarded.connect(self._discarded)
         # Queued, so a line logged on this thread never runs this window's code
         # inside the logger.
         stored_signal().connect(self._record_stored, Qt.ConnectionType.QueuedConnection)
@@ -889,7 +831,6 @@ class RecordsWindow(QWidget):
         self._pending.clear()
         self._reads.answered.disconnect(self._answered)
         self._reads.failed.disconnect(self._failed)
-        self._reads.discarded.disconnect(self._discarded)
         stored_signal().disconnect(self._record_stored)
         localizer.changed.disconnect(self._retranslate)
         self.closed.emit()
@@ -911,10 +852,6 @@ class RecordsWindow(QWidget):
         if entry is not None:
             entry[1](error)
 
-    @Slot(int)
-    def _discarded(self, request_id: int) -> None:
-        self._pending.pop(request_id, None)
-
     def _read_failed(self, read: str, error: object) -> None:
         # Suspended first: the warning below is itself a stored record.
         self._live_suspended = True
@@ -925,28 +862,16 @@ class RecordsWindow(QWidget):
             "sessions",
             None,
             self._sessions_read,
-            self._sessions_read_failed,
+            lambda error: self._read_failed("sessions", error),
         )
 
-    def _sessions_read_failed(self, error: object) -> None:
-        self._sessions_failed = True
-        self._read_failed("sessions", error)
-
     def _sessions_read(self, sessions: object) -> None:
-        if not isinstance(sessions, tuple):
-            return
-        self._sessions_failed = False
-        if self._current_session_stored and self._this_session is not None:
-            sessions = tuple(sorted(set(sessions) | {self._this_session}, reverse=True))
-        if sessions != self._sessions:
+        if isinstance(sessions, tuple) and sessions != self._sessions:
             self._sessions = sessions
             self._fill_launches()
 
     def _read_first_page(self) -> None:
         self._generation += 1
-        self._reads.invalidate("newest", "older", "detail")
-        if self._sessions_failed:
-            self._read_sessions()
         generation = self._generation
         self._fetching_more = False
         self._newest_pending = False
@@ -984,8 +909,11 @@ class RecordsWindow(QWidget):
         QAccessible.updateAccessibility(QAccessibleEvent(self.list, QAccessible.Event.Alert))
 
     def _read_newest(self) -> None:
-        """Refresh the bounded newest window without replacing it with a loading note."""
+        """The newest page read again for new records. It joins the rows already
+        shown rather than replacing them, so the list never falls back to the
+        loading note and the pages already read stay."""
         generation = self._generation
+        self._newest_reading = True
         self._read(
             "page",
             (self._query, None),
@@ -994,6 +922,7 @@ class RecordsWindow(QWidget):
         )
 
     def _newest_read(self, generation: int, page: object) -> None:
+        self._newest_reading = False
         if generation != self._generation or not isinstance(page, RecordsPage):
             return
         self._live_suspended = False
@@ -1007,6 +936,7 @@ class RecordsWindow(QWidget):
         self._check_end_soon()
 
     def _newest_failed(self, generation: int, error: object) -> None:
+        self._newest_reading = False
         if generation == self._generation:
             self._read_failed("page", error)
 
@@ -1025,23 +955,17 @@ class RecordsWindow(QWidget):
         self._read(
             "page",
             (self._query, after),
-            lambda page: self._more_read(generation, after, page),
+            lambda page: self._more_read(generation, page),
             lambda error: self._more_failed_read(generation, error),
         )
 
-    def _more_read(self, generation: int, after: RecordCursor | None, page: object) -> None:
+    def _more_read(self, generation: int, page: object) -> None:
         if generation != self._generation or not isinstance(page, RecordsPage):
             return
         self._fetching_more = False
-        self._loading_more = False
-        if after != cursor_after(self.model.records):
-            # A bounded newest refresh moved the tail while this request waited.
-            # Preserve the explicit paging intent without skipping unread rows.
-            self._load_more()
-            return
         self._live_suspended = False
+        self._loading_more = False
         self.model.append(page.records)
-        self._keep_selection()
         self._more = page.more
         self._sync_end_note()
         self._check_end_soon()
@@ -1083,10 +1007,6 @@ class RecordsWindow(QWidget):
 
     @Slot()
     def _record_stored(self) -> None:
-        self._current_session_stored = True
-        if self._this_session is not None and self._this_session not in self._sessions:
-            self._sessions = tuple(sorted((*self._sessions, self._this_session), reverse=True))
-            self._fill_launches()
         if not self._live_timer.isActive():
             self._live_timer.start()
 
@@ -1096,9 +1016,13 @@ class RecordsWindow(QWidget):
         # signal that arrived just before a read failed starts nothing either.
         if self._live_suspended:
             return
+        if self._newest_reading:
+            self._live_timer.start()
+            return
         # A stored record reaches the list at once while it is scrolled to the
         # top; otherwise it waits until the list is back there, so the list never
         # moves under the reader.
+        self._read_sessions()
         bar = self.list.verticalScrollBar()
         if bar.value() <= bar.minimum():
             self._read_newest()
@@ -1202,17 +1126,11 @@ class RecordsWindow(QWidget):
         self._detail_failed = False
         self._render_detail()
         record_id = record.id
-        generation = self._generation
         self._read(
             "detail",
             record_id,
-            lambda detail: (
-                self._detail_read(record_id, detail) if generation == self._generation else None
-            ),
-            lambda error: (
-                self._detail_read_failed(record_id, error)
-                if generation == self._generation else None
-            ),
+            lambda detail: self._detail_read(record_id, detail),
+            lambda error: self._detail_read_failed(record_id, error),
         )
 
     def _detail_read(self, record_id: int, detail: object) -> None:

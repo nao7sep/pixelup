@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from localization_support import speaking
-from PySide6.QtCore import QPersistentModelIndex, QSettings, Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QCloseEvent, QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -24,7 +24,7 @@ from pixelup.gui import MainWindow, is_reopen
 from pixelup.i18n.languages import TAGS
 from pixelup.i18n.message import Message
 from pixelup.model_registry import ALL_MODELS
-from pixelup.records import PAGE_SIZE, RecordCursor, RecordDetail, RecordsQuery, RecordsReader
+from pixelup.records import PAGE_SIZE, RecordDetail, RecordsQuery, RecordsReader
 from pixelup.records_window import (
     GEOMETRY_KEY,
     LIST_WIDTH_DEFAULT,
@@ -868,226 +868,23 @@ def test_the_list_never_scrolls_sideways(open_records, qapp: QApplication) -> No
     assert not window.list.horizontalScrollBar().isVisible()
 
 
-def test_read_bursts_keep_one_active_and_one_pending_per_read_kind(
-    qapp, database, process_until,
+
+def test_live_ticks_wait_while_the_newest_read_runs(
+    open_records, database, process_until,
 ) -> None:
     _seed_count(database, 4)
     reader = ScriptedReader(database)
-    reader.gate = threading.Event()
-    reads = RecordsReads(reader)
-    answered, discarded = [], []
-    reads.answered.connect(lambda request_id, _result: answered.append(request_id))
-    reads.discarded.connect(discarded.append)
-    first = reads.request("page", (RecordsQuery(), None))
-    try:
-        assert reader.waiting.wait(WAIT_S)
-        latest = {}
-        for i in range(30):
-            latest["sessions"] = reads.request("sessions")
-            latest["detail"] = reads.request("detail", i + 1)
-            latest["newest"] = reads.request("page", (RecordsQuery(), None))
-            latest["older"] = reads.request("page", (RecordsQuery(), RecordCursor(_time(i), 1)))
-            assert len(reads._pending) == 4
-            assert len(reader.pages) == 1
-        assert len(discarded) == 4 * 29
-        reader.gate.set()
-        _until(process_until, lambda: len(answered) == 5, "bounded pending reads")
-        assert answered == [first, *latest.values()]
-        assert len(reader.pages) == 3
-    finally:
-        reader.gate.set()
-        reads.stop()
-
-
-def test_filter_generations_discard_unstarted_pages_and_details(
-    open_records, database, process_until,
-) -> None:
-    _seed_count(database, 5)
-    reader = ScriptedReader(database)
-    reader.gate = threading.Event()
     window = open_records(reader)
+    _until(process_until, lambda: _loaded(window), "the first page")
+    reader.gate = threading.Event()
     try:
-        _until(process_until, reader.waiting.is_set, "held initial page")
-        details = []
-        window._read("detail", 1, details.append, details.append)
-        for i in range(30):
-            window._set_query(RecordsQuery(search=f"m{i}"))
-            assert len(window._reads._pending) == 1
-            assert len(window._pending) == 2
-        assert len(reader.pages) == 1
-        reader.gate.set()
-        _until(process_until, lambda: _loaded(window), "latest filtered page")
-        assert len(reader.pages) == 2
-        assert reader.pages[-1][0].search == "m29"
-        assert not details
-        assert not window.model.records
-    finally:
-        reader.gate.set()
-
-
-def test_sessions_are_read_once_and_merge_current_launch_notified_during_query(
-    open_records, database, process_until, monkeypatch,
-) -> None:
-    _seed(database, [{"time": _time(0), "session": OLD}])
-    monkeypatch.setattr(records_window, "current_session", lambda: NEW)
-    entered, release = threading.Event(), threading.Event()
-
-    class SessionsReader(ScriptedReader):
-        session_reads = 0
-
-        def sessions(self):
-            self.session_reads += 1
-            answer = super().sessions()
-            entered.set()
-            assert release.wait(WAIT_S)
-            return answer
-
-    reader = SessionsReader(database)
-    window = open_records(reader)
-    try:
-        assert entered.wait(WAIT_S)
-        window._record_stored()
-        assert window._sessions == (NEW,)
-        release.set()
-        _until(process_until, lambda: _loaded(window), "initial launch list")
-        assert window._sessions == (NEW, OLD)
-        for _ in range(5):
-            window._record_stored()
+        window._live_tick()
+        _until(process_until, reader.waiting.is_set, "the held newest page")
+        queued = len(window._pending)
+        for _ in range(30):
             window._live_tick()
-        _until(process_until, lambda: not window._pending, "live page reads")
-        assert reader.session_reads == 1
-        assert window._sessions == (NEW, OLD)
-    finally:
-        release.set()
-
-
-def test_evicted_selection_keeps_detail_and_returns_when_older_rows_are_loaded(
-    open_records, database, process_until,
-) -> None:
-    _seed_count(database, PAGE_SIZE)
-    window = open_records()
-    _until(process_until, lambda: _loaded(window), "initial page")
-    window.list.setCurrentIndex(window.model.index(PAGE_SIZE - 1))
-    _until(process_until, lambda: window._detail is not None, "selected detail")
-    selected = window._selected_id
-    detail = window._detail
-    persistent = QPersistentModelIndex(window.list.currentIndex())
-    window.list.scrollToTop()
-    _seed_count(database, PAGE_SIZE + 10, start=PAGE_SIZE)
-    window._read_newest()
-    _until(process_until, lambda: not window._pending, "bounded newest page")
-    assert window.model.rowCount() == PAGE_SIZE
-    assert window._selected_id == selected
-    assert window._detail is detail
-    assert not persistent.isValid()
-    assert not window.list.currentIndex().isValid()
-    assert not window.list.selectionModel().selectedRows()
-    while window._more:
-        window._load_more()
-        _until(process_until, lambda: not window._pending, "explicit older page")
-    assert [row.message for row in window.model.records] == [
-        f"m{i}" for i in range(PAGE_SIZE * 2 + 9, -1, -1)
-    ]
-    current = window.list.currentIndex()
-    assert current.isValid()
-    assert window.model.records[current.row()].id == selected
-    assert window._detail is detail
-
-
-def test_older_paging_reissues_from_current_tail_after_waiting_behind_newest_refresh(
-    open_records, database, process_until,
-) -> None:
-    _seed_count(database, PAGE_SIZE * 3)
-    reader = ScriptedReader(database)
-    window = open_records(reader)
-    _until(process_until, lambda: _loaded(window), "initial page")
-    old_tail = records_window.cursor_after(window.model.records)
-    _seed_count(database, 10, start=PAGE_SIZE * 3)
-    reader.gate = threading.Event()
-    window._read_newest()
-    try:
-        assert reader.waiting.wait(WAIT_S)
-        window._load_more()
-        reader.gate.set()
-        _until(process_until, lambda: not window._pending, "older paging from refreshed tail")
-        assert len(reader.pages) == 4
-        assert reader.pages[2][1] == old_tail
-        assert reader.pages[3][1] != old_tail
-        assert _messages(window) == [
-            f"m{i}" for i in range(PAGE_SIZE * 3 + 9, PAGE_SIZE + 9, -1)
-        ]
+        assert len(window._pending) == queued
+        assert len(reader.pages) == 2
     finally:
         reader.gate.set()
-
-
-def test_active_failure_is_delivered_before_next_pending_read_starts(
-    qapp, database, process_until,
-) -> None:
-    _seed_count(database, 2)
-    reader = ScriptedReader(database)
-    reader.gate = threading.Event()
-    reader.fail = {0}
-    reads = RecordsReads(reader)
-    failures, answers = [], []
-    reads.failed.connect(lambda request_id, error: failures.append((request_id, len(reader.pages))))
-    reads.answered.connect(lambda request_id, _result: answers.append(request_id))
-    failed_id = reads.request("page", (RecordsQuery(), None))
-    try:
-        assert reader.waiting.wait(WAIT_S)
-        next_id = reads.request("page", (RecordsQuery(level="info"), None))
-        reader.gate.set()
-        _until(process_until, lambda: bool(answers), "read after failed active request")
-        assert failures == [(failed_id, 1)]
-        assert answers == [next_id]
-    finally:
-        reader.gate.set()
-        reads.stop()
-
-
-def test_stop_discards_pending_and_retains_held_physical_read(
-    qapp, database, process_until, monkeypatch,
-) -> None:
-    _seed_count(database, 2)
-    monkeypatch.setattr(records_window, "STOP_WAIT_MS", 20)
-    reader = ScriptedReader(database)
-    reader.gate = threading.Event()
-    reads = RecordsReads(reader)
-    discarded = []
-    reads.discarded.connect(discarded.append)
-    reads.request("page", (RecordsQuery(), None))
-    try:
-        assert reader.waiting.wait(WAIT_S)
-        pending_id = reads.request("detail", 1)
-        assert not reads.stop()
-        assert discarded == [pending_id]
-        assert not reads._pending
-        assert reads._thread.isRunning()
-    finally:
-        reader.gate.set()
-        _until(process_until, reads._thread.isFinished, "stopped physical read")
-        reads.stop()
-
-
-def test_failed_sessions_query_retries_with_next_explicit_filter_read(
-    open_records, database, process_until,
-) -> None:
-    _seed_count(database, 2)
-
-    class SessionsReader(ScriptedReader):
-        session_reads = 0
-
-        def sessions(self):
-            self.session_reads += 1
-            if self.session_reads == 1:
-                raise sqlite3.OperationalError("unavailable")
-            return super().sessions()
-
-    reader = SessionsReader(database)
-    window = open_records(reader)
-    _until(process_until, lambda: _loaded(window), "initial records page")
-    assert window._sessions_failed
-    window._set_query(RecordsQuery(level="info"))
-    _until(process_until, lambda: _loaded(window), "explicit retry")
-    assert not window._sessions_failed
-    assert reader.session_reads == 2
-    assert window._sessions == (NEW,)
+    _until(process_until, lambda: _loaded(window), "the newest page")

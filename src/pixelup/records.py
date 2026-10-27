@@ -234,25 +234,19 @@ def _order(record: RecordSummary) -> tuple[str, int]:
 def merge_newest_page(
     shown: Sequence[RecordSummary], shown_more: bool, page: RecordsPage
 ) -> tuple[list[RecordSummary], bool]:
-    """Refresh a contiguous cache without growing it through passive updates.
+    """The newest page read again, joined with the rows already shown.
 
-    Explicit older paging owns growth. If a newest page has advanced past every
-    cached row, start from that page so an unread interval is never hidden.
+    A row in both takes the page's copy, and the rows shown beyond the page stay,
+    so the pages already read are kept and a page read out of order loses nothing.
     """
-    if page.more and shown and not {row.id for row in shown}.intersection(
-        row.id for row in page.records
-    ):
-        return list(page.records), page.more
     by_id = {record.id: record for record in shown}
     for record in page.records:
         by_id[record.id] = record
     records = sorted(by_id.values(), key=_order, reverse=True)
-    limit = max(len(shown), PAGE_SIZE)
-    trimmed = len(records) > limit
     beyond = bool(page.records) and any(
         _order(record) < _order(page.records[-1]) for record in shown
     )
-    return records[:limit], trimmed or (shown_more if beyond else page.more)
+    return records, shown_more if beyond else page.more
 
 
 def pretty_json(text: str) -> str:
