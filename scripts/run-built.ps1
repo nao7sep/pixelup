@@ -28,7 +28,6 @@ function Write-Step {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir = Split-Path -Parent $scriptDir
 $exePath = Join-Path $repoDir "dist/PixelUp/PixelUp.exe"
-$runtimeToken = [guid]::NewGuid().ToString("N")
 
 try {
     Set-Utf8Console
@@ -44,14 +43,11 @@ try {
     }
 
     $builtAt = (Get-Item $exePath).LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
-    Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
-    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -Token $runtimeToken
+    Stop-RecordedRuntime
     Write-Step "Launching the existing build (built: $builtAt)"
     Write-Host "If you changed source since then, run rebuild instead."
 
-    $appProcess = Start-OwnedRuntime -RepoDir $repoDir -Token $runtimeToken -FilePath $exePath -ArgumentList $args
-    if ($null -eq $appProcess) { exit 0 }
-    Wait-OwnedRuntime -Label "PixelUp" -Process $appProcess -TimeoutSeconds 30
+    $null = Start-RecordedRuntime -FilePath $exePath -ArgumentList $args
 }
 catch {
     Write-Host ""

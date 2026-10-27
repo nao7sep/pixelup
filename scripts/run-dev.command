@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUNTIME_TOKEN="run-dev-$$-$(date +%s)-$RANDOM"
+APP_PID=""
 source "$SCRIPT_DIR/launcher-runtime.sh"
 
 log_step() {
@@ -32,9 +32,9 @@ pause_on_failure() {
 cleanup() {
   local status="$?"
   trap - EXIT
-  if is_launcher_runtime_owner "$RUNTIME_TOKEN" "$REPO_DIR"; then
-    stop_owned_runtime PixelUp "$REPO_DIR" "$RUNTIME_TOKEN" "$RUNTIME_TOKEN" >/dev/null 2>&1 || true
-    release_launcher_runtime "$RUNTIME_TOKEN" "$REPO_DIR"
+  # Closing this launcher closes the PixelUp it started, unless a later launcher has replaced it.
+  if [[ -n "$APP_PID" ]]; then
+    stop_recorded_runtime "$APP_PID" >/dev/null 2>&1 || true
   fi
   pause_on_failure "$status"
   exit "$status"
@@ -47,19 +47,16 @@ require_command uv
 cd "$REPO_DIR"
 
 log_step "Replacing any existing PixelUp runtime"
-claim_launcher_runtime "$RUNTIME_TOKEN" "$REPO_DIR"
-stop_owned_runtime PixelUp "$REPO_DIR" "$RUNTIME_TOKEN"
+stop_recorded_runtime
 
 log_step "Installing dependencies required for launch"
 uv sync --extra dev
 
 log_step "Starting PixelUp"
-start_owned_runtime "$REPO_DIR" "$RUNTIME_TOKEN" "$REPO_DIR/.venv/bin/python" -m pixelup "$@" || {
-  status=$?
-  [[ "$status" -eq 2 ]] && exit 0
-  exit "$status"
-}
-DEV_PID=$LAUNCHED_RUNTIME_PID
-wait_for_captured_runtime PixelUp "$DEV_PID" "$LAUNCHED_RUNTIME_IDENTITY" 120
+# A framework Python re-executes itself as its app bundle's interpreter, so ask
+# the interpreter which executable its process ends up running.
+python_executable="$("$REPO_DIR/.venv/bin/python" -c 'import os, subprocess; print(subprocess.run(["ps", "-p", str(os.getpid()), "-o", "comm="], capture_output=True, text=True, check=True).stdout.strip())')"
+start_recorded_runtime "$python_executable" "$REPO_DIR/.venv/bin/python" -m pixelup "$@"
+APP_PID=$RUNTIME_PID
 log_step "PixelUp is ready"
-wait "$DEV_PID"
+wait "$APP_PID"

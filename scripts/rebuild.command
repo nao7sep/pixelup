@@ -10,7 +10,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_BUNDLE="$REPO_DIR/dist/PixelUp.app"
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/PixelUp"
-RUNTIME_TOKEN="rebuild-$$-$(date +%s)-$RANDOM"
 source "$SCRIPT_DIR/launcher-runtime.sh"
 
 log_step() {
@@ -38,7 +37,6 @@ trap 'pause_on_failure $?' EXIT
 require_command uv
 
 cd "$REPO_DIR"
-claim_launcher_runtime "$RUNTIME_TOKEN" "$REPO_DIR"
 
 # Clear stale output first so a build that fails to emit a file cannot be masked
 # by a leftover artifact from a previous run.
@@ -57,10 +55,5 @@ log_step "Self-testing the frozen bundle"
 PIXELUP_SELFTEST=1 "$APP_BUNDLE/Contents/MacOS/PixelUp"
 
 log_step "Launching PixelUp"
-stop_owned_runtime PixelUp "$REPO_DIR" "$RUNTIME_TOKEN"
-start_owned_runtime "$REPO_DIR" "$RUNTIME_TOKEN" "$APP_EXECUTABLE" "$@" || {
-  status=$?
-  [[ "$status" -eq 2 ]] && exit 0
-  exit "$status"
-}
-wait_for_captured_runtime PixelUp "$LAUNCHED_RUNTIME_PID" "$LAUNCHED_RUNTIME_IDENTITY" 30
+stop_recorded_runtime
+start_recorded_runtime "$APP_EXECUTABLE" "$APP_EXECUTABLE" "$@"

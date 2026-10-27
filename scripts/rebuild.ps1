@@ -50,7 +50,6 @@ $repoDir = Split-Path -Parent $scriptDir
 $distDir = Join-Path $repoDir "dist"
 $workDir = Join-Path $repoDir "build-pyinstaller"
 $exePath = Join-Path $repoDir "dist/PixelUp/PixelUp.exe"
-$runtimeToken = [guid]::NewGuid().ToString("N")
 
 try {
     Set-Utf8Console
@@ -62,8 +61,7 @@ try {
     # Windows locks the frozen executable while it runs, so replacement must
     # happen before removing the distribution directory.
     Write-Step "Replacing any existing PixelUp runtime"
-    Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
-    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -Token $runtimeToken
+    Stop-RecordedRuntime
 
     Write-Step "Removing stale build output"
     # Clear output first so a build that fails to emit a file cannot be masked by a
@@ -88,9 +86,7 @@ try {
     if ($proc.ExitCode -ne 0) { throw "Frozen self-test failed (exit $($proc.ExitCode))" }
 
     Write-Step "Launching PixelUp"
-    $appProcess = Start-OwnedRuntime -RepoDir $repoDir -Token $runtimeToken -FilePath $exePath -ArgumentList $args
-    if ($null -eq $appProcess) { exit 0 }
-    Wait-OwnedRuntime -Label "PixelUp" -Process $appProcess -TimeoutSeconds 30
+    $null = Start-RecordedRuntime -FilePath $exePath -ArgumentList $args
 }
 catch {
     Write-Host ""

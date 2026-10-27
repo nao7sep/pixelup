@@ -45,7 +45,7 @@ function Invoke-Native {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir = Split-Path -Parent $scriptDir
-$runtimeToken = [guid]::NewGuid().ToString("N")
+$appId = $null
 
 try {
     Set-Utf8Console
@@ -55,17 +55,15 @@ try {
     Set-Location $repoDir
 
     Write-Step "Replacing any existing PixelUp runtime"
-    Claim-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
-    Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -Token $runtimeToken
+    Stop-RecordedRuntime
 
     Write-Step "Installing dependencies required for launch"
     Invoke-Native -FilePath "uv" -ArgumentList @("sync", "--extra", "dev")
 
     Write-Step "Starting PixelUp"
     # Forward any script arguments to the app, matching run-dev.command's `"$@"`.
-    $devProcess = Start-OwnedRuntime -RepoDir $repoDir -Token $runtimeToken -FilePath (Join-Path $repoDir ".venv/Scripts/python.exe") -ArgumentList (@("-m", "pixelup") + $args)
-    if ($null -eq $devProcess) { exit 0 }
-    Wait-OwnedRuntime -Label "PixelUp" -Process $devProcess -TimeoutSeconds 120
+    $devProcess = Start-RecordedRuntime -FilePath (Join-Path $repoDir ".venv/Scripts/python.exe") -ArgumentList (@("-m", "pixelup") + $args) -Wrapper
+    $appId = Get-RecordedRuntimeId
     Write-Step "PixelUp is ready"
     $devProcess.WaitForExit()
     if ($devProcess.ExitCode -notin @(0, 130, -1073741510)) {
@@ -78,11 +76,11 @@ catch {
     $scriptExitCode = 1
 }
 finally {
-    if (Test-LauncherRuntimeOwner -Token $runtimeToken -RepoDir $repoDir) {
-        Stop-OwnedRuntime -Label "PixelUp" -RepoDir $repoDir -Token $runtimeToken -ReceiptToken $runtimeToken
-        Release-LauncherRuntime -Token $runtimeToken -RepoDir $repoDir
-        Read-Host "Press Enter to close" | Out-Null
+    # Closing this launcher closes the PixelUp it started, unless a later launcher has replaced it.
+    if ($appId) {
+        try { Stop-RecordedRuntime -OnlyId $appId } catch { Write-Host $_.Exception.Message }
     }
+    Read-Host "Press Enter to close" | Out-Null
 }
 
 exit $scriptExitCode
