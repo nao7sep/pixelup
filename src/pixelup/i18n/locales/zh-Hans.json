@@ -186,7 +186,6 @@
   "managedModels.summary": "你可以单独安装想用的模型，也可以一次安装所有缺少的模型。PixelUp 会校验每个模型，并保留它们供以后的任务使用。关闭此窗口不会停止安装。",
   "managedModels.title": "模型管理",
   "modelInstall.failedFallback": "无法安装模型。请重试。",
-  "modelInstall.stopped": "安装已停止。",
   "models.installing": "正在安装模型 — {progress}%",
   "models.installingAccessible": "模型管理，正在安装模型，百分之 {progress}",
   "models.installingTooltip": "正在安装模型。",

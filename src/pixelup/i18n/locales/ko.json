@@ -186,7 +186,6 @@
   "managedModels.summary": "사용할 모델을 개별로 설치하거나 누락된 모델을 한 번에 모두 설치할 수 있습니다. PixelUp은 각 모델을 검증하고 이후 작업을 위해 보관합니다. 이 창을 닫아도 설치는 중단되지 않습니다.",
   "managedModels.title": "모델 관리",
   "modelInstall.failedFallback": "모델을 설치할 수 없습니다. 다시 시도하십시오.",
-  "modelInstall.stopped": "설치가 중단되었습니다.",
   "models.installing": "모델을 설치하는 중 — {progress}%",
   "models.installingAccessible": "모델 관리, 모델을 설치하는 중, {progress}퍼센트",
   "models.installingTooltip": "모델을 설치하는 중입니다.",

@@ -92,8 +92,8 @@ def download_model_info(
 ) -> dict[str, object]:
     """Download, verify and atomically publish one model file.
 
-    Startup admits one writer per data root, and ``ModelManager`` refuses an
-    artifact already running or queued, so no per-download lock is needed. Apps
+    Startup admits one writer per data root, and ``ModelManager`` runs one
+    install at a time, so no per-download lock is needed. Apps
     with independent data roots can still share a separately configured models
     folder: a duplicate download wastes bandwidth but publishes only a verified
     file atomically.

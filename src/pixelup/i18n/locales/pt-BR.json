@@ -208,7 +208,6 @@
   "managedModels.summary": "Instale qualquer modelo que quiser usar ou todos os que faltam de uma vez. O PixelUp verifica cada modelo e o mantém para tarefas futuras. Fechar esta janela não interrompe uma instalação.",
   "managedModels.title": "Modelos gerenciados",
   "modelInstall.failedFallback": "Não foi possível instalar os modelos. Tente novamente.",
-  "modelInstall.stopped": "Instalação interrompida.",
   "models.installing": "Instalando modelos — {progress}%",
   "models.installingAccessible": "Modelos gerenciados, instalando modelos, {progress} por cento",
   "models.installingTooltip": "A instalação de modelos está em andamento.",

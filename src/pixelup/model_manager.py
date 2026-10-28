@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
 from itertools import count
 from pathlib import Path
+from threading import Event
 from typing import Literal
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -12,19 +14,13 @@ from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
 from pixelup.model_management import MANAGED_ARTIFACT_NAMES, artifact_size_bytes
 from pixelup.models import download_model, model_is_ready
-from pixelup.read_threads import ReadThreads
+from pixelup.read_threads import run_in_background
 from pixelup.session_log import log
 
 _DOWNLOAD_TIMEOUT_SECONDS = 600
 
 INSTALL_FAILED = Message("modelInstall.failedFallback")
 
-# Unlike the job queue's own configurable cap, this one has no UI: "Install all" is
-# the only path that can start several downloads in the same pass (a lone row
-# install is always one bundle at a time already), so a fixed small number is
-# enough to stop them saturating bandwidth and fighting each other's per-download
-# minimum-rate deadline.
-MAX_CONCURRENT_INSTALLS = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,38 +37,28 @@ class ModelOperation:
 
 
 class ModelInstallWorker(QObject):
+    """Runs one install at a time on the manager's thread and reports each outcome."""
+
     progress = Signal(int, str, int, int)
     finished = Signal(int, bool, bool, object)
 
-    def __init__(
-        self,
-        operation_id: int,
-        models_dir: Path,
-        artifact_names: tuple[str, ...],
-        *,
-        force: bool,
-    ) -> None:
-        super().__init__()
-        self._operation_id = operation_id
-        self._models_dir = models_dir
-        self._artifact_names = artifact_names
-        self._force = force
-        self._cancel_requested = False
-
-    def request_cancel(self) -> None:
-        self._cancel_requested = True
-
-    def _is_cancelled(self) -> bool:
-        return self._cancel_requested
-
-    @Slot()
-    def run(self) -> None:
-        name: str | None = None
+    @Slot(object, object)
+    def run_install(self, command: _Install, models_dir: Path) -> None:
+        outcome: tuple[bool, bool, Message | None] = (False, False, INSTALL_FAILED)
         try:
-            total_bytes = artifact_size_bytes(self._artifact_names)
+            outcome = self._run(command, models_dir)
+        finally:
+            # Every install reports, so the manager always moves on to the next.
+            self.finished.emit(command.operation_id, *outcome)
+
+    def _run(self, command: _Install, models_dir: Path) -> tuple[bool, bool, Message | None]:
+        name: str | None = None
+        operation_id, names = command.operation_id, command.artifact_names
+        try:
+            total_bytes = artifact_size_bytes(names)
             completed_bytes = 0
-            for name in self._artifact_names:
-                if self._is_cancelled():
+            for name in names:
+                if command.cancel.is_set():
                     raise PixelupError(ErrorCode.JOB_CANCELLED, "Model installation cancelled.")
 
                 def report_progress(
@@ -84,50 +70,56 @@ class ModelInstallWorker(QObject):
                     completed: int = completed_bytes,
                 ) -> None:
                     self.progress.emit(
-                        self._operation_id,
+                        operation_id,
                         artifact_name,
                         min(total_bytes, completed + done),
                         total_bytes,
                     )
 
                 download_model(
-                    self._models_dir,
+                    models_dir,
                     name,
                     download_timeout=_DOWNLOAD_TIMEOUT_SECONDS,
                     on_download=report_progress,
-                    should_cancel=self._is_cancelled,
-                    force=self._force,
+                    should_cancel=command.cancel.is_set,
+                    force=command.force,
                 )
                 completed_bytes += artifact_size_bytes((name,))
-                self.progress.emit(
-                    self._operation_id,
-                    name,
-                    completed_bytes,
-                    total_bytes,
-                )
+                self.progress.emit(operation_id, name, completed_bytes, total_bytes)
         except PixelupError as exc:
             cancelled = exc.code == ErrorCode.JOB_CANCELLED
             if not cancelled:
                 log.exception(
                     "models.install_failed",
-                    operation_id=self._operation_id,
+                    operation_id=operation_id,
                     artifact=name,
-                    artifacts=list(self._artifact_names),
+                    artifacts=list(names),
                     code=exc.code.value,
                     error_details=exc.details,
                 )
-            message = user_text(exc, internal_fallback=INSTALL_FAILED)
-            self.finished.emit(self._operation_id, False, cancelled, message)
+            return False, cancelled, user_text(exc, internal_fallback=INSTALL_FAILED)
         except Exception:  # noqa: BLE001 - every worker outcome must settle.
             log.exception(
                 "models.install_failed",
-                operation_id=self._operation_id,
+                operation_id=operation_id,
                 artifact=name,
-                artifacts=list(self._artifact_names),
+                artifacts=list(names),
             )
-            self.finished.emit(self._operation_id, False, False, INSTALL_FAILED)
-        else:
-            self.finished.emit(self._operation_id, True, False, None)
+            return False, False, INSTALL_FAILED
+        return True, False, None
+
+
+@dataclass(frozen=True, slots=True)
+class _Install:
+    operation_id: int
+    artifact_names: tuple[str, ...]
+    force: bool
+    cancel: Event
+
+
+@dataclass(frozen=True, slots=True)
+class _FolderChange:
+    """Installs requested while the models folder changes wait behind it."""
 
 
 def read_ready_names(models_dir: Path) -> frozenset[str]:
@@ -142,38 +134,43 @@ class ModelReadinessResult:
 
 
 class ModelManager(QObject):
-    """Application-owned readiness and concurrent acquisition state."""
+    """Application-owned readiness and model installation, one install at a time.
+
+    Installs and models-folder changes take their turn in one command list; the
+    installs run on one worker thread. Each download already uses the bandwidth.
+    """
 
     changed = Signal()
     idle = Signal()
     cancelled = Signal(object)
     _scanned = Signal(int, object)
+    _run_install = Signal(object, object)
     folder_available = Signal(object, bool)
 
     def __init__(self, models_dir: Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.models_dir = models_dir
-        self._reads = ReadThreads(self)
-        self._reads.idle.connect(self.idle)
         self._ready_names: frozenset[str] = frozenset()
         self.readiness_known = False
         self.readiness_error: Exception | None = None
-        self.folder_change_pending = False
-        # Each new scan or folder replaces the generation; an older answer
-        # can never overwrite the current folder or action-boundary check.
+        # The latest scan request; an older answer never overwrites a newer one.
         self._readiness_version = 0
-        self._scan_in_flight = False
-        self._scan_again = False
         self._scanned.connect(self._scan_finished)
         self._operation_ids = count(1)
         self._operations: dict[int, ModelOperation] = {}
-        self._threads: dict[int, QThread] = {}
-        self._workers: dict[int, ModelInstallWorker] = {}
-        self._install_results: dict[int, tuple[bool, bool, Message | None]] = {}
-        # Artifact groups waiting for a free install slot, in request order;
-        # each has an already-visible "queued" operation in self._operations.
-        self._pending: dict[int, tuple[tuple[str, ...], bool]] = {}
+        self._commands: deque[_Install | _FolderChange] = deque()
+        self._current: _Install | _FolderChange | None = None
         self._shutting_down = False
+        self._thread = QThread(self)
+        self._worker = ModelInstallWorker()
+        self._worker.moveToThread(self._thread)
+        self._run_install.connect(self._worker.run_install)
+        self._worker.progress.connect(self._show_progress)
+        self._worker.finished.connect(self._install_finished)
+        thread = self._thread
+        # A QThread destroyed while running ends the process; whatever deletes
+        # the manager, its thread stops first.
+        self.destroyed.connect(lambda: _stop_thread(thread))
         self.rescan()
 
     @property
@@ -182,12 +179,12 @@ class ModelManager(QObject):
 
     @property
     def active_operations(self) -> tuple[ModelOperation, ...]:
-        """Operations with a live worker thread actually downloading right now."""
+        """The operation actually downloading right now."""
         return tuple(operation for operation in self.operations if operation.kind == "running")
 
     @property
     def in_progress_operations(self) -> tuple[ModelOperation, ...]:
-        """Operations that are running or waiting their turn behind the install cap."""
+        """Operations that are running or waiting their turn."""
         return tuple(
             operation for operation in self.operations if operation.kind in {"running", "queued"}
         )
@@ -195,6 +192,12 @@ class ModelManager(QObject):
     @property
     def failed_operations(self) -> tuple[ModelOperation, ...]:
         return tuple(operation for operation in self.operations if operation.kind == "failed")
+
+    @property
+    def folder_changing(self) -> bool:
+        """Whether a models-folder change is waiting or under way."""
+        return any(isinstance(command, _FolderChange)
+                   for command in (self._current, *self._commands))
 
     @property
     def ready_names(self) -> frozenset[str]:
@@ -244,35 +247,43 @@ class ModelManager(QObject):
         self.readiness_known = False
         self.rescan(force=True)
 
-    def set_models_dir(self, models_dir: Path) -> None:
-        """Switch only between installations; existing files are never moved."""
-        if self.in_progress_operations:
-            raise RuntimeError("cannot change folder during model installation")
-        self.models_dir = models_dir
-        self.readiness_error = None
-        self._ready_names = frozenset()
-        self.readiness_known = False
-        self._operations.clear()
-        # A stalled old volume must not prevent scanning its replacement.
-        self._readiness_version += 1
-        self._scan_in_flight = False
-        self._scan_again = False
-        self.rescan()
+    def begin_folder_change(self) -> None:
+        """Hold later installs until :meth:`end_folder_change`; installations
+        settle before the folder can change, so none is running now."""
+        self._commands.append(_FolderChange())
+        self._advance()
+        self.changed.emit()
+
+    def end_folder_change(self, models_dir: Path) -> None:
+        """Switch to ``models_dir`` (unchanged when the change did not land);
+        existing files are never moved. Waiting installs then go there."""
+        if not isinstance(self._current, _FolderChange):
+            raise RuntimeError("no models-folder change is under way")
+        self._current = None
+        if models_dir != self.models_dir:
+            self.models_dir = models_dir
+            self.readiness_error = None
+            self._ready_names = frozenset()
+            self.readiness_known = False
+            self._operations = {
+                operation_id: operation
+                for operation_id, operation in self._operations.items()
+                if operation.kind == "queued"
+            }
+            self.rescan(force=True)
+        self._advance()
+        self.changed.emit()
 
     def rescan(self, *, force: bool = False) -> None:
-        """Read readiness off-thread; coalesce repeated requests for this folder."""
+        """Read readiness off the window thread; the latest request wins."""
         if self._shutting_down or (self.in_progress_operations and not force):
             return
-        if self._scan_in_flight and not force:
-            self._scan_again = True
-            return
-        self._scan_in_flight = True
         self._readiness_version += 1
         version = self._readiness_version
         if not self.readiness_known:
             self.changed.emit()
         folder = self.models_dir
-        self._reads.start("pixelup-model-scan", lambda: self._scan(folder, version))
+        run_in_background(lambda: self._scan(folder, version))
 
     def _scan(self, models_dir: Path, version: int) -> None:
         try:
@@ -287,21 +298,16 @@ class ModelManager(QObject):
 
     @Slot(int, object)
     def _scan_finished(self, version: int, result: ModelReadinessResult) -> None:
-        if version != self._readiness_version:
+        if version != self._readiness_version or self._shutting_down:
             return
-        self._scan_in_flight = False
-        if not self._shutting_down:
-            changed = (self.readiness_error is not result.error
-                       or self.readiness_known != (result.error is None))
-            self.readiness_error = result.error
-            self.readiness_known = result.error is None
-            if result.ready_names is not None:
-                changed = self._set_ready_names(result.ready_names) or changed
-            if changed:
-                self.changed.emit()
-        if self._scan_again:
-            self._scan_again = False
-            self.rescan()
+        changed = (self.readiness_error is not result.error
+                   or self.readiness_known != (result.error is None))
+        self.readiness_error = result.error
+        self.readiness_known = result.error is None
+        if result.ready_names is not None:
+            changed = self._set_ready_names(result.ready_names) or changed
+        if changed:
+            self.changed.emit()
 
     def _set_ready_names(self, ready_names: frozenset[str]) -> bool:
         changed = ready_names != self._ready_names
@@ -323,15 +329,16 @@ class ModelManager(QObject):
             except RuntimeError:
                 pass  # The app exited while storage was unavailable.
 
-        self._reads.start("pixelup-model-folder", prepare)
+        run_in_background(prepare)
 
     def install(self, artifact_names: tuple[str, ...], *, force: bool) -> int | None:
-        if self._shutting_down or self.folder_change_pending:
+        """Queue an install; it runs when the earlier commands have ended. An
+        artifact already installed by then ends as installed unless forced."""
+        if self._shutting_down:
             return None
         names = tuple(dict.fromkeys(artifact_names))
-        if not names or self.in_progress_for(names):
+        if not names:
             return None
-
         # A retry supersedes terminal state for the same artifacts. Unrelated
         # failures remain visible while their own row awaits a retry.
         names_set = set(names)
@@ -341,28 +348,10 @@ class ModelManager(QObject):
             if operation.kind in {"running", "queued"}
             or not names_set.intersection(operation.artifact_names)
         }
-
         operation_id = next(self._operation_ids)
-        if len(self._threads) >= MAX_CONCURRENT_INSTALLS:
-            self._operations[operation_id] = ModelOperation(
-                id=operation_id,
-                kind="queued",
-                artifact_names=names,
-                total_bytes=artifact_size_bytes(names),
-            )
-            self._pending[operation_id] = (names, force)
-            log.info(
-                "models.install_queued",
-                operation_id=operation_id,
-                artifacts=list(names),
-                force=force,
-            )
-            self.changed.emit()
-            return operation_id
-
         self._operations[operation_id] = ModelOperation(
             id=operation_id,
-            kind="running",
+            kind="queued",
             artifact_names=names,
             total_bytes=artifact_size_bytes(names),
         )
@@ -372,56 +361,44 @@ class ModelManager(QObject):
             artifacts=list(names),
             force=force,
         )
-        self._spawn_worker(operation_id, names, force=force)
+        self._commands.append(_Install(operation_id, names, force, Event()))
+        self._advance()
+        self.changed.emit()
         return operation_id
 
-    def _spawn_worker(self, operation_id: int, names: tuple[str, ...], *, force: bool) -> None:
-        thread = QThread(self)
-        worker = ModelInstallWorker(operation_id, self.models_dir, names, force=force)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._show_progress)
-        worker.finished.connect(self._worker_finished)
-        thread.setProperty("operation_id", operation_id)
-        thread.finished.connect(self._thread_finished)
-        self._threads[operation_id] = thread
-        self._workers[operation_id] = worker
-        self.changed.emit()
-        thread.start()
-
-    def _start_next_pending(self) -> None:
-        while self._pending and len(self._threads) < MAX_CONCURRENT_INSTALLS:
-            operation_id, (names, force) = next(iter(self._pending.items()))
-            del self._pending[operation_id]
-            if self._shutting_down:
-                continue
-            operation = self._operations.get(operation_id)
-            if operation is None or operation.kind != "queued":
-                continue
-            self._operations[operation_id] = replace(operation, kind="running")
-            log.info(
-                "models.install_requested",
-                operation_id=operation_id,
-                artifacts=list(names),
-                force=force,
-            )
-            self._spawn_worker(operation_id, names, force=force)
+    def _advance(self) -> None:
+        """Start the next command unless one is under way."""
+        if self._current is not None or not self._commands:
+            return
+        command = self._commands.popleft()
+        self._current = command
+        if isinstance(command, _FolderChange):
+            return
+        operation = self._operations[command.operation_id]
+        self._operations[command.operation_id] = replace(operation, kind="running")
+        if not self._thread.isRunning():
+            self._thread.start()
+        self._run_install.emit(command, self.models_dir)
 
     def cancel(self, operation_id: int) -> bool:
         operation = self._operations.get(operation_id)
         if operation is None:
             return False
         if operation.kind == "queued":
-            self._pending.pop(operation_id, None)
+            self._commands = deque(
+                command for command in self._commands
+                if not isinstance(command, _Install) or command.operation_id != operation_id
+            )
             del self._operations[operation_id]
             self.changed.emit()
             self.cancelled.emit(operation.artifact_names)
             return True
-        worker = self._workers.get(operation_id)
-        if worker is None or operation.kind != "running":
+        current = self._current
+        if (operation.kind != "running" or not isinstance(current, _Install)
+                or current.operation_id != operation_id):
             return False
         self._operations[operation_id] = replace(operation, cancelling=True)
-        worker.request_cancel()
+        current.cancel.set()
         self.changed.emit()
         return True
 
@@ -439,11 +416,14 @@ class ModelManager(QObject):
 
     def begin_shutdown(self) -> None:
         self._shutting_down = True
-        self._reads.closing = True
         self.cancel_all()
 
     def cleanup_for_quit(self) -> bool:
-        return not self._threads and not self._pending and self._reads.settled
+        """Whether the running install has reported; then the worker thread stops."""
+        if isinstance(self._current, _Install):
+            return False
+        _stop_thread(self._thread)
+        return True
 
     @Slot(int, str, int, int)
     def _show_progress(self, operation_id: int, name: str, done: int, total: int) -> None:
@@ -459,17 +439,13 @@ class ModelManager(QObject):
         self.changed.emit()
 
     @Slot(int, bool, bool, object)
-    def _worker_finished(
+    def _install_finished(
         self,
         operation_id: int,
         succeeded: bool,
         cancelled: bool,
         message: Message | None,
     ) -> None:
-        self._install_results[operation_id] = (succeeded, cancelled, message)
-        thread = self._threads.get(operation_id)
-        if thread is not None:
-            thread.quit()
         log.info(
             "models.install_finished",
             operation_id=operation_id,
@@ -477,78 +453,35 @@ class ModelManager(QObject):
             cancelled=cancelled,
             reason=english().of(message) if message is not None else "",
         )
-
-    @Slot()
-    def _thread_finished(self) -> None:
-        sender = self.sender()
-        if not isinstance(sender, QThread):
-            return
-        operation_id = int(sender.property("operation_id"))
-        result = self._install_results.pop(operation_id, None)
-        # The worker has one owner: Python, through this registry. finished is
-        # emitted before the thread ends, so wait for that before releasing it;
-        # a Qt-side deleteLater raced this release and deleted it twice.
-        sender.wait()
-        self._workers.pop(operation_id, None)
-        thread = self._threads.pop(operation_id, None)
-        if thread is not None:
-            thread.deleteLater()
-        # A freed slot goes straight to the next queued group rather than sitting
-        # idle until something else pokes the manager.
-        self._start_next_pending()
-
-        # Concurrent operations publish disjoint artifacts atomically. Re-read the
-        # shared cache at each operation boundary so every view sees partial success.
-        self.readiness_known = False
-        operation = self._operations.get(operation_id)
-        if operation is not None:
-            if result is None:
-                self._operations[operation_id] = replace(
-                    operation,
-                    kind="failed",
-                    error=Message("modelInstall.stopped"),
-                    cancelling=False,
-                )
-            else:
-                succeeded, cancelled, message = result
-                if succeeded:
-                    self._operations[operation_id] = replace(
-                        operation,
-                        kind="completed",
-                        completed_bytes=operation.total_bytes,
-                        cancelling=False,
-                    )
-                elif cancelled:
-                    self._operations[operation_id] = replace(
-                        operation,
-                        kind="cancelled",
-                        error=None,
-                        cancelling=False,
-                    )
-                else:
-                    self._operations[operation_id] = replace(
-                        operation,
-                        kind="failed",
-                        error=message,
-                        cancelling=False,
-                    )
-        if not self._threads:
+        self._current = None
+        operation = self._operations[operation_id]
+        if succeeded:
+            operation = replace(operation, kind="completed",
+                                completed_bytes=operation.total_bytes, cancelling=False)
+        elif cancelled:
+            operation = replace(operation, kind="cancelled", error=None, cancelling=False)
+        else:
+            operation = replace(operation, kind="failed", error=message, cancelling=False)
+        self._operations[operation_id] = operation
+        self._advance()
+        if not self.in_progress_operations:
             self._operations = {
-                operation_id: operation
-                for operation_id, operation in self._operations.items()
-                if operation.kind != "completed"
+                key: value for key, value in self._operations.items()
+                if value.kind != "completed"
             }
-        cancelled_operation = self._operations.get(operation_id)
-        if cancelled_operation is not None and cancelled_operation.kind == "cancelled":
-            self.cancelled.emit(cancelled_operation.artifact_names)
-        # Cancellation is an event, not durable row state. Retaining it would make
-        # a later, unrelated preflight for the same artifact look newly cancelled.
-        self._operations = {
-            operation_id: operation
-            for operation_id, operation in self._operations.items()
-            if operation.kind != "cancelled"
-        }
+        if operation.kind == "cancelled":
+            # Cancellation is an event, not durable row state. Retaining it would
+            # make a later, unrelated preflight for the same artifact look cancelled.
+            del self._operations[operation_id]
+            self.cancelled.emit(operation.artifact_names)
+        # Re-read the folder at each operation boundary so every view sees
+        # partial success.
         self.changed.emit()
         self.refresh_readiness()
-        if not self._threads:
+        if self._current is None:
             self.idle.emit()
+
+
+def _stop_thread(thread: QThread) -> None:
+    thread.quit()
+    thread.wait()

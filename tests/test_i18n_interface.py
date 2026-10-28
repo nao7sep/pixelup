@@ -161,7 +161,8 @@ def window(
         main._is_session_shutdown = lambda: True
         main.close()
         process_until(
-            main._workers_clean_for_quit, timeout_s=10, what="Interface fixture workers",
+            lambda: main._workers_clean_for_quit() and main._active_job_plan is None,
+            timeout_s=10, what="Interface fixture workers",
         )
         main.deleteLater()
         qapp.processEvents()
@@ -172,9 +173,8 @@ def _settle_models(window):
     import time
     deadline = time.monotonic() + 10
     while (
-        not window.model_manager.readiness_known or window.model_manager._scan_in_flight
+        not window.model_manager.readiness_known
         or window._active_job_plan is not None or window._pending_job_plans
-        or not window._planning_reads.settled
     ):
         assert time.monotonic() < deadline, "model scan and job planning did not settle"
         QApplication.processEvents()
@@ -233,7 +233,7 @@ def test_population_failure_closes_window_after_planning_returns(
     def failed_population(main: MainWindow, directory: Path) -> None:
         created.append(main)
         main.destroyed.connect(lambda *_: disposed.append(
-            (main._planning_reads.settled, not main.runner.running)
+            (main._active_job_plan is None, not main.runner.running)
         ))
         _settle_models(main)
         _open(main, [_png(directory, "setup.png")])

@@ -396,7 +396,7 @@ class ManagedModelsDialog(DialogShell):
             self.folder_edit.setText(chosen)
 
     def _with_saved_folder(self, action: Callable[[], None]) -> None:
-        if self._saving_folder or self._manager.folder_change_pending:
+        if self._saving_folder or self._manager.folder_changing:
             return
         value = self.folder_edit.text()
         if self._folder_locked or value == self._saved_folder or self._save_folder is None:

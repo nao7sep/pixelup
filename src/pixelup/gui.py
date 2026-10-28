@@ -130,7 +130,7 @@ from pixelup.paths import absolute_user_path
 from pixelup.queue_table import QUEUE_COLUMNS as _QUEUE_COLUMNS
 from pixelup.queue_table import QueueTableModel, QueueTableView
 from pixelup.quit_dialog import QuitConfirmDialog, QuitSaveFailedDialog
-from pixelup.read_threads import ReadThreads
+from pixelup.read_threads import run_in_background
 from pixelup.records_window import RecordsReads, RecordsWindow, records_reads, stored_signal
 from pixelup.runner import JobRunner
 from pixelup.session_end import os_session_ending
@@ -348,7 +348,8 @@ class ImagePreview(QLabel):
     """The selected image, decoded on a background thread.
 
     Only a change of image starts a decode, so job events that re-select the same
-    image never read the file again; a decode that finishes after another image was
+    image never read the file again. One decode runs at a time with only the latest
+    selection waiting behind it, and a decode that finishes after another image was
     selected is dropped.
     """
 
@@ -360,8 +361,7 @@ class ImagePreview(QLabel):
         self._request = 0
         self._loaded = _Loaded(self)
         self._loaded.ready.connect(self._show_loaded)
-        self.reads = ReadThreads(self)
-        self.reads.idle.connect(self._start_pending)
+        self._decoding = False
         self._pending_preview = None
         self._requested_extent = 0
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -375,7 +375,7 @@ class ImagePreview(QLabel):
         return self._request != 0
 
     def set_image(self, path: Path | None, *, force: bool = False) -> None:
-        if self.reads.closing or (path == self._path and not force):
+        if path == self._path and not force:
             return
         self._path = path
         self._pixmap = None
@@ -395,55 +395,29 @@ class ImagePreview(QLabel):
 
     @Slot()
     def _start_pending(self) -> None:
-        if self.reads.closing or not self.reads.settled or self._pending_preview is None:
+        if self._decoding or self._pending_preview is None:
             return
         request, path, extent, ratio = self._pending_preview
         self._pending_preview = None
-        def read() -> None:
-            reader = QImageReader(str(path))
-            # Match the displayed orientation used by size probes and processing.
-            reader.setAutoTransform(True)
-            natural = reader.size()
-            if natural.isValid() and max(natural.width(), natural.height()) > extent:
-                reader.setScaledSize(natural.scaled(
-                    QSize(extent, extent), Qt.AspectRatioMode.KeepAspectRatio
-                ))
-            image = reader.read()
-            if (
-                not image.isNull()
-                and reader.transformation() == QImageIOHandler.Transformation.TransformationNone
-            ):
-                # Qt omits some PNG EXIF/XMP transforms. The shared header probe
-                # returns only pending orientation; HEIF's applied transform is 1.
-                try:
-                    orientation = read_image_orientation(path)
-                except Exception:  # noqa: BLE001 - optional metadata cannot hide a decoded image.
-                    log.warning("preview.orientation_failed", input=str(path), exc_info=True)
-                else:
-                    rotation = {3: 180, 5: 90, 6: 90, 7: 90, 8: 270}.get(orientation)
-                    if rotation is not None:
-                        image = image.transformed(QTransform().rotate(rotation))
-                    if orientation in {2, 5}:
-                        image = image.flipped(Qt.Orientation.Horizontal)
-                    elif orientation in {4, 7}:
-                        image = image.flipped(Qt.Orientation.Vertical)
-            if not image.isNull():
-                if max(image.width(), image.height()) > extent:
-                    image = image.scaled(
-                        QSize(extent, extent), Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                image.setDevicePixelRatio(ratio)
-            try:
-                self._loaded.ready.emit(request, image)
-            except RuntimeError:
-                pass  # A disposed preview cannot receive the obsolete result.
+        self._decoding = True
 
-        self.reads.start("pixelup-preview", read)
+        def read() -> None:
+            image = QImage()
+            try:
+                image = _decode_preview(path, extent, ratio)
+            finally:
+                try:
+                    self._loaded.ready.emit(request, image)
+                except RuntimeError:
+                    pass  # A disposed preview cannot receive the obsolete result.
+
+        run_in_background(read)
 
     @Slot(int, object)
     def _show_loaded(self, request: int, image: QImage) -> None:
-        if request != self._request or self.reads.closing:
+        self._decoding = False
+        self._start_pending()
+        if request != self._request:
             return
         self._request = 0
         self._pixmap = None if image.isNull() else QPixmap.fromImage(image)
@@ -505,14 +479,10 @@ class MainWindow(QMainWindow):
         self._opens_pending = 0
         self._open_results = _Loaded(self)
         self._open_results.ready.connect(self._apply_opened)
-        self._open_reads = ReadThreads(self)
-        self._open_reads.idle.connect(self._close_when_workers_stop)
         # What Auto resolves to on this computer, once the background probe knows.
         self._auto_device: str | None = None
         self._device_probed = _Loaded(self)
         self._device_probed.ready.connect(self._auto_device_known)
-        self._device_reads = ReadThreads(self)
-        self._device_reads.idle.connect(self._close_when_workers_stop)
         # Apply the configured UI font (family-only; the explicit size lives in
         # fonts.py) before building the UI so every widget inherits it. The blank
         # built-in resolves to the system UI font. setFont propagates app-wide, so
@@ -548,8 +518,6 @@ class MainWindow(QMainWindow):
         self._removed_plan_inputs: set[Path] = set()
         self._plan_results = _Planned(self)
         self._plan_results.ready.connect(self._apply_job_plan)
-        self._planning_reads = ReadThreads(self)
-        self._planning_reads.idle.connect(self._close_when_workers_stop)
         self._show_pending_models_after_scan = False
         self.jobs: list[Job] = []
         # Jobs are only ever appended, never removed, so these two indexes only need
@@ -771,7 +739,7 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass  # An explicitly disposed window has abandoned the probe.
 
-        self._device_reads.start("pixelup-device-probe", read)
+        run_in_background(read)
 
     @Slot(int, object)
     def _auto_device_known(self, _request: int, device: str) -> None:
@@ -918,12 +886,8 @@ class MainWindow(QMainWindow):
         if self._quit_bounded:
             return
         self._quit_bounded = True
-        self._open_reads.closing = True
-        self._device_reads.closing = True
-        self._planning_reads.closing = True
         self._pending_job_plans.clear()
         self._job_plan_abandoned = True
-        self.preview.reads.closing = True
         # Logged as the bound starts, so the watchdog itself only exits: past the
         # bound this names what the forced exit cut short.
         log.info(
@@ -954,10 +918,6 @@ class MainWindow(QMainWindow):
     def _workers_clean_for_quit(self) -> bool:
         return (
             self._config_save is None
-            and self._open_reads.settled
-            and self._device_reads.settled
-            and self._planning_reads.settled
-            and self.preview.reads.settled
             and self.runner.cleanup_for_quit()
             and self.model_manager.cleanup_for_quit()
             and (self._records_reads is None or self._records_reads.stop())
@@ -980,7 +940,7 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass  # An explicitly disposed window has abandoned this offer.
 
-        self._open_reads.start("pixelup-open", read)
+        run_in_background(read)
 
     @property
     def opening(self) -> bool:
@@ -1257,7 +1217,6 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         use_regular_spacing(layout)
         self.preview = ImagePreview()
-        self.preview.reads.idle.connect(self._close_when_workers_stop)
         layout.addWidget(self.preview, 1)
         return group
 
@@ -1579,7 +1538,6 @@ class MainWindow(QMainWindow):
                 saved_models_dir(current.models_folder, self._default_models_dir),
             )
             self.runner.set_runtime_dirs(self.runtime_dirs)
-            self.model_manager.set_models_dir(self.runtime_dirs.models_dir)
         if previous.display_zone != current.display_zone:
             set_display_zone(current.display_zone)
             if self._records_window is not None:
@@ -1663,24 +1621,17 @@ class MainWindow(QMainWindow):
         ):
             finished(None)
             return
-        if manager.in_progress_operations or manager.folder_change_pending:
+        if manager.in_progress_operations or manager.folder_changing:
             finished(Message("managedModels.folderBusy"))
             return
-        manager.folder_change_pending = True
-        manager.changed.emit()
-
-        def saved(error: Message | None) -> None:
-            manager.folder_change_pending = False
-            finished(error)
-            manager.changed.emit()
 
         def flushed(ok: bool) -> None:
             if not ok or self._closing:
-                saved(Message("settings.saveFailed"))
+                finished(Message("settings.saveFailed"))
                 return
             self._save_config_candidate(
                 replace(self.config, models_folder=value),
-                Message("settings.saveFailed"), saved,
+                Message("settings.saveFailed"), finished,
                 edited_sets=("models_folder",),
             )
 
@@ -1718,7 +1669,7 @@ class MainWindow(QMainWindow):
         if self._quit_bounded:
             return
         self._refresh_model_rollup()
-        if not self.model_manager.readiness_known or self.model_manager.folder_change_pending:
+        if not self.model_manager.readiness_known or self.model_manager.folder_changing:
             if self.model_manager.readiness_error is not None:
                 self._present_pending_models_after_scan()
             return
@@ -1814,7 +1765,7 @@ class MainWindow(QMainWindow):
                     pass  # An explicitly disposed window has abandoned this plan.
 
             try:
-                self._planning_reads.start("pixelup-plan", read)
+                run_in_background(read)
             except Exception:
                 log.exception("enqueue.planning_failed", inputs=[str(path) for path in retained])
                 self._active_job_plan = None
@@ -2206,7 +2157,7 @@ class MainWindow(QMainWindow):
             if self.model_manager.in_progress_operations:
                 finished(Message("managedModels.folderBusy"))
                 return
-            self.model_manager.folder_change_pending = True
+            self.model_manager.begin_folder_change()
         self._unsaved_config_changes = changes
         file = self._settings_file
         operation = ConfigSave(
@@ -2261,7 +2212,8 @@ class MainWindow(QMainWindow):
                     # editor waiting or a quit behind it stalled.
                     log.exception("settings.apply_failed")
         if operation.candidate.models_folder != operation.previous.models_folder:
-            self.model_manager.folder_change_pending = False
+            # The folder in use now: the new one when the save landed and applied.
+            self.model_manager.end_folder_change(self.runtime_dirs.models_dir)
         if self._parameter_edit_generation != self._saving_parameter_generation:
             if self._os_close_accepted:
                 # Capture the latest visible edit before the idle check can end
@@ -2273,8 +2225,6 @@ class MainWindow(QMainWindow):
             self.parameters_result.clear_result()
         if callback is not None:
             callback(failure)
-        if operation.candidate.models_folder != operation.previous.models_folder:
-            self.model_manager.changed.emit()
         operation.deleteLater()
         self._close_when_workers_stop()
 
@@ -2657,6 +2607,45 @@ def _probe_open_paths(paths: list[Path]) -> list[_OpenProbe]:
 
 _open_requests = itertools.count(1)
 _preview_requests = itertools.count(1)
+
+
+def _decode_preview(path: Path, extent: int, ratio: float) -> QImage:
+    """The selected image decoded at display size, in its displayed orientation."""
+    reader = QImageReader(str(path))
+    # Match the displayed orientation used by size probes and processing.
+    reader.setAutoTransform(True)
+    natural = reader.size()
+    if natural.isValid() and max(natural.width(), natural.height()) > extent:
+        reader.setScaledSize(natural.scaled(
+            QSize(extent, extent), Qt.AspectRatioMode.KeepAspectRatio
+        ))
+    image = reader.read()
+    if (
+        not image.isNull()
+        and reader.transformation() == QImageIOHandler.Transformation.TransformationNone
+    ):
+        # Qt omits some PNG EXIF/XMP transforms. The shared header probe
+        # returns only pending orientation; HEIF's applied transform is 1.
+        try:
+            orientation = read_image_orientation(path)
+        except Exception:  # noqa: BLE001 - optional metadata cannot hide a decoded image.
+            log.warning("preview.orientation_failed", input=str(path), exc_info=True)
+        else:
+            rotation = {3: 180, 5: 90, 6: 90, 7: 90, 8: 270}.get(orientation)
+            if rotation is not None:
+                image = image.transformed(QTransform().rotate(rotation))
+            if orientation in {2, 5}:
+                image = image.flipped(Qt.Orientation.Horizontal)
+            elif orientation in {4, 7}:
+                image = image.flipped(Qt.Orientation.Vertical)
+    if not image.isNull():
+        if max(image.width(), image.height()) > extent:
+            image = image.scaled(
+                QSize(extent, extent), Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        image.setDevicePixelRatio(ratio)
+    return image
 
 
 def _safe_image_size(path: Path) -> tuple[int, int] | None:

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, Signal
 
 from pixelup.app_config import AppConfig, ConfigSaveResult
+from pixelup.read_threads import run_in_background
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,10 +36,7 @@ class ConfigSave(QObject):
 
     def start(self) -> None:
         # Local storage gets no timeout: the save is awaited to its end.
-        try:
-            threading.Thread(target=self._run, name="pixelup-config-save", daemon=True).start()
-        except Exception as exc:
-            self.completed.emit(ConfigSaveOutcome(error=exc))
+        run_in_background(self._run)
 
     def _run(self) -> None:
         try:

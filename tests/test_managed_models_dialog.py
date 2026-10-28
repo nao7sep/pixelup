@@ -18,13 +18,13 @@ from pixelup.model_management import (
     MANAGED_MODEL_BUNDLES,
     artifact_size_bytes,
 )
-from pixelup.model_manager import MAX_CONCURRENT_INSTALLS, ModelManager
+from pixelup.model_manager import ModelManager
 from pixelup.models import model_file
 
 
 def _ready(manager: ModelManager, qapp: QApplication) -> None:
     deadline = time.monotonic() + 5
-    while not manager.readiness_known or manager._scan_in_flight:
+    while not manager.readiness_known:
         assert time.monotonic() < deadline, "models scan did not settle"
         qapp.processEvents()
         time.sleep(0.001)
@@ -311,7 +311,7 @@ def test_manual_surface_has_independent_actions_and_truthful_columns(
 
 
 def test_coming_to_the_front_finds_model_files_placed_by_hand(
-    qapp: QApplication, tmp_path: Path, process_until
+    qapp: QApplication, tmp_path: Path, process_until, background
 ) -> None:
     manager = ModelManager(tmp_path)
     _ready(manager, qapp)
@@ -319,7 +319,8 @@ def test_coming_to_the_front_finds_model_files_placed_by_hand(
     try:
         dialog.show()
         qapp.processEvents()
-        process_until(lambda: not manager._scan_in_flight, timeout_s=10, what="The models scan")
+        process_until(background.settled, timeout_s=10, what="The models scan")
+        qapp.processEvents()
         assert dialog.status_labels[0].text() == "Not installed"
         row_button = dialog.row_action_buttons[0]
         row_button.setFocus()
@@ -372,10 +373,9 @@ def test_install_all_requests_every_missing_artifact(
         dialog.deleteLater()
 
 
-def test_install_all_caps_concurrent_downloads(
+def test_install_all_runs_one_download_at_a_time(
     qapp: QApplication, tmp_path: Path, monkeypatch
 ) -> None:
-    assert len(MANAGED_ARTIFACT_NAMES) > MAX_CONCURRENT_INSTALLS
     lock = threading.Lock()
     current = 0
     peak = 0
@@ -387,8 +387,7 @@ def test_install_all_caps_concurrent_downloads(
         with lock:
             current += 1
             peak = max(peak, current)
-            if current >= MAX_CONCURRENT_INSTALLS:
-                reached_cap.set()
+            reached_cap.set()
         assert release.wait(2)
         with lock:
             current -= 1
@@ -403,40 +402,33 @@ def test_install_all_caps_concurrent_downloads(
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_all_or_cancel()
-        # Wait until MAX_CONCURRENT_INSTALLS downloads are truly running at once
-        # (not merely marked "running" — the worker threads may not have reached
-        # download_model yet) before checking that a 3rd never joins them.
+        # Every missing artifact was requested at once: one downloads, the rest
+        # wait their turn as "queued".
         assert reached_cap.wait(2)
         qapp.processEvents()
-
-        # The cap holds even though every missing artifact was requested at once:
-        # exactly MAX_CONCURRENT_INSTALLS run, the rest wait as "queued".
-        assert len(manager.active_operations) == MAX_CONCURRENT_INSTALLS
+        assert len(manager.active_operations) == 1
         assert any(operation.kind == "queued" for operation in manager.operations)
 
         release.set()
         _finish_manager(manager, qapp)
-        assert peak == MAX_CONCURRENT_INSTALLS
+        assert peak == 1
         assert all(model_file(tmp_path, name).exists() for name in MANAGED_ARTIFACT_NAMES)
     finally:
         release.set()
         dialog.deleteLater()
 
 
-def test_independent_row_installs_run_concurrently(
+def test_a_second_row_install_waits_its_turn(
     qapp: QApplication, tmp_path: Path, monkeypatch
 ) -> None:
     started: list[str] = []
-    started_lock = threading.Lock()
-    two_started = threading.Event()
+    first_started = threading.Event()
     release = threading.Event()
 
     def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
-        with started_lock:
-            started.append(name)
-            if len(started) == 2:
-                two_started.set()
-        assert release.wait(2)
+        started.append(name)
+        first_started.set()
+        release.wait()
         target = model_file(models_dir, name)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"model")
@@ -448,24 +440,22 @@ def test_independent_row_installs_run_concurrently(
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_bundle(0)
+        assert first_started.wait(1)
         qapp.processEvents()
         assert dialog.row_action_buttons[0].text() == "Cancel"
         assert dialog.row_action_buttons[1].isEnabled()
-        assert manager.install(
-            MANAGED_MODEL_BUNDLES[0].artifact_names,
-            force=False,
-        ) is None
 
         dialog._install_bundle(1)
-        assert two_started.wait(1)
-        assert len(manager.active_operations) == 2
+        qapp.processEvents()
+        assert len(manager.active_operations) == 1
+        assert manager.operations_for(MANAGED_MODEL_BUNDLES[1].artifact_names)[0].kind == "queued"
 
         release.set()
         _finish_manager(manager, qapp)
-        assert set(started) == {
+        assert started == [
             MANAGED_MODEL_BUNDLES[0].artifact_names[0],
             MANAGED_MODEL_BUNDLES[1].artifact_names[0],
-        }
+        ]
     finally:
         release.set()
         dialog.deleteLater()
@@ -657,7 +647,7 @@ def test_folder_picker_uses_effective_draft_and_keeps_selection_until_apply(
 
 @pytest.mark.parametrize("queue_preflight", [False, True])
 def test_failed_readiness_disables_install_and_recovers_after_successful_retry(
-    qapp, tmp_path, monkeypatch, process_until, queue_preflight,
+    qapp, tmp_path, monkeypatch, process_until, queue_preflight, background,
 ) -> None:
     from pixelup import model_manager
 
@@ -674,9 +664,8 @@ def test_failed_readiness_disables_install_and_recovers_after_successful_retry(
 
     monkeypatch.setattr(model_manager, "read_ready_names", unreadable)
     manager.refresh_readiness()
-    process_until(
-        lambda: not manager._scan_in_flight, timeout_s=10, what="Failed models folder scan",
-    )
+    process_until(background.settled, timeout_s=10, what="Failed models folder scan")
+    qapp.processEvents()
     dialog = ManagedModelsDialog(
         manager,
         required_artifacts=(absent,) if queue_preflight else (),
@@ -698,7 +687,7 @@ def test_failed_readiness_disables_install_and_recovers_after_successful_retry(
         monkeypatch.setattr(model_manager, "read_ready_names", real_read)
         manager.refresh_readiness()
         process_until(
-            lambda: manager.readiness_known and not manager._scan_in_flight,
+            lambda: manager.readiness_known,
             timeout_s=10, what="Successful models folder retry",
         )
         assert manager.readiness_error is None

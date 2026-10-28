@@ -186,7 +186,6 @@
   "managedModels.summary": "使いたいモデルを個別に、または不足しているモデルをまとめてインストールできます。PixelUp は各モデルを検証し、今後のジョブのために保存します。このウィンドウを閉じても、インストールは止まりません。",
   "managedModels.title": "モデル管理",
   "modelInstall.failedFallback": "モデルをインストールできませんでした。もう一度お試しください。",
-  "modelInstall.stopped": "インストールが中断されました。",
   "models.installing": "モデルをインストール中 — {progress}%",
   "models.installingAccessible": "モデル管理、モデルをインストール中、{progress} パーセント",
   "models.installingTooltip": "モデルのインストール中です。",

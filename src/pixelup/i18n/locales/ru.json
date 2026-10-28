@@ -219,7 +219,6 @@
   "managedModels.summary": "Установите нужные модели или сразу все недостающие. PixelUp проверяет каждую модель и сохраняет её для следующих заданий. Закрытие этого окна не прерывает установку.",
   "managedModels.title": "Управляемые модели",
   "modelInstall.failedFallback": "Не удалось установить модели. Повторите попытку.",
-  "modelInstall.stopped": "Установка остановлена.",
   "models.installing": "Установка моделей — {progress}\u00a0%",
   "models.installingAccessible": "Управляемые модели, установка моделей, {progress}\u00a0%",
   "models.installingTooltip": "Идёт установка моделей.",

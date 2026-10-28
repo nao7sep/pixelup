@@ -153,6 +153,32 @@ def qapp(_session_qapp: QApplication):
         app.setPalette(palette)
 
 
+class BackgroundReads:
+    """The reads this test handed to the shared pool, so a test can wait for them."""
+
+    def __init__(self) -> None:
+        self.futures: list = []
+
+    def settled(self) -> bool:
+        return all(future.done() for future in self.futures)
+
+
+@pytest.fixture(autouse=True)
+def background(monkeypatch: pytest.MonkeyPatch) -> BackgroundReads:
+    from pixelup import read_threads
+
+    reads = BackgroundReads()
+    real_submit = read_threads._pool.submit
+
+    def submit(*args, **kwargs):
+        future = real_submit(*args, **kwargs)
+        reads.futures.append(future)
+        return future
+
+    monkeypatch.setattr(read_threads._pool, "submit", submit)
+    return reads
+
+
 ProcessUntil = Callable[..., None]
 
 

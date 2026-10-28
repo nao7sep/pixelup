@@ -15,31 +15,6 @@ from pixelup.model_registry import model_info
 from pixelup.models import model_file, verify_model_file
 
 
-class _QuittableThread:
-    def __init__(self) -> None:
-        self.quit_calls = 0
-
-    def quit(self) -> None:
-        self.quit_calls += 1
-
-
-def test_terminal_result_is_recorded_before_manager_requests_thread_shutdown(
-    qapp: QApplication,
-    tmp_path: Path,
-    process_until,
-) -> None:
-    manager = ModelManager(tmp_path)
-    _settle(manager, process_until)
-    thread = _QuittableThread()
-    manager._threads[7] = thread  # type: ignore[assignment]
-
-    manager._worker_finished(7, True, False, None)
-
-    assert manager._install_results[7] == (True, False, None)
-    assert thread.quit_calls == 1
-    manager.deleteLater()
-
-
 class _HeldScans:
     """Stands in for the folder read, holding each background scan until released."""
 
@@ -59,19 +34,24 @@ class _HeldScans:
         monkeypatch.setattr(model_manager, "read_ready_names", read)
 
 
-def _settle(manager: ModelManager, process_until) -> None:
-    process_until(lambda: not manager._scan_in_flight, timeout_s=10, what="The models scan")
+@pytest.fixture
+def settle(qapp: QApplication, background, process_until):
+    def run(_manager: ModelManager | None = None) -> None:
+        process_until(background.settled, timeout_s=10, what="The models scan")
+        qapp.processEvents()
+
+    return run
 
 
 def test_async_readiness_uses_present_nonempty_files_and_refreshes_its_cache(
-    qapp: QApplication, tmp_path: Path, process_until
+    qapp: QApplication, tmp_path: Path, settle
 ) -> None:
     present, empty, missing = MANAGED_ARTIFACT_NAMES[:3]
     model_file(tmp_path, present).write_bytes(b"present")
     model_file(tmp_path, empty).write_bytes(b"")
     manager = ModelManager(tmp_path)
     try:
-        _settle(manager, process_until)
+        settle()
         assert manager.readiness_known
         assert manager.ready_names == frozenset({present})
         assert manager.missing((missing, empty, present)) == (missing, empty)
@@ -80,7 +60,7 @@ def test_async_readiness_uses_present_nonempty_files_and_refreshes_its_cache(
         model_file(tmp_path, present).write_bytes(b"")
         model_file(tmp_path, empty).write_bytes(b"now present")
         manager.rescan()
-        _settle(manager, process_until)
+        settle()
 
         assert manager.ready_names == frozenset({empty})
         assert manager.missing((missing, empty, present)) == (missing, present)
@@ -90,7 +70,7 @@ def test_async_readiness_uses_present_nonempty_files_and_refreshes_its_cache(
 
 
 def test_rescan_reads_the_folder_off_the_ui_thread_and_reports_a_change(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settle
 ) -> None:
     scans = _HeldScans(monkeypatch)
     manager = ModelManager(tmp_path)
@@ -101,7 +81,7 @@ def test_rescan_reads_the_folder_off_the_ui_thread_and_reports_a_change(
         scans.answer = frozenset({MANAGED_ARTIFACT_NAMES[0]})
         scans.release.set()
 
-        _settle(manager, process_until)
+        settle()
 
         assert len(scans.threads) == 1
         assert scans.threads[0] is not threading.main_thread()
@@ -111,48 +91,43 @@ def test_rescan_reads_the_folder_off_the_ui_thread_and_reports_a_change(
         manager.deleteLater()
 
 
-def test_rescans_requested_while_one_runs_coalesce_into_one_more(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
+def test_each_rescan_reads_again_and_the_latest_answer_applies(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settle
 ) -> None:
     scans = _HeldScans(monkeypatch)
     manager = ModelManager(tmp_path)
     try:
-        manager.rescan()
-        for _ in range(5):
+        for _ in range(3):
             manager.rescan()
+        scans.answer = frozenset({MANAGED_ARTIFACT_NAMES[0]})
         scans.release.set()
-        process_until(
-            lambda: len(scans.threads) == 2 and not manager._scan_in_flight,
-            timeout_s=10,
-            what="The follow-up models scan",
-        )
-        qapp.processEvents()
-
-        assert len(scans.threads) == 2
-        assert manager._scan_again is False
+        settle()
+        assert len(scans.threads) == 4
+        # Older answers are dropped by their request token.
+        manager._scan_finished(1, model_manager.ModelReadinessResult(frozenset()))
+        assert manager.ready_names == frozenset({MANAGED_ARTIFACT_NAMES[0]})
     finally:
         manager.deleteLater()
 
 
 def test_no_rescan_starts_while_an_install_runs_or_once_quitting_began(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settle
 ) -> None:
     scans = _HeldScans(monkeypatch)
     scans.release.set()
     manager = ModelManager(tmp_path)
-    _settle(manager, process_until)
+    settle()
     scans.threads.clear()
     try:
         manager._operations[1] = ModelOperation(
             id=1, kind="running", artifact_names=(MANAGED_ARTIFACT_NAMES[0],)
         )
         manager.rescan()
-        assert manager._scan_in_flight is False
 
         manager._operations.clear()
         manager.begin_shutdown()
         manager.rescan()
-        assert manager._scan_in_flight is False
+        settle()
         assert scans.threads == []
     finally:
         manager.deleteLater()
@@ -177,8 +152,9 @@ def test_switching_folder_ignores_a_stalled_old_scan(
     manager = ModelManager(old)
     try:
         assert entered.wait(5)
-        manager.set_models_dir(new)
-        _settle(manager, process_until)
+        manager.begin_folder_change()
+        manager.end_folder_change(new)
+        process_until(lambda: manager.readiness_known, timeout_s=10, what="The new folder scan")
         assert manager.readiness_known
         assert manager.ready_names == frozenset()
         release.set()
@@ -194,10 +170,10 @@ def test_switching_folder_ignores_a_stalled_old_scan(
 def test_every_managed_model_is_installed_and_matches_its_pin(
     qapp: QApplication,
     heavy_models_dir: Path,
-    process_until,
+    settle,
 ) -> None:
     manager = ModelManager(heavy_models_dir)
-    _settle(manager, process_until)
+    settle()
     total = len(MANAGED_ARTIFACT_NAMES)
     assert manager.ready_count() == (total, total)
     for name in MANAGED_ARTIFACT_NAMES:
@@ -206,119 +182,98 @@ def test_every_managed_model_is_installed_and_matches_its_pin(
     manager.deleteLater()
 
 
-def test_completed_install_readiness_does_not_wait_for_unrelated_install(
-    qapp, tmp_path, monkeypatch, process_until
+def test_installs_run_one_at_a_time_in_request_order(
+    qapp, tmp_path, monkeypatch, process_until, settle
 ):
     first, second = MANAGED_ARTIFACT_NAMES[:2]
     entered, release = threading.Event(), threading.Event()
+    downloads: list[tuple[str, int]] = []
 
     def install(folder, name, **kwargs):
+        downloads.append((name, threading.get_ident()))
         if name == second:
             entered.set()
-            assert release.wait(5)
+            release.wait()
         model_file(folder, name).write_bytes(b"model")
 
     monkeypatch.setattr(model_manager, "download_model", install)
     manager = ModelManager(tmp_path)
-    _settle(manager, process_until)
+    settle()
     try:
         manager.install((second,), force=False)
         assert entered.wait(3)
         manager.install((first,), force=False)
-        process_until(lambda: manager.readiness_known and first in manager.ready_names,
-                      timeout_s=3, what="The independent completed installation")
-        assert manager.in_progress_for((second,))
-        assert manager.missing((first,)) == ()
-        with pytest.raises(RuntimeError):
-            manager.set_models_dir(tmp_path / "other")
+        qapp.processEvents()
+        assert manager.operations_for((second,))[0].kind == "running"
+        assert manager.operations_for((first,))[0].kind == "queued"
+        assert [name for name, _thread in downloads] == [second]
+        release.set()
+        process_until(lambda: manager.missing((first, second)) == () and not
+                      manager.in_progress_operations, timeout_s=5, what="Both installs")
+        assert [name for name, _thread in downloads] == [second, first]
+        assert len({thread for _name, thread in downloads}) == 1
     finally:
         release.set()
-        process_until(lambda: manager.cleanup_for_quit() and manager.readiness_known,
-                      timeout_s=5, what="The remaining installation")
+        process_until(manager.cleanup_for_quit, timeout_s=5, what="Installs settle")
         manager.deleteLater()
 
 
-def test_quit_tracks_a_stale_folder_scan_until_its_thread_returns(
-    qapp, tmp_path, monkeypatch, process_until
+def test_installs_requested_during_a_folder_change_go_to_the_new_folder(
+    qapp, tmp_path, monkeypatch, process_until, settle
 ):
-    entered, release = threading.Event(), threading.Event()
     old, new = tmp_path / "old", tmp_path / "new"
+    name = MANAGED_ARTIFACT_NAMES[0]
+    folders: list[Path] = []
 
-    def read(folder):
-        if folder == old:
-            entered.set()
-            assert release.wait(5)
-        return frozenset()
+    def install(folder, artifact, **kwargs):
+        folders.append(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        model_file(folder, artifact).write_bytes(b"model")
 
-    monkeypatch.setattr(model_manager, "read_ready_names", read)
+    monkeypatch.setattr(model_manager, "download_model", install)
     manager = ModelManager(old)
-    try:
-        assert entered.wait(3)
-        manager.set_models_dir(new)
-        _settle(manager, process_until)
-        manager.begin_shutdown()
-        assert not manager.cleanup_for_quit()
-    finally:
-        release.set()
-    process_until(manager.cleanup_for_quit, timeout_s=5, what="Stale scan physical settlement")
+    settle()
+    manager.begin_folder_change()
+    assert manager.folder_changing
+    manager.install((name,), force=False)
+    qapp.processEvents()
+    assert manager.operations_for((name,))[0].kind == "queued"
+    manager.end_folder_change(new)
+    process_until(lambda: not manager.in_progress_operations, timeout_s=5, what="The install")
+    assert folders == [new]
+    assert not manager.folder_changing
+    process_until(manager.cleanup_for_quit, timeout_s=5, what="Installs settle")
     manager.deleteLater()
 
 
-def test_quit_tracks_folder_reveal_preparation(qapp, tmp_path, monkeypatch, process_until):
+def test_quit_never_waits_for_a_held_scan(qapp, tmp_path, monkeypatch, settle):
+    scans = _HeldScans(monkeypatch)
     manager = ModelManager(tmp_path)
-    _settle(manager, process_until)
-    entered, release = threading.Event(), threading.Event()
-    mkdir = Path.mkdir
-
-    def held_mkdir(path, *args, **kwargs):
-        if path == tmp_path:
-            entered.set()
-            assert release.wait(5)
-        return mkdir(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "mkdir", held_mkdir)
     try:
-        manager.prepare_folder_reveal()
-        assert entered.wait(3)
         manager.begin_shutdown()
-        assert not manager.cleanup_for_quit()
+        assert manager.cleanup_for_quit()
     finally:
-        release.set()
-    process_until(manager.cleanup_for_quit, timeout_s=5, what="Folder reveal settlement")
-    manager.deleteLater()
+        scans.release.set()
+        settle()
+        manager.deleteLater()
 
 
-# Install workers end the same way job workers do. With each worker's destruction
-# slowed, a Qt-side deleteLater and the manager's release both deleted it
-# (SIGSEGV); every worker must be deleted once, by the manager, on the window thread.
+# A QThread destroyed while it runs ends the process with a fatal Qt error. A
+# disposable process runs installs on the manager's worker thread, then deletes
+# the manager without a quit and exits normally.
 _INSTALL_RELEASE_PROCESS = r"""
 import sys
-import threading
-import time
 from pathlib import Path
-from PySide6.QtCore import QCoreApplication, Qt, QTimer
+from PySide6.QtCore import QCoreApplication, QTimer
+from shiboken6 import delete
 from pixelup import model_manager
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 
 def failing_download(*_args, **_kwargs):
-    time.sleep(0.02)
     raise PixelupError(ErrorCode.INVALID_ARGUMENT, Message("jobs.failedFallback"))
 
 model_manager.download_model = failing_download
-deleted_on_window_thread = []
-spawned = []
-spawn = model_manager.ModelManager._spawn_worker
-
-def spawn_watched(self, operation_id, names, *, force):
-    spawn(self, operation_id, names, force=force)
-    spawned.append(operation_id)
-    def destroyed(*_args):
-        deleted_on_window_thread.append(threading.current_thread() is threading.main_thread())
-        time.sleep(0.02)
-    self._workers[operation_id].destroyed.connect(destroyed, Qt.ConnectionType.DirectConnection)
-
-model_manager.ModelManager._spawn_worker = spawn_watched
 app = QCoreApplication([])
 manager = model_manager.ModelManager(Path(sys.argv[1]))
 count = 10
@@ -331,28 +286,28 @@ def next_install():
 manager.idle.connect(lambda: QTimer.singleShot(0, next_install))
 QTimer.singleShot(0, next_install)
 app.exec()
-app.processEvents()
-print(len(spawned) > 1, len(spawned) == deleted_on_window_thread.count(True), flush=True)
+thread_was_running = manager._thread.isRunning()
+delete(manager)
+print(len(done), thread_was_running, flush=True)
 """
 
 
-def test_finished_install_workers_are_released_once_without_crashing(tmp_path: Path) -> None:
+def test_deleting_a_manager_stops_its_worker_thread_first(tmp_path: Path) -> None:
     result = subprocess.run(
         [sys.executable, "-c", _INSTALL_RELEASE_PROCESS, str(tmp_path)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr[-2000:]
-    # Several workers started, and each was deleted once, on the window thread.
-    assert result.stdout.splitlines()[-1] == "True True"
+    assert result.stdout.splitlines()[-1] == "10 True"
 
 
 def test_failed_scan_preserves_known_inventory_and_error_until_successful_retry(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until,
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settle,
 ) -> None:
     name = MANAGED_ARTIFACT_NAMES[0]
     model_file(tmp_path, name).write_bytes(b"present")
     manager = ModelManager(tmp_path)
-    _settle(manager, process_until)
+    settle()
     failure = PermissionError(13, "unreadable", str(tmp_path))
 
     def broken(_models_dir: Path) -> frozenset[str]:
@@ -362,13 +317,13 @@ def test_failed_scan_preserves_known_inventory_and_error_until_successful_retry(
     monkeypatch.setattr(model_manager, "read_ready_names", broken)
     try:
         manager.refresh_readiness()
-        _settle(manager, process_until)
+        settle()
         assert not manager.readiness_known
         assert manager.readiness_error is failure
         assert manager.ready_names == frozenset({name})
         monkeypatch.setattr(model_manager, "read_ready_names", real_read)
         manager.refresh_readiness()
-        _settle(manager, process_until)
+        settle()
         assert manager.readiness_known
         assert manager.readiness_error is None
         assert manager.ready_names == frozenset({name})
@@ -376,8 +331,8 @@ def test_failed_scan_preserves_known_inventory_and_error_until_successful_retry(
         manager.deleteLater()
 
 
-def test_cancelled_connection_keeps_install_slot_until_physical_return(
-    qapp, tmp_path, monkeypatch, process_until,
+def test_a_cancelled_install_keeps_its_turn_until_its_connection_returns(
+    qapp, tmp_path, monkeypatch, process_until, settle,
 ) -> None:
     from pixelup import models
 
@@ -395,9 +350,8 @@ def test_cancelled_connection_keeps_install_slot_until_physical_return(
 
     monkeypatch.setattr(models, "build_opener", lambda *_handlers: BlockingOpener())
     monkeypatch.setattr(model_manager, "download_model", models.download_model)
-    monkeypatch.setattr(model_manager, "MAX_CONCURRENT_INSTALLS", 1)
     manager = ModelManager(tmp_path)
-    _settle(manager, process_until)
+    settle()
     first, second = MANAGED_ARTIFACT_NAMES[:2]
     cancelled = []
     manager.cancelled.connect(cancelled.append)
@@ -407,7 +361,6 @@ def test_cancelled_connection_keeps_install_slot_until_physical_return(
         assert manager.cancel(operation_id)
         manager.install((second,), force=False)
         qapp.processEvents()
-        assert len(manager._threads) == 1
         assert manager.operations_for((first,))[0].cancelling
         assert manager.operations_for((second,))[0].kind == "queued"
         assert not manager.cleanup_for_quit()
@@ -437,9 +390,10 @@ def test_install_failure_logs_once_with_operation_artifact_and_original_cause(
     monkeypatch.setattr(models, "build_opener", lambda *_handlers: FailingOpener())
     monkeypatch.setattr(model_manager, "download_model", models.download_model)
     name = MANAGED_ARTIFACT_NAMES[0]
-    worker = model_manager.ModelInstallWorker(19, tmp_path, (name,), force=False)
+    worker = model_manager.ModelInstallWorker()
+    command = model_manager._Install(19, (name,), False, threading.Event())
     with caplog.at_level("INFO", logger="pixelup"):
-        worker.run()
+        worker.run_install(command, tmp_path)
     failures = [record for record in caplog.records if record.levelname == "ERROR"]
     assert len(failures) == 1
     record = failures[0]

@@ -197,7 +197,6 @@
   "managedModels.summary": "Install any model you want to use, or install every missing model at once. PixelUp verifies each model and keeps it for later jobs. Closing this window does not stop an installation.",
   "managedModels.title": "Managed models",
   "modelInstall.failedFallback": "The models could not be installed. Try again.",
-  "modelInstall.stopped": "Installation stopped.",
   "models.installing": "Installing models — {progress}%",
   "models.installingAccessible": "Managed models, installing models, {progress} percent",
   "models.installingTooltip": "Model installation is in progress.",

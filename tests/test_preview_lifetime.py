@@ -10,7 +10,7 @@ from pixelup.gui import ImagePreview
 from pixelup.i18n import localizer
 
 
-def test_preview_coalesces_selections_until_active_decode_physically_returns(
+def test_preview_coalesces_selections_until_the_active_decode_reports(
     qapp, tmp_path: Path, monkeypatch, process_until,
 ) -> None:
     paths = [tmp_path / f"image-{number}.png" for number in range(5)]
@@ -40,7 +40,7 @@ def test_preview_coalesces_selections_until_active_decode_physically_returns(
         assert preview.text() == localizer.t("preview.loading")
         release.set()
         process_until(
-            lambda: not preview.loading and preview.reads.settled,
+            lambda: not preview.loading and not preview._decoding,
             timeout_s=10, what="latest preview",
         )
         assert reads == [str(paths[0]), str(paths[-1])]
@@ -50,7 +50,6 @@ def test_preview_coalesces_selections_until_active_decode_physically_returns(
         )
     finally:
         release.set()
-        preview.reads.closing = True
-        process_until(lambda: preview.reads.settled, timeout_s=10, what="preview settlement")
+        process_until(lambda: not preview._decoding, timeout_s=10, what="preview settlement")
         preview.deleteLater()
         qapp.processEvents()

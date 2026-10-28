@@ -56,13 +56,11 @@ DISK_WARNING = Message.of("warning.extensionMismatch", extension="png", format="
 
 
 def _settle_models(window) -> None:
-    planning_reads = getattr(window, "_planning_reads", None)
     deadline = time.monotonic() + 10
     while (
-        not window.model_manager.readiness_known or window.model_manager._scan_in_flight
+        not window.model_manager.readiness_known
         or getattr(window, "_active_job_plan", None) is not None
         or getattr(window, "_pending_job_plans", ())
-        or (planning_reads is not None and not planning_reads.settled)
     ):
         assert time.monotonic() < deadline, "model readiness and planning did not settle"
         QApplication.processEvents()
@@ -1126,15 +1124,10 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
         model_file(window.runtime_dirs.models_dir, name).unlink()
     window.model_manager.refresh_readiness()
     _settle_models(window)
-    started: set[str] = set()
-    started_lock = threading.Lock()
-    both_started = threading.Event()
+    first_started = threading.Event()
 
     def wait_for_cancel(_models_dir: Path, name: str, **kwargs: object) -> dict[str, object]:
-        with started_lock:
-            started.add(name)
-            if started == set(required):
-                both_started.set()
+        first_started.set()
         should_cancel = kwargs["should_cancel"]
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
@@ -1149,8 +1142,9 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
     dialog = window._active_models_dialog
     assert dialog is not None
     dialog._install_all_or_cancel()
-    assert both_started.wait(1)
+    assert first_started.wait(1)
 
+    # One install runs and the other waits its turn; Cancel ends both.
     dialog._install_all_or_cancel()
     deadline = time.monotonic() + 3
     while not window.model_manager.cleanup_for_quit() and time.monotonic() < deadline:
@@ -1459,7 +1453,7 @@ def test_failed_folder_completion_releases_and_retries_after_root_becomes_unavai
         assert calls == []
         assert window.config is original
         assert window._unsaved_config_changes == {"models_folder": str(target)}
-        assert not window.model_manager.folder_change_pending
+        assert not window.model_manager.folder_changing
         assert not window.model_manager.operations
         unavailable.restore()
 
@@ -1473,7 +1467,7 @@ def test_failed_folder_completion_releases_and_retries_after_root_becomes_unavai
         assert all(candidate.models_folder == str(target) for candidate in attempts)
         assert window.config.models_folder == str(target)
         assert window.model_manager.models_dir == target
-        assert not window.model_manager.folder_change_pending
+        assert not window.model_manager.folder_changing
         assert not window._unsaved_config_changes
         assert load_app_config(accepted_path).models_folder == str(target)
     finally:
@@ -2498,7 +2492,7 @@ def test_background_preview_honors_orientation_in_dimensions_and_pixels(
     assert len(reads) == 1
     assert reads[0][0] == source
     assert reads[0][1] is not threading.main_thread()
-    process_until(lambda: window.preview.reads.settled, timeout_s=5, what="Preview read return")
+    process_until(lambda: not window.preview._decoding, timeout_s=5, what="Preview read return")
 
 
 def test_optional_preview_metadata_failure_preserves_the_decoded_image(
@@ -2536,7 +2530,7 @@ def test_optional_preview_metadata_failure_preserves_the_decoded_image(
     assert (preview.width(), preview.height()) == (8, 6)
     assert preview.toImage().pixelColor(0, 0) == QColor("white")
     assert window.preview.text() == ""
-    process_until(lambda: window.preview.reads.settled, timeout_s=5, what="Preview read return")
+    process_until(lambda: not window.preview._decoding, timeout_s=5, what="Preview read return")
     flush_records()
     with sqlite3.connect(config_path().parent / "records.sqlite3") as connection:
         entries = connection.execute(
@@ -2810,7 +2804,10 @@ def test_closing_keeps_requests_whose_installs_already_run(
     _settle_models(window)
     dialog = window._active_models_dialog
     dialog._install_all_or_cancel()
-    _wait_for(qapp, lambda: sorted(started) == sorted([first, second]))
+    qapp.processEvents()
+    # The second install waits its turn behind the first.
+    assert started == [first]
+    assert window.model_manager.operations_for((second,))[0].kind == "queued"
     assert dialog.primary_button.text() == "Cancel installation"
     # Each running row offers its own Cancel on the preflight surface too.
     running_rows = [
@@ -2899,7 +2896,7 @@ def test_failed_folder_save_keeps_current_location_and_starts_no_install(
     _settle_config(window)
     assert window.runtime_dirs.models_dir == old
     assert not window.model_manager.operations
-    assert not window.model_manager.folder_change_pending
+    assert not window.model_manager.folder_changing
     assert dialog.result_view.isVisibleTo(dialog)
     assert dialog._folder_error == Message("settings.saveFailed")
     dialog.folder_edit.setText("")
@@ -2928,8 +2925,7 @@ def test_managed_models_stays_open_until_its_folder_save_lands(
     try:
         dialog.apply_folder_button.click()
         assert entered.wait(3)
-        assert window.model_manager.folder_change_pending
-        assert window.model_manager.install(("RealESRGAN_x4plus",), force=False) is None
+        assert window.model_manager.folder_changing
         dialog.reject()
         QApplication.processEvents()
         assert dialog.isVisible()
@@ -2939,7 +2935,7 @@ def test_managed_models_stays_open_until_its_folder_save_lands(
     _settle_models(window)
     assert window.runtime_dirs.models_dir == target
     assert not window.model_manager.operations
-    assert not window.model_manager.folder_change_pending
+    assert not window.model_manager.folder_changing
     dialog.reject()
     assert not dialog.isVisible()
 
@@ -3174,9 +3170,9 @@ def test_removed_image_drops_only_its_pending_retry_even_after_reopening(
     assert not window._pending_model_work
 
 
-@pytest.mark.parametrize("kind", ["image_offer", "preview", "superseded_preview"])
-def test_quit_retains_background_reads_until_physical_return(
-    make_window, tmp_path, monkeypatch, process_until, quit_bound, kind
+@pytest.mark.parametrize("kind", ["image_offer", "preview"])
+def test_quit_never_waits_for_a_background_read(
+    make_window, tmp_path, monkeypatch, quit_bound, kind
 ):
     window = make_window()
     entered, release = threading.Event(), threading.Event()
@@ -3185,7 +3181,7 @@ def test_quit_retains_background_reads_until_physical_return(
 
         def probe(paths):
             entered.set()
-            assert release.wait(5)
+            release.wait()
             return real_probe(paths)
 
         monkeypatch.setattr(gui, "_probe_open_paths", probe)
@@ -3197,31 +3193,27 @@ def test_quit_retains_background_reads_until_physical_return(
         def decode(reader):
             if Path(reader.fileName()) == image:
                 entered.set()
-                assert release.wait(5)
+                release.wait()
             return real_read(reader)
 
         monkeypatch.setattr(gui.QImageReader, "read", decode)
         window.preview.set_image(image)
-        if kind == "superseded_preview":
-            window.preview.set_image(None)
-            assert not window.preview.loading
     assert entered.wait(3)
     window._is_session_shutdown = lambda: True
     try:
-        window.closeEvent(QCloseEvent())
-        assert not window._workers_clean_for_quit()
-        assert quit_bound.started == [gui.QUIT_BUDGET_S]
-        assert window._os_close_accepted
+        event = QCloseEvent()
+        window.closeEvent(event)
+        assert event.isAccepted()
+        assert window._workers_clean_for_quit()
     finally:
         release.set()
-    process_until(window._workers_clean_for_quit, timeout_s=5, what="Background read settlement")
     assert quit_bound.exits == 0
 
 
 @pytest.mark.parametrize("settles", [True, False])
-def test_native_process_quit_owns_background_reads_until_settlement_or_bound(settles):
-    # Real Qt event loop and real Python thread in a disposable process. This
-    # exercises process teardown without sending a logout to the user's OS.
+def test_a_read_held_at_quit_ends_with_the_process_within_the_bound(settles):
+    # Real Qt event loop and real pool thread in a disposable process. A read
+    # still blocked when the loop ends is cut short by the bound's hard exit.
     script = r'''
 import os
 import threading
@@ -3235,6 +3227,7 @@ entered, release = threading.Event(), threading.Event()
 def held_probe(paths):
     entered.set()
     release.wait()
+    print('read returned', flush=True)
     return []
 gui._probe_open_paths = held_probe
 gui.QUIT_BUDGET_S = 0.25
@@ -3242,20 +3235,15 @@ window.open_paths([Path('held.png')])
 assert entered.wait(3)
 window._is_session_shutdown = lambda: True
 window.close()
-assert not window._workers_clean_for_quit()
-print('read owned during quit', flush=True)
-if SETTLES:
-    QTimer.singleShot(20, release.set)
-app.exec()
 assert window._workers_clean_for_quit()
-print('reads physically settled', flush=True)
+if SETTLES:
+    release.set()
+print('loop ended', flush=True)
 '''.replace('SETTLES', repr(settles))
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=5,
-    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert "read owned during quit" in result.stdout
-    assert ("reads physically settled" in result.stdout) is settles
+    assert "loop ended" in result.stdout
+    assert ("read returned" in result.stdout) is settles
 
 
 # A disposable process with PixelUp's real main loop, an open image and a held
@@ -3326,12 +3314,13 @@ def _run_os_quit(route: str, settles: bool, **env: str) -> subprocess.CompletedP
 
 
 def _assert_os_quit(result: subprocess.CompletedProcess[str], settles: bool) -> None:
-    # Unsettled work is left to the quit bound's hard exit, which still exits 0.
+    # Quit never waits for the held read; one still blocked when main returns is
+    # left to the quit bound's hard exit, which still exits 0.
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
     assert "asked" not in lines
     assert "quit delivered" in lines
-    assert ("main returned 0 True" in lines) is settles
+    assert "main returned 0 True" in lines
 
 
 @pytest.mark.parametrize("settles", [True, False])
@@ -3626,7 +3615,7 @@ def test_held_plan_cannot_revive_a_removed_and_reopened_image(
         assert [job.input_path for job in window.jobs] == [second]
 
 
-def test_queue_cancel_abandons_plans_and_retains_the_physical_read(
+def test_queue_cancel_abandons_plans_and_their_held_read(
     make_window, tmp_path, monkeypatch, process_until, held_output_listing
 ):
     window = make_window()
@@ -3641,17 +3630,16 @@ def test_queue_cancel_abandons_plans_and_retains_the_physical_read(
     assert window.cancel_button.isEnabled()
     window.cancel_button.click()
     assert not window.cancel_button.isEnabled()
-    assert not window._planning_reads.settled
     assert not window._pending_job_plans
     release.set()
     process_until(
-        lambda: window._planning_reads.settled, timeout_s=5, what="Cancelled physical read",
+        lambda: window._active_job_plan is None, timeout_s=5, what="Cancelled plan's read",
     )
     QApplication.processEvents()
     assert window.jobs == []
 
 
-def test_quit_abandons_unstarted_plans_and_owns_the_held_read(
+def test_quit_abandons_plans_without_waiting_for_the_held_read(
     make_window, tmp_path, monkeypatch, process_until, held_output_listing, quit_bound
 ):
     window = make_window()
@@ -3666,10 +3654,10 @@ def test_quit_abandons_unstarted_plans_and_owns_the_held_read(
     window._is_session_shutdown = lambda: True
     window.closeEvent(QCloseEvent())
     assert not window._pending_job_plans
-    assert not window._workers_clean_for_quit()
+    assert window._workers_clean_for_quit()
     assert quit_bound.started == [gui.QUIT_BUDGET_S]
     release.set()
-    process_until(window._workers_clean_for_quit, timeout_s=5, what="Planning quit settlement")
+    process_until(lambda: window._active_job_plan is None, timeout_s=5, what="Plan's read")
     assert window.jobs == []
     assert quit_bound.exits == 0
 
@@ -3681,16 +3669,16 @@ def test_planning_thread_start_failure_settles_one_request_and_continues(
     first, second = _png(tmp_path, "first.png"), _png(tmp_path, "second.png")
     _open(window, [first, second])
     monkeypatch.setattr(window.model_manager, "refresh_readiness", lambda: None)
-    real_start = threading.Thread.start
+    real_run = gui.run_in_background
     rejected = []
 
-    def start(thread):
-        if thread.name == "pixelup-plan" and not rejected:
-            rejected.append(thread)
+    def run(read):
+        if not rejected:
+            rejected.append(read)
             raise RuntimeError("THREAD-START-SENTINEL")
-        return real_start(thread)
+        return real_run(read)
 
-    monkeypatch.setattr(threading.Thread, "start", start)
+    monkeypatch.setattr(gui, "run_in_background", run)
     window._enqueue_jobs([first], ["RealESRGAN_x4plus"])
     window._enqueue_jobs([second], ["RealESRGAN_x4plus"])
     window._model_manager_changed()
@@ -3897,7 +3885,7 @@ def test_auto_device_names_the_backend_it_resolves_to_once_known(
 
 
 def test_a_failed_auto_device_probe_leaves_auto_unnamed(
-    make_window, monkeypatch, process_until
+    make_window, monkeypatch, process_until, background
 ) -> None:
     def broken() -> str:
         raise OSError("no runtime")
@@ -3905,29 +3893,11 @@ def test_a_failed_auto_device_probe_leaves_auto_unnamed(
     window = make_window()
     monkeypatch.setattr(gui, "_resolve_auto_device", broken)
     window._probe_auto_device()
-    process_until(lambda: window._device_reads.settled, timeout_s=5, what="Auto device probe")
+    process_until(background.settled, timeout_s=5, what="Auto device probe")
+    QApplication.processEvents()
 
     assert window._auto_device is None
     assert window.device.itemText(0) == "Auto"
-
-
-def test_quit_waits_for_the_auto_device_probe(make_window, monkeypatch, process_until) -> None:
-    window = make_window()
-    entered, release = threading.Event(), threading.Event()
-
-    def held() -> str:
-        entered.set()
-        release.wait(5)
-        return "cpu"
-
-    monkeypatch.setattr(gui, "_resolve_auto_device", held)
-    window._probe_auto_device()
-    assert entered.wait(5)
-    try:
-        assert not window._workers_clean_for_quit()
-    finally:
-        release.set()
-    process_until(window._workers_clean_for_quit, timeout_s=5, what="Probe settlement")
 
 
 def test_quit_asks_about_a_model_installation_with_no_images_open(
@@ -4177,7 +4147,7 @@ def test_reoffering_selected_path_refreshes_dimensions_and_preview_from_replaced
 
     monkeypatch.setattr(QImageReader, "read", counted_read)
     _open(window, [source])
-    process_until(lambda: window.preview.reads.settled, timeout_s=10, what="First preview return")
+    process_until(lambda: not window.preview._decoding, timeout_s=10, what="First preview return")
     assert window.preview._pixmap.toImage().pixelColor(0, 0) == QColor("white")
     Image.new("RGB", (12, 9), "red").save(source)
 
@@ -4194,7 +4164,7 @@ def test_reoffering_selected_path_refreshes_dimensions_and_preview_from_replaced
 
 
 def test_failed_model_scan_shows_safe_main_rollup_and_recovers_after_retry(
-    make_window, monkeypatch, process_until,
+    make_window, monkeypatch, process_until, background,
 ) -> None:
     from pixelup import model_manager
 
@@ -4210,10 +4180,8 @@ def test_failed_model_scan_shows_safe_main_rollup_and_recovers_after_retry(
 
     monkeypatch.setattr(model_manager, "read_ready_names", unreadable)
     manager.refresh_readiness()
-    process_until(
-        lambda: not manager._scan_in_flight,
-        timeout_s=10, what="Failed model readiness scan",
-    )
+    process_until(background.settled, timeout_s=10, what="Failed model readiness scan")
+    QApplication.processEvents()
 
     assert manager.readiness_error is failure
     assert not manager.readiness_known
@@ -4230,7 +4198,7 @@ def test_failed_model_scan_shows_safe_main_rollup_and_recovers_after_retry(
     monkeypatch.setattr(model_manager, "read_ready_names", real_read)
     manager.refresh_readiness()
     process_until(
-        lambda: manager.readiness_known and not manager._scan_in_flight,
+        lambda: manager.readiness_known,
         timeout_s=10, what="Successful model readiness retry",
     )
     assert manager.readiness_error is None
