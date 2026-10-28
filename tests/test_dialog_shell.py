@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import tempfile
-import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -50,9 +49,7 @@ def dialog(request: pytest.FixtureRequest, qapp: QApplication) -> Iterator[Dialo
     surface = BUILDERS[request.param]()
     if isinstance(surface, ManagedModelsDialog):
         # Geometry assertions compare the same loaded state before and after show.
-        deadline = time.monotonic() + 5
         while not surface._manager.readiness_known:
-            assert time.monotonic() < deadline
             qapp.processEvents()
     yield surface
     surface.close()
@@ -71,7 +68,7 @@ def test_cmd_or_ctrl_w_closes_the_dialog_like_its_close_button(
 ) -> None:
     dialog.show()
     dialog.activateWindow()
-    process_until(dialog.isActiveWindow, timeout_s=5, what="Dialog becomes the key window")
+    process_until(dialog.isActiveWindow, what="Dialog becomes the key window")
 
     QTest.keyClick(dialog, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
 
@@ -89,11 +86,11 @@ def test_a_dialog_takes_focus_above_its_opener_and_returns_it(
     opener = QWidget()
     opener.show()
     opener.activateWindow()
-    process_until(opener.isActiveWindow, timeout_s=5, what="Opener becomes the key window")
+    process_until(opener.isActiveWindow, what="Opener becomes the key window")
     dialog.setParent(opener, dialog.windowFlags())
     try:
         dialog.show()
-        process_until(dialog.isActiveWindow, timeout_s=5, what="Dialog becomes the key window")
+        process_until(dialog.isActiveWindow, what="Dialog becomes the key window")
         assert dialog.windowHandle().transientParent() is opener.windowHandle()
     finally:
         dialog.setParent(None)

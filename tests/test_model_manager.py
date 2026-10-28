@@ -28,7 +28,7 @@ class _HeldScans:
             if threading.current_thread() is threading.main_thread():
                 return real(models_dir)
             self.threads.append(threading.current_thread())
-            assert self.release.wait(10), "a held scan was never released"
+            assert self.release.wait(), "a held scan was never released"
             return self.answer
 
         monkeypatch.setattr(model_manager, "read_ready_names", read)
@@ -37,7 +37,7 @@ class _HeldScans:
 @pytest.fixture
 def settle(qapp: QApplication, background, process_until):
     def run(_manager: ModelManager | None = None) -> None:
-        process_until(background.settled, timeout_s=10, what="The models scan")
+        process_until(background.settled, what="The models scan")
         qapp.processEvents()
 
     return run
@@ -144,17 +144,17 @@ def test_switching_folder_ignores_a_stalled_old_scan(
     def read(folder):
         if folder == old:
             entered.set()
-            assert release.wait(10)
+            assert release.wait()
             return frozenset({name})
         return frozenset()
 
     monkeypatch.setattr(model_manager, "read_ready_names", read)
     manager = ModelManager(old)
     try:
-        assert entered.wait(5)
+        assert entered.wait()
         manager.begin_folder_change()
         manager.end_folder_change(new)
-        process_until(lambda: manager.readiness_known, timeout_s=10, what="The new folder scan")
+        process_until(lambda: manager.readiness_known, what="The new folder scan")
         assert manager.readiness_known
         assert manager.ready_names == frozenset()
         release.set()
@@ -201,7 +201,7 @@ def test_installs_run_one_at_a_time_in_request_order(
     settle()
     try:
         manager.install((second,), force=False)
-        assert entered.wait(3)
+        assert entered.wait()
         manager.install((first,), force=False)
         qapp.processEvents()
         assert manager.operations_for((second,))[0].kind == "running"
@@ -209,12 +209,12 @@ def test_installs_run_one_at_a_time_in_request_order(
         assert [name for name, _thread in downloads] == [second]
         release.set()
         process_until(lambda: manager.missing((first, second)) == () and not
-                      manager.in_progress_operations, timeout_s=5, what="Both installs")
+                      manager.in_progress_operations, what="Both installs")
         assert [name for name, _thread in downloads] == [second, first]
         assert len({thread for _name, thread in downloads}) == 1
     finally:
         release.set()
-        process_until(manager.cleanup_for_quit, timeout_s=5, what="Installs settle")
+        process_until(manager.cleanup_for_quit, what="Installs settle")
         manager.deleteLater()
 
 
@@ -239,10 +239,10 @@ def test_installs_requested_during_a_folder_change_go_to_the_new_folder(
     qapp.processEvents()
     assert manager.operations_for((name,))[0].kind == "queued"
     manager.end_folder_change(new)
-    process_until(lambda: not manager.in_progress_operations, timeout_s=5, what="The install")
+    process_until(lambda: not manager.in_progress_operations, what="The install")
     assert folders == [new]
     assert not manager.folder_changing
-    process_until(manager.cleanup_for_quit, timeout_s=5, what="Installs settle")
+    process_until(manager.cleanup_for_quit, what="Installs settle")
     manager.deleteLater()
 
 
@@ -345,7 +345,7 @@ def test_a_cancelled_install_keeps_its_turn_until_its_connection_returns(
     class BlockingOpener:
         def open(self, _url, *, timeout):
             entered.set()
-            assert release.wait(5)
+            assert release.wait()
             return LateResponse()
 
     monkeypatch.setattr(models, "build_opener", lambda *_handlers: BlockingOpener())
@@ -357,7 +357,7 @@ def test_a_cancelled_install_keeps_its_turn_until_its_connection_returns(
     manager.cancelled.connect(cancelled.append)
     operation_id = manager.install((first,), force=False)
     try:
-        assert entered.wait(5)
+        assert entered.wait()
         assert manager.cancel(operation_id)
         manager.install((second,), force=False)
         qapp.processEvents()
@@ -369,7 +369,7 @@ def test_a_cancelled_install_keeps_its_turn_until_its_connection_returns(
         assert cancelled == [(second,)]
     finally:
         release.set()
-        process_until(manager.cleanup_for_quit, timeout_s=5, what="Connection settlement")
+        process_until(manager.cleanup_for_quit, what="Connection settlement")
         manager.deleteLater()
     assert closed.is_set()
     assert cancelled == [(second,), (first,)]

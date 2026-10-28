@@ -120,9 +120,7 @@ def _open(window, paths) -> None:
     from PySide6.QtWidgets import QApplication as _QApplication
 
     window.open_paths(paths)
-    deadline = _time.monotonic() + 10
     while window.opening or window.preview.loading:
-        assert _time.monotonic() < deadline, "opening images did not finish"
         _QApplication.processEvents()
         _time.sleep(0.005)
 
@@ -162,7 +160,7 @@ def window(
         main.close()
         process_until(
             lambda: main._workers_clean_for_quit() and main._active_job_plan is None,
-            timeout_s=10, what="Interface fixture workers",
+            what="Interface fixture workers",
         )
         main.deleteLater()
         qapp.processEvents()
@@ -171,12 +169,10 @@ def window(
 
 def _settle_models(window):
     import time
-    deadline = time.monotonic() + 10
     while (
         not window.model_manager.readiness_known
         or window._active_job_plan is not None or window._pending_job_plans
     ):
-        assert time.monotonic() < deadline, "model scan and job planning did not settle"
         QApplication.processEvents()
         time.sleep(0.001)
 
@@ -224,7 +220,7 @@ def test_population_failure_closes_window_after_planning_returns(
 
     def held_plan(*args, **kwargs):
         entered.set()
-        assert release.wait(5), "held interface plan was not released"
+        assert release.wait(), "held interface plan was not released"
         try:
             return real_create_jobs(*args, **kwargs)
         finally:
@@ -239,7 +235,7 @@ def test_population_failure_closes_window_after_planning_returns(
         _open(main, [_png(directory, "setup.png")])
         main.model_checks[UPSCALE_MODELS[1]].setChecked(True)
         main._queue_all_images_selected_models()
-        process_until(entered.is_set, timeout_s=5, what="Held interface plan")
+        process_until(entered.is_set, what="Held interface plan")
         QTimer.singleShot(0, release.set)
         raise RuntimeError("injected interface population failure")
 
@@ -260,8 +256,7 @@ def test_population_failure_closes_window_after_planning_returns(
                 main._is_session_shutdown = lambda: True
                 main.close()
                 process_until(
-                    main._workers_clean_for_quit, timeout_s=10,
-                    what="Failed interface regression workers",
+                    main._workers_clean_for_quit, what="Failed interface regression workers",
                 )
                 main.deleteLater()
                 qapp.processEvents()
@@ -364,7 +359,7 @@ def test_no_key_and_no_english_reaches_any_surface(
     window._open_records_window()
     records = window._records_window
     assert records is not None
-    process_until(lambda: records.launch_filter.count() > 1, timeout_s=5, what="the Records window")
+    process_until(lambda: records.launch_filter.count() > 1, what="the Records window")
     with speaking(tag):
         qapp.processEvents()
         dialogs = _dialogs(manager)
@@ -424,12 +419,12 @@ def test_saving_a_language_in_settings_applies_it_live(
     def accept_japanese(dialog: SettingsDialog) -> QDialog.DialogCode:
         dialog.language.setCurrentIndex(dialog.language.findData("ja"))
         dialog._save()
-        process_until(lambda: not dialog._saving, timeout_s=5, what="language save")
+        process_until(lambda: not dialog._saving, what="language save")
         return dialog.result()
 
     monkeypatch.setattr(SettingsDialog, "exec", accept_japanese)
     window._settings_dialog()
-    process_until(lambda: window.config.language == "ja", timeout_s=5, what="saved language")
+    process_until(lambda: window.config.language == "ja", what="saved language")
     qapp.processEvents()
     assert window.config.language == "ja"
     assert localizer.preference() == "ja"

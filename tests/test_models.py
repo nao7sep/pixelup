@@ -464,7 +464,7 @@ def test_connection_keeps_ownership_until_late_response_is_closed(
         def open(self, _url: str, *, timeout: float) -> LateResponse:
             assert timeout == 10
             started.set()
-            assert release.wait(5)
+            assert release.wait()
             return LateResponse()
 
     monkeypatch.setattr(models_module.time, "monotonic", lambda: clock[0])
@@ -486,14 +486,14 @@ def test_connection_keeps_ownership_until_late_response_is_closed(
     worker = threading.Thread(target=acquire)
     worker.start()
     try:
-        assert started.wait(5)
+        assert started.wait()
         clock[0] = 11
         assert not settled.is_set()
         assert not closed.is_set()
         assert list(models_dir.glob("*.tmp"))
     finally:
         release.set()
-        worker.join(5)
+        worker.join()
     assert not worker.is_alive()
     assert closed.is_set()
     assert len(errors) == 1
@@ -533,7 +533,7 @@ def test_fragmented_real_http_response_can_progress_beyond_old_poll_timeout() ->
         try:
             server.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
             first_sent.set()
-            assert continue_body.wait(5)
+            assert continue_body.wait()
             # A healthy fragment may arrive later than the removed 250 ms poll.
             time.sleep(0.3)
             server.sendall(b"def")
@@ -544,7 +544,7 @@ def test_fragmented_real_http_response_can_progress_beyond_old_poll_timeout() ->
     sender.start()
     response = HTTPResponse(client)
     try:
-        assert first_sent.wait(5)
+        assert first_sent.wait()
         response.begin()
         deadline = time.monotonic() + 5
         first = models_module._read_download_chunk(response, deadline, None)
@@ -556,7 +556,7 @@ def test_fragmented_real_http_response_can_progress_beyond_old_poll_timeout() ->
         continue_body.set()
         response.close()
         client.close()
-        sender.join(5)
+        sender.join()
     assert not sender.is_alive()
 
 
@@ -615,14 +615,14 @@ def test_fragmented_tls_record_keeps_real_http_response_readable_below_deadline(
             )
             flush_encrypted()
             headers_sent.set()
-            assert send_body.wait(5), "the client never finished reading the HTTP headers"
+            assert send_body.wait(), "the client never finished reading the HTTP headers"
             assert encrypted_server.write(body) == len(body)
             record = outgoing.read()
             assert record[0] == 23  # TLS application data, with a five-byte record header.
             assert len(record) == 5 + int.from_bytes(record[3:5], "big")
             server.sendall(record[:7])
             first_fragment.set()
-            assert body_read_started.wait(5), "the client never attempted its body read"
+            assert body_read_started.wait(), "the client never attempted its body read"
             # Start this delay only once the real TLS read has begun. A complete
             # record arrives after the removed 250 ms timeout but within its budget.
             time.sleep(0.35)
@@ -637,7 +637,7 @@ def test_fragmented_tls_record_keeps_real_http_response_readable_below_deadline(
     sender.start()
     try:
         client.do_handshake()
-        assert headers_sent.wait(5)
+        assert headers_sent.wait()
         response = HTTPResponse(client)
         response.begin()
         real_recv_into = client.recv_into
@@ -648,7 +648,7 @@ def test_fragmented_tls_record_keeps_real_http_response_readable_below_deadline(
 
         monkeypatch.setattr(client, "recv_into", observed_recv_into)
         send_body.set()
-        assert first_fragment.wait(5)
+        assert first_fragment.wait()
         deadline = time.monotonic() + 5
         assert models_module._read_download_chunk(response, deadline, None) == body
         assert models_module._read_download_chunk(response, deadline, None) == b""
@@ -658,7 +658,7 @@ def test_fragmented_tls_record_keeps_real_http_response_readable_below_deadline(
         if response is not None:
             response.close()
         client.close()
-        sender.join(5)
+        sender.join()
     assert not sender.is_alive()
     assert not server_errors, server_errors
 

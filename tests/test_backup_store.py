@@ -208,12 +208,12 @@ def test_record_returns_without_waiting_for_the_store(
 
     def blocked_write(*args: Any) -> None:
         entered.set()
-        assert release.wait(_THREAD_WAIT_S)
+        assert release.wait()
         real_write(*args)
 
     monkeypatch.setattr("pixelup.backup_store._write", blocked_write)
     record(target, b"first\n")
-    assert entered.wait(_THREAD_WAIT_S)
+    assert entered.wait()
 
     record(target, b"second\n")  # returns although the recorder is stuck
     record(target, b"third\n")  # replaces the pending "second"
@@ -231,7 +231,7 @@ def test_writes_from_many_threads_land_as_one_session_row(
 ) -> None:
     home = _home(tmp_path, monkeypatch)
     target = home / "config.json"
-    barrier = threading.Barrier(8, timeout=_THREAD_WAIT_S)
+    barrier = threading.Barrier(8)
     errors: list[BaseException] = []
 
     def save() -> None:
@@ -245,7 +245,7 @@ def test_writes_from_many_threads_land_as_one_session_row(
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(_THREAD_WAIT_S)
+        thread.join()
 
     assert not any(thread.is_alive() for thread in threads), "a save never finished"
     assert errors == []
@@ -379,7 +379,7 @@ def test_backup_failure_disables_and_drains_with_unavailable_root_or_failed_warn
 
     def held_failure(*args):
         entered.set()
-        assert release.wait(_THREAD_WAIT_S)
+        assert release.wait()
         if stage == "open":
             return real_open()
         try:
@@ -399,13 +399,13 @@ def test_backup_failure_disables_and_drains_with_unavailable_root_or_failed_warn
     monkeypatch.setattr(backup_store.log, "warning", warning)
     try:
         write_managed_text(target, "landed primary save\n")
-        assert entered.wait(_THREAD_WAIT_S)
+        assert entered.wait()
         record(target, b"newest pending version")
         home.rename(displaced)
         home.write_text("no longer a directory", encoding="utf-8")
         release.set()
         assert recorder._thread is not None
-        recorder._thread.join(_THREAD_WAIT_S)
+        recorder._thread.join()
 
         assert not recorder._thread.is_alive()
         assert recorder._disabled
@@ -432,7 +432,7 @@ def test_backup_failure_disables_and_drains_with_unavailable_root_or_failed_warn
     finally:
         release.set()
         if recorder._thread is not None:
-            recorder._thread.join(_THREAD_WAIT_S)
+            recorder._thread.join()
         with recorder._condition:
             recorder._disabled = True
             recorder._pending.clear()

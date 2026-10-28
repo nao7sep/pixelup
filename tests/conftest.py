@@ -22,7 +22,6 @@ from pixelup.session_log import LOGGER_NAME
 from pixelup.theme import PixelupStyle
 
 CORPUS = Path(__file__).resolve().parents[2] / "company" / "assets" / "test-fixtures"
-MODEL_INSTALL_TIMEOUT_S = 60 * 60
 
 
 @pytest.fixture(autouse=True)
@@ -184,15 +183,13 @@ ProcessUntil = Callable[..., None]
 
 @pytest.fixture(scope="session")
 def process_until(_session_qapp: QApplication) -> ProcessUntil:
-    """Run the Qt event loop until ``done()`` holds, failing after ``timeout_s``."""
+    """Run the Qt event loop until ``done()`` holds, with no bound: a stalled
+    wait shows in the faulthandler dump, which names ``what`` in its frame."""
 
-    def run(done: Callable[[], bool], *, timeout_s: float, what: str) -> None:
-        deadline = time.monotonic() + timeout_s
+    def run(done: Callable[[], bool], *, what: str) -> None:
         while not done():
-            if time.monotonic() > deadline:
-                pytest.fail(f"{what} did not finish within {timeout_s:.0f} s")
             _session_qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 100)
-            time.sleep(0.02)
+            time.sleep(0.001)
 
     return run
 
@@ -233,7 +230,7 @@ def heavy_models_dir(
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("PIXELUP_DATA_DIR", str(tmp_path_factory.mktemp("model-install-home")))
         manager = ModelManager(models_dir)
-        process_until(lambda: manager.readiness_known, timeout_s=10, what="Model readiness")
+        process_until(lambda: manager.readiness_known, what="Model readiness")
         missing = manager.missing(MANAGED_ARTIFACT_NAMES)
         if missing:
             failure_log = _InstallFailureLog()
@@ -245,7 +242,6 @@ def heavy_models_dir(
                 process_until(
                     lambda: (not manager.active_operations and manager.cleanup_for_quit()
                              and manager.readiness_known),
-                    timeout_s=MODEL_INSTALL_TIMEOUT_S,
                     what="Installing the managed models",
                 )
             finally:

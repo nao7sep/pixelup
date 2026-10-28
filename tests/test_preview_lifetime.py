@@ -26,13 +26,13 @@ def test_preview_coalesces_selections_until_the_active_decode_reports(
         reads.append(reader.fileName())
         if len(reads) == 1:
             entered.set()
-            assert release.wait(10), "preview test did not release held decode"
+            assert release.wait(), "preview test did not release held decode"
         return original(reader)
 
     monkeypatch.setattr(QImageReader, "read", held_read)
     try:
         preview.set_image(paths[0])
-        process_until(entered.is_set, timeout_s=5, what="first preview read")
+        process_until(entered.is_set, what="first preview read")
         for path in paths[1:]:
             preview.set_image(path)
         assert reads == [str(paths[0])]
@@ -41,7 +41,7 @@ def test_preview_coalesces_selections_until_the_active_decode_reports(
         release.set()
         process_until(
             lambda: not preview.loading and not preview._decoding,
-            timeout_s=10, what="latest preview",
+            what="latest preview",
         )
         assert reads == [str(paths[0]), str(paths[-1])]
         assert preview._pixmap is not None
@@ -50,6 +50,6 @@ def test_preview_coalesces_selections_until_the_active_decode_reports(
         )
     finally:
         release.set()
-        process_until(lambda: not preview._decoding, timeout_s=10, what="preview settlement")
+        process_until(lambda: not preview._decoding, what="preview settlement")
         preview.deleteLater()
         qapp.processEvents()

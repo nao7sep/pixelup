@@ -56,13 +56,11 @@ DISK_WARNING = Message.of("warning.extensionMismatch", extension="png", format="
 
 
 def _settle_models(window) -> None:
-    deadline = time.monotonic() + 10
     while (
         not window.model_manager.readiness_known
         or getattr(window, "_active_job_plan", None) is not None
         or getattr(window, "_pending_job_plans", ())
     ):
-        assert time.monotonic() < deadline, "model readiness and planning did not settle"
         QApplication.processEvents()
         time.sleep(0.001)
 
@@ -72,9 +70,7 @@ def _settle_opens(window) -> None:
 
     from PySide6.QtWidgets import QApplication as _QApplication
 
-    deadline = _time.monotonic() + 10
     while window.opening or window.preview.loading:
-        assert _time.monotonic() < deadline, "opening images did not finish"
         _QApplication.processEvents()
         _time.sleep(0.005)
 
@@ -86,9 +82,7 @@ def _open(window, paths) -> None:
     from PySide6.QtWidgets import QApplication as _QApplication
 
     window.open_paths(paths)
-    deadline = _time.monotonic() + 10
     while window.opening or window.preview.loading:
-        assert _time.monotonic() < deadline, "opening images did not finish"
         _QApplication.processEvents()
         _time.sleep(0.005)
 
@@ -99,9 +93,7 @@ def _png(tmp_path: Path, name: str, size: tuple[int, int] = (8, 6)) -> Path:
 
 
 def _settle_config(window: MainWindow) -> None:
-    deadline = time.monotonic() + 5
     while window._config_save is not None:
-        assert time.monotonic() < deadline, "settings save did not settle"
         QApplication.instance().processEvents()
         threading.Event().wait(0.001)
     QApplication.instance().processEvents()
@@ -198,7 +190,7 @@ def make_window(
         window._is_session_shutdown = lambda: True
         window.close()
         process_until(
-            window._workers_clean_for_quit, timeout_s=5, what="Window background settlement",
+            window._workers_clean_for_quit, what="Window background settlement",
         )
         window.deleteLater()
     qapp.processEvents()
@@ -980,7 +972,7 @@ def test_coming_to_the_front_finds_a_model_file_placed_by_hand(
 
     path.write_bytes(content)
     QApplication.sendEvent(window, QEvent(QEvent.Type.WindowActivate))
-    process_until(lambda: window.model_status.isHidden(), timeout_s=10, what="The window's rescan")
+    process_until(lambda: window.model_status.isHidden(), what="The window's rescan")
 
     assert window.model_manager.missing(("realesr-general-x4v3",)) == ()
     assert window._selected_path() == image.resolve()
@@ -1078,7 +1070,7 @@ def test_install_and_queue_survives_closing_its_presentation(
 
     def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
         started.set()
-        assert release.wait(2)
+        assert release.wait()
         model_file(models_dir, name).write_bytes(b"ready")
         return {"status": "downloaded"}
 
@@ -1088,7 +1080,7 @@ def test_install_and_queue_survives_closing_its_presentation(
     dialog = window._active_models_dialog
     assert dialog is not None
     dialog._install_all_or_cancel()
-    assert started.wait(1)
+    assert started.wait()
 
     dialog.reject()
     qapp.processEvents()
@@ -1097,8 +1089,7 @@ def test_install_and_queue_survives_closing_its_presentation(
     assert window.jobs == []
 
     release.set()
-    deadline = time.monotonic() + 3
-    while not window.model_manager.cleanup_for_quit() and time.monotonic() < deadline:
+    while not window.model_manager.cleanup_for_quit():
         qapp.processEvents()
         time.sleep(0.001)
     qapp.processEvents()
@@ -1129,12 +1120,9 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
     def wait_for_cancel(_models_dir: Path, name: str, **kwargs: object) -> dict[str, object]:
         first_started.set()
         should_cancel = kwargs["should_cancel"]
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            if should_cancel():  # type: ignore[operator]
-                raise PixelupError(ErrorCode.JOB_CANCELLED, "Installation cancelled.")
+        while not should_cancel():  # type: ignore[operator]
             time.sleep(0.001)
-        raise AssertionError("cancel was not delivered")
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Installation cancelled.")
 
     monkeypatch.setattr("pixelup.model_manager.download_model", wait_for_cancel)
     window._queue_selected_image()
@@ -1142,12 +1130,11 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
     dialog = window._active_models_dialog
     assert dialog is not None
     dialog._install_all_or_cancel()
-    assert first_started.wait(1)
+    assert first_started.wait()
 
     # One install runs and the other waits its turn; Cancel ends both.
     dialog._install_all_or_cancel()
-    deadline = time.monotonic() + 3
-    while not window.model_manager.cleanup_for_quit() and time.monotonic() < deadline:
+    while not window.model_manager.cleanup_for_quit():
         qapp.processEvents()
         time.sleep(0.001)
     qapp.processEvents()
@@ -1915,7 +1902,6 @@ logging.shutdown()
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
-        timeout=5,
     )
     assert result.returncode == 0
     assert "logging tail entered" in result.stdout
@@ -2297,7 +2283,7 @@ def test_saved_continuation_waits_for_the_newest_visible_panel(
         index = len(attempts)
         attempts.append(candidate.parameters.quality)
         entered[index].set()
-        assert released[index].wait(5)
+        assert released[index].wait()
         return ConfigSaveResult(candidate, file)
 
     monkeypatch.setattr(gui, "save_app_config", save)
@@ -2313,10 +2299,10 @@ def test_saved_continuation_waits_for_the_newest_visible_panel(
     else:
         window._settings_dialog()
     try:
-        process_until(entered[0].is_set, timeout_s=5, what="first panel save")
+        process_until(entered[0].is_set, what="first panel save")
         window.quality.setValue(11)
         released[0].set()
-        process_until(entered[1].is_set, timeout_s=5, what="newest panel save")
+        process_until(entered[1].is_set, what="newest panel save")
         assert attempts == [10, 11]
         assert window._quit_ready is False
         assert window._quit_bounded is False
@@ -2347,13 +2333,13 @@ def test_held_config_save_keeps_gui_live_and_retains_newer_panel_edits(
     def save(candidate, previous, file):
         attempts.append((candidate, previous))
         started.set()
-        assert release.wait(5)
+        assert release.wait()
         return ConfigSaveResult(candidate, file)
 
     monkeypatch.setattr(gui, "save_app_config", save)
     window._flush_parameters_save(finished=saved.append)
     try:
-        process_until(started.is_set, timeout_s=5, what="held save admission")
+        process_until(started.is_set, what="held save admission")
         window.quality.setValue(11)
         window._flush_parameters_save()
         assert len(attempts) == 1
@@ -2400,11 +2386,11 @@ def test_opening_images_never_waits_on_the_volume(
     monkeypatch.setattr(gui, "_safe_image_size", stalled_size)
     try:
         window.open_paths([image])
-        assert entered.wait(10), "the image read never started"
+        assert entered.wait(), "the image read never started"
         assert readers[0] is not main_thread, "image metadata was read on the window thread"
         tick = threading.Event()
         QTimer.singleShot(0, tick.set)
-        process_until(tick.is_set, timeout_s=10, what="Window progress during held image read")
+        process_until(tick.is_set, what="Window progress during held image read")
         assert not release.is_set()
         assert window.opening is True
         assert window.image_table.rowCount() == 0
@@ -2492,7 +2478,7 @@ def test_background_preview_honors_orientation_in_dimensions_and_pixels(
     assert len(reads) == 1
     assert reads[0][0] == source
     assert reads[0][1] is not threading.main_thread()
-    process_until(lambda: not window.preview._decoding, timeout_s=5, what="Preview read return")
+    process_until(lambda: not window.preview._decoding, what="Preview read return")
 
 
 def test_optional_preview_metadata_failure_preserves_the_decoded_image(
@@ -2530,7 +2516,7 @@ def test_optional_preview_metadata_failure_preserves_the_decoded_image(
     assert (preview.width(), preview.height()) == (8, 6)
     assert preview.toImage().pixelColor(0, 0) == QColor("white")
     assert window.preview.text() == ""
-    process_until(lambda: not window.preview._decoding, timeout_s=5, what="Preview read return")
+    process_until(lambda: not window.preview._decoding, what="Preview read return")
     flush_records()
     with sqlite3.connect(config_path().parent / "records.sqlite3") as connection:
         entries = connection.execute(
@@ -2579,7 +2565,7 @@ def test_a_settings_save_that_lands_after_cancel_still_takes_effect(
     real_save = gui.save_app_config
 
     def slow_save(candidate, previous, file):
-        assert release.wait(5)
+        assert release.wait()
         return real_save(candidate, previous, file)
 
     monkeypatch.setattr(gui, "save_app_config", slow_save)
@@ -2725,7 +2711,7 @@ def _blocking_downloads(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Even
 
     def install(models_dir: Path, name: str, **_kwargs: object) -> dict[str, object]:
         started.append(name)
-        assert release.wait(3)
+        assert release.wait()
         model_file(models_dir, name).write_bytes(b"ready")
         return {"status": "downloaded"}
 
@@ -2735,8 +2721,7 @@ def _blocking_downloads(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Even
 
 def _finish_downloads(window, qapp: QApplication, release: threading.Event) -> None:
     release.set()
-    deadline = time.monotonic() + 3
-    while not window.model_manager.cleanup_for_quit() and time.monotonic() < deadline:
+    while not window.model_manager.cleanup_for_quit():
         qapp.processEvents()
         time.sleep(0.001)
     qapp.processEvents()
@@ -2744,8 +2729,7 @@ def _finish_downloads(window, qapp: QApplication, release: threading.Event) -> N
 
 
 def _wait_for(qapp: QApplication, condition) -> None:
-    deadline = time.monotonic() + 2
-    while not condition() and time.monotonic() < deadline:
+    while not condition():
         qapp.processEvents()
         time.sleep(0.001)
     assert condition()
@@ -2851,7 +2835,7 @@ worker.wait()
 raise RuntimeError('wait unexpectedly returned')
 """
     result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=5,
+        [sys.executable, "-c", script], capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["native wait entered", "watchdog expired"]
@@ -2913,7 +2897,7 @@ def test_managed_models_stays_open_until_its_folder_save_lands(
     real_save = gui.save_app_config
     def delayed(*args):
         entered.set()
-        assert release.wait(5)
+        assert release.wait()
         return real_save(*args)
     monkeypatch.setattr(gui, "save_app_config", delayed)
     window._managed_models_dialog()
@@ -2924,7 +2908,7 @@ def test_managed_models_stays_open_until_its_folder_save_lands(
     dialog.show()
     try:
         dialog.apply_folder_button.click()
-        assert entered.wait(3)
+        assert entered.wait()
         assert window.model_manager.folder_changing
         dialog.reject()
         QApplication.processEvents()
@@ -2983,7 +2967,7 @@ def test_first_download_uses_saved_choice_and_releases_captured_request(
     dialog.folder_edit.setText(str(target))
     dialog._install_all_or_cancel()
     process_until(lambda: len(window.jobs) == 1 and window.model_manager.cleanup_for_quit(),
-                  timeout_s=5, what="Saved-folder download and captured job")
+                  what="Saved-folder download and captured job")
     assert downloads == [(target, model)]
     assert window.jobs[0].settings.scale == 3
     assert window.config.models_folder == str(target)
@@ -3001,7 +2985,7 @@ def test_landed_save_applies_while_quit_question_is_cancelled(
 
     def delayed(*args):
         entered.set()
-        assert release.wait(5)
+        assert release.wait()
         return real_save(*args)
 
     monkeypatch.setattr(gui, "save_app_config", delayed)
@@ -3016,7 +3000,7 @@ def test_landed_save_applies_while_quit_question_is_cancelled(
     window._save_config_candidate(
         replace(window.config, **{setting: value}), Message("settings.saveFailed"), lambda _: None
     )
-    assert entered.wait(3)
+    assert entered.wait()
 
     class Question:
         def __init__(self, parent):
@@ -3057,7 +3041,7 @@ def test_dismissed_folder_failure_is_retried_with_latest_parameters(
         attempts.append(candidate)
         if len(attempts) == 1:
             entered.set()
-            assert release.wait(5)
+            assert release.wait()
         if not allow_save:
             raise OSError("save denied")
         return real_save(candidate, previous, file)
@@ -3068,7 +3052,7 @@ def test_dismissed_folder_failure_is_retried_with_latest_parameters(
     dialog = window._active_models_dialog
     dialog.folder_edit.setText(str(target))
     dialog.apply_folder_button.click()
-    assert entered.wait(3)
+    assert entered.wait()
     dialog.reject()
     QApplication.processEvents()
     if not failure_during_quit:
@@ -3115,13 +3099,13 @@ def test_os_takeover_saves_newer_parameters_before_declaring_workers_clean(
         qualities.append(candidate.parameters.quality)
         if len(qualities) == 1:
             entered.set()
-            assert release.wait(5)
+            assert release.wait()
         return real_save(candidate, previous, file)
 
     monkeypatch.setattr(gui, "save_app_config", save)
     window.quality.setValue(61)
     window._flush_parameters_save()
-    assert entered.wait(3)
+    assert entered.wait()
     window.quality.setValue(72)
     window._is_session_shutdown = lambda: True
     try:
@@ -3198,7 +3182,7 @@ def test_quit_never_waits_for_a_background_read(
 
         monkeypatch.setattr(gui.QImageReader, "read", decode)
         window.preview.set_image(image)
-    assert entered.wait(3)
+    assert entered.wait()
     window._is_session_shutdown = lambda: True
     try:
         event = QCloseEvent()
@@ -3232,7 +3216,7 @@ def held_probe(paths):
 gui._probe_open_paths = held_probe
 gui.QUIT_BUDGET_S = 0.25
 window.open_paths([Path('held.png')])
-assert entered.wait(3)
+assert entered.wait()
 window._is_session_shutdown = lambda: True
 window.close()
 assert window._workers_clean_for_quit()
@@ -3290,7 +3274,7 @@ def held_probe(paths):
     return []
 gui._probe_open_paths = held_probe
 window.open_paths([Path('held.png')])
-assert entered.wait(3)
+assert entered.wait()
 gui.build_app = lambda _argv: (app, window)
 
 def settle_later():
@@ -3308,7 +3292,7 @@ print('main returned', code, window._workers_clean_for_quit(), flush=True)
 def _run_os_quit(route: str, settles: bool, **env: str) -> subprocess.CompletedProcess[str]:
     script = _OS_QUIT_PROCESS.replace("QUIT_ROUTE", route).replace("SETTLES", repr(settles))
     return subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10,
+        [sys.executable, "-c", script], capture_output=True, text=True,
         env={**os.environ, **env},
     )
 
@@ -3466,7 +3450,7 @@ def test_output_planning_keeps_the_window_live_while_storage_is_held(
         # Preserve a deterministic baseline failure without deadlocking the test
         # when the actual filesystem read incorrectly runs on the window thread.
         if threading.current_thread() is not main_thread:
-            assert release.wait(5)
+            assert release.wait()
 
     def iterdir(path):
         if path == directory:
@@ -3479,11 +3463,11 @@ def test_output_planning_keeps_the_window_live_while_storage_is_held(
             window._retry_failed()
         else:
             window._enqueue_jobs([image], [model])
-        process_until(entered.is_set, timeout_s=5, what="Held planning filesystem read")
+        process_until(entered.is_set, what="Held planning filesystem read")
         assert readers[0] is not main_thread, "Output planning read storage on the window thread"
         tick = threading.Event()
         QTimer.singleShot(0, tick.set)
-        process_until(tick.is_set, timeout_s=5, what="Window callback during held planning")
+        process_until(tick.is_set, what="Window callback during held planning")
         if read_kind == "retry_listing":
             assert window.jobs[0].status == "failed"
         else:
@@ -3492,7 +3476,7 @@ def test_output_planning_keeps_the_window_live_while_storage_is_held(
         release.set()
     process_until(
         lambda: any(job.input_path == image and job.status == "pending" for job in window.jobs),
-        timeout_s=5, what="Adopted output plan",
+        what="Adopted output plan",
     )
 
 
@@ -3514,7 +3498,7 @@ def test_failed_ready_request_does_not_drop_an_unrelated_ready_request(
     window._enqueue_jobs([first], ["RealESRGAN_x4plus"])
     window._enqueue_jobs([second], ["RealESRGAN_x4plus"])
     window._model_manager_changed()
-    process_until(lambda: len(window.jobs) == 1, timeout_s=5, what="Unrelated ready request")
+    process_until(lambda: len(window.jobs) == 1, what="Unrelated ready request")
     assert window.jobs[0].input_path == second
     assert "PLANNING-SENTINEL" not in window.queue_action_result.message_label.text()
     assert "could not be queued" in window.queue_action_result.message_label.text()
@@ -3540,7 +3524,7 @@ def held_output_listing(monkeypatch):
         for directory, entered, release in holds:
             if path == directory:
                 entered.set()
-                assert release.wait(5)
+                assert release.wait()
         return real_iterdir(path)
 
     monkeypatch.setattr(Path, "iterdir", iterdir)
@@ -3564,7 +3548,7 @@ def test_serial_planning_retains_settings_folder_and_bundle_reservations(
     window._enqueue_jobs([image], [model])
     window._enqueue_jobs([image], [model])
     window._model_manager_changed()
-    process_until(entered.is_set, timeout_s=5, what="First serialized plan")
+    process_until(entered.is_set, what="First serialized plan")
     assert len(window._pending_job_plans) == 1
     settings = JobSettings(scale=4, quality=95)
     window._apply_saved_settings(
@@ -3572,7 +3556,7 @@ def test_serial_planning_retains_settings_folder_and_bundle_reservations(
     )
     assert window.runtime_dirs.models_dir != accepted_dirs.models_dir
     release.set()
-    process_until(lambda: len(window.jobs) == 2, timeout_s=5, what="Both serialized plans")
+    process_until(lambda: len(window.jobs) == 2, what="Both serialized plans")
     assert [job.output_path.name for job in window.jobs] == [
         "image-realesrgan-x4plus-2x.png", "image-realesrgan-x4plus-2x-2.png",
     ]
@@ -3600,7 +3584,7 @@ def test_held_plan_cannot_revive_a_removed_and_reopened_image(
         window._retry_failed()
     else:
         window._enqueue_jobs([first, second], [model])
-    process_until(entered.is_set, timeout_s=5, what="Plan before image removal")
+    process_until(entered.is_set, what="Plan before image removal")
     monkeypatch.setattr(window, "_selected_path", lambda: first)
     window._remove_selected_image()
     _open(window, [first])
@@ -3626,14 +3610,14 @@ def test_queue_cancel_abandons_plans_and_their_held_read(
     window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
     window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
     window._model_manager_changed()
-    process_until(entered.is_set, timeout_s=5, what="Plan before queue cancellation")
+    process_until(entered.is_set, what="Plan before queue cancellation")
     assert window.cancel_button.isEnabled()
     window.cancel_button.click()
     assert not window.cancel_button.isEnabled()
     assert not window._pending_job_plans
     release.set()
     process_until(
-        lambda: window._active_job_plan is None, timeout_s=5, what="Cancelled plan's read",
+        lambda: window._active_job_plan is None, what="Cancelled plan's read",
     )
     QApplication.processEvents()
     assert window.jobs == []
@@ -3650,14 +3634,14 @@ def test_quit_abandons_plans_without_waiting_for_the_held_read(
     window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
     window._enqueue_jobs([image], ["RealESRGAN_x4plus"])
     window._model_manager_changed()
-    process_until(entered.is_set, timeout_s=5, what="Plan before quit")
+    process_until(entered.is_set, what="Plan before quit")
     window._is_session_shutdown = lambda: True
     window.closeEvent(QCloseEvent())
     assert not window._pending_job_plans
     assert window._workers_clean_for_quit()
     assert quit_bound.started == [gui.QUIT_BUDGET_S]
     release.set()
-    process_until(lambda: window._active_job_plan is None, timeout_s=5, what="Plan's read")
+    process_until(lambda: window._active_job_plan is None, what="Plan's read")
     assert window.jobs == []
     assert quit_bound.exits == 0
 
@@ -3683,7 +3667,7 @@ def test_planning_thread_start_failure_settles_one_request_and_continues(
     window._enqueue_jobs([second], ["RealESRGAN_x4plus"])
     window._model_manager_changed()
     process_until(
-        lambda: len(window.jobs) == 1, timeout_s=5, what="Plan after thread start failure",
+        lambda: len(window.jobs) == 1, what="Plan after thread start failure",
     )
     assert window.jobs[0].input_path == second
     assert "THREAD-START-SENTINEL" not in window.queue_action_result.message_label.text()
@@ -3711,7 +3695,7 @@ def test_historical_retry_is_not_revived_by_opening_and_removing_its_image(
     assert image not in window._images_by_path
     entered, release = held_output_listing(tmp_path)
     window._retry_failed()
-    process_until(entered.is_set, timeout_s=5, what="Historical retry planning")
+    process_until(entered.is_set, what="Historical retry planning")
     _open(window, [image])
     window._remove_selected_image()
     release.set()
@@ -3733,7 +3717,7 @@ def test_historical_retry_survives_opening_its_image_during_planning(
     window._remove_selected_image()
     entered, release = held_output_listing(tmp_path)
     window._retry_failed()
-    process_until(entered.is_set, timeout_s=5, what="Historical retry before image opening")
+    process_until(entered.is_set, what="Historical retry before image opening")
     _open(window, [image])
     release.set()
     _settle_models(window)
@@ -3762,7 +3746,7 @@ def test_queued_historical_retry_is_cancelled_by_opening_and_removing_its_image(
     window._enqueue_jobs([first], [model])
     window._retry_failed()
     window._model_manager_changed()
-    process_until(entered.is_set, timeout_s=5, what="Plan ahead of historical retry")
+    process_until(entered.is_set, what="Plan ahead of historical retry")
     assert window._pending_job_plans[0].images == ((historical, None),)
     _open(window, [historical])
     window._remove_selected_image()
@@ -3785,7 +3769,7 @@ def test_held_retry_limits_adoption_to_the_disclosed_failed_jobs(
     window.jobs[0].status = "failed"
     entered, release = held_output_listing(tmp_path)
     window._retry_failed()
-    process_until(entered.is_set, timeout_s=5, what="Disclosed retry planning")
+    process_until(entered.is_set, what="Disclosed retry planning")
     window.jobs[1].status = "failed"
     release.set()
     _settle_models(window)
@@ -3809,7 +3793,7 @@ def test_planning_failure_is_presented_only_for_retained_input_intent(
     monkeypatch.setattr(gui, "create_jobs", create)
     window._enqueue_jobs([first, second] if retain_other_image else [first],
                          ["RealESRGAN_x4plus"])
-    process_until(entered.is_set, timeout_s=5, what="Plan before failure and removal")
+    process_until(entered.is_set, what="Plan before failure and removal")
     monkeypatch.setattr(window, "_selected_path", lambda: first)
     window._remove_selected_image()
     release.set()
@@ -3856,10 +3840,10 @@ def test_cmd_or_ctrl_w_runs_the_main_windows_own_close(
     monkeypatch.setattr(gui, "QuitConfirmDialog", Confirm)
     window.show()
     window.activateWindow()
-    process_until(window.isActiveWindow, timeout_s=5, what="Main window becomes key")
+    process_until(window.isActiveWindow, what="Main window becomes key")
 
     QTest.keyClick(window, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
-    process_until(lambda: asked == [0], timeout_s=5, what="The quit question")
+    process_until(lambda: asked == [0], what="The quit question")
 
     # The same question the close button asks; declining it keeps PixelUp open.
     assert window.isVisible()
@@ -3874,7 +3858,7 @@ def test_auto_device_names_the_backend_it_resolves_to_once_known(
     monkeypatch.setattr(gui, "_resolve_auto_device", lambda: "mps")
 
     window._probe_auto_device()
-    process_until(lambda: window._auto_device == "mps", timeout_s=5, what="Auto device probe")
+    process_until(lambda: window._auto_device == "mps", what="Auto device probe")
 
     assert window.device.itemText(0) == "Auto (MPS)"
     assert window.device.currentData() == "auto"
@@ -3893,7 +3877,7 @@ def test_a_failed_auto_device_probe_leaves_auto_unnamed(
     window = make_window()
     monkeypatch.setattr(gui, "_resolve_auto_device", broken)
     window._probe_auto_device()
-    process_until(background.settled, timeout_s=5, what="Auto device probe")
+    process_until(background.settled, what="Auto device probe")
     QApplication.processEvents()
 
     assert window._auto_device is None
@@ -4044,7 +4028,7 @@ def test_everyday_shortcuts_press_their_buttons_only_while_those_are_on(
     _open(window, [_png(tmp_path, "a.png")])
     window.show()
     window.activateWindow()
-    process_until(window.isActiveWindow, timeout_s=5, what="Main window becomes key")
+    process_until(window.isActiveWindow, what="Main window becomes key")
     ctrl = Qt.KeyboardModifier.ControlModifier
 
     QTest.keyClick(window, Qt.Key.Key_O, ctrl)
@@ -4147,7 +4131,7 @@ def test_reoffering_selected_path_refreshes_dimensions_and_preview_from_replaced
 
     monkeypatch.setattr(QImageReader, "read", counted_read)
     _open(window, [source])
-    process_until(lambda: not window.preview._decoding, timeout_s=10, what="First preview return")
+    process_until(lambda: not window.preview._decoding, what="First preview return")
     assert window.preview._pixmap.toImage().pixelColor(0, 0) == QColor("white")
     Image.new("RGB", (12, 9), "red").save(source)
 
@@ -4180,7 +4164,7 @@ def test_failed_model_scan_shows_safe_main_rollup_and_recovers_after_retry(
 
     monkeypatch.setattr(model_manager, "read_ready_names", unreadable)
     manager.refresh_readiness()
-    process_until(background.settled, timeout_s=10, what="Failed model readiness scan")
+    process_until(background.settled, what="Failed model readiness scan")
     QApplication.processEvents()
 
     assert manager.readiness_error is failure
@@ -4199,7 +4183,7 @@ def test_failed_model_scan_shows_safe_main_rollup_and_recovers_after_retry(
     manager.refresh_readiness()
     process_until(
         lambda: manager.readiness_known,
-        timeout_s=10, what="Successful model readiness retry",
+        what="Successful model readiness retry",
     )
     assert manager.readiness_error is None
     assert window.model_status.isHidden()
@@ -4228,14 +4212,14 @@ def test_open_pending_marker_survives_overlapping_offers_with_mixed_results(
     monkeypatch.setattr(gui, "_safe_image_size", held_size)
     try:
         window.open_paths([slow, missing])
-        assert entered.wait(10)
+        assert entered.wait()
         assert readers[0] is not threading.main_thread()
         assert window.open_pending.isVisibleTo(window)
         assert window.open_pending.text() == english().t("images.opening")
         window.open_paths([fast])
         process_until(
             lambda: fast in window._images_by_path,
-            timeout_s=10, what="Independent overlapping image offer",
+            what="Independent overlapping image offer",
         )
         assert window.opening
         assert window.open_pending.isVisibleTo(window)

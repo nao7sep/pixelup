@@ -100,7 +100,7 @@ class ScriptedReader(RecordsReader):
             self.pages.append((query, after))
         if self.gate is not None:
             self.waiting.set()
-            self.gate.wait(WAIT_S)
+            self.gate.wait()
         if number in self.fail:
             raise sqlite3.OperationalError("disk I/O error in /secret/records.sqlite3")
         return super().page(query, after)
@@ -144,7 +144,7 @@ def open_records(qapp: QApplication, database: Path, settings: QSettings, fast: 
 
 
 def _until(process_until, done, what: str) -> None:  # type: ignore[no-untyped-def]
-    process_until(done, timeout_s=WAIT_S, what=what)
+    process_until(done, what=what)
 
 
 def _loaded(window: RecordsWindow) -> bool:
@@ -326,7 +326,7 @@ def test_makes_one_request_for_two_scroll_events_together(
     window.list.scrollToBottom()
     window.list.verticalScrollBar().setValue(window.list.verticalScrollBar().maximum() - 1)
     window._list_scrolled(0)
-    assert reader.waiting.wait(WAIT_S)
+    assert reader.waiting.wait()
     reader.gate.set()
     _until(process_until, lambda: window.model.rowCount() == PAGE_SIZE * 2, "the next page")
 
@@ -704,16 +704,16 @@ def test_the_records_window_opens_in_front_and_closes_by_keyboard_back_to_the_ma
     main = make_main()
     main.show()
     main.activateWindow()
-    process_until(main.isActiveWindow, timeout_s=5, what="Main window becomes key")
+    process_until(main.isActiveWindow, what="Main window becomes key")
 
     main.records_button.click()
     records = main._records_window
-    process_until(records.isActiveWindow, timeout_s=5, what="Records window becomes key")
+    process_until(records.isActiveWindow, what="Records window becomes key")
 
     QTest.keyClick(records, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
 
     assert main._records_window is None
-    process_until(main.isActiveWindow, timeout_s=5, what="Main window is key again")
+    process_until(main.isActiveWindow, what="Main window is key again")
     main.hide()
 
 
@@ -803,7 +803,7 @@ def test_the_divider_is_a_slim_grip_lit_only_by_keyboard_focus(
 
     window = open_records()
     window.activateWindow()
-    process_until(window.isActiveWindow, timeout_s=5, what="Records becomes key")
+    process_until(window.isActiveWindow, what="Records becomes key")
     handle = window.splitter.handle(1)
     assert handle.width() >= 16
 

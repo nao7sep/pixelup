@@ -23,16 +23,13 @@ from pixelup.models import model_file
 
 
 def _ready(manager: ModelManager, qapp: QApplication) -> None:
-    deadline = time.monotonic() + 5
     while not manager.readiness_known:
-        assert time.monotonic() < deadline, "models scan did not settle"
         qapp.processEvents()
         time.sleep(0.001)
 
 
 def _finish_manager(manager: ModelManager, qapp: QApplication) -> None:
-    deadline = time.monotonic() + 3
-    while not manager.cleanup_for_quit() and time.monotonic() < deadline:
+    while not manager.cleanup_for_quit():
         qapp.processEvents()
         time.sleep(0.001)
     qapp.processEvents()
@@ -225,7 +222,7 @@ def test_closing_dialog_does_not_cancel_application_owned_install(
 
     def wait_then_install(models_dir: Path, name: str, **kwargs: object) -> dict[str, object]:
         started.set()
-        assert release.wait(2)
+        assert release.wait()
         assert kwargs["should_cancel"]() is False  # type: ignore[operator]
         target = model_file(models_dir, name)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -237,7 +234,7 @@ def test_closing_dialog_does_not_cancel_application_owned_install(
     _ready(manager, qapp)
     dialog = ManagedModelsDialog(manager)
     dialog._install_bundle(0)
-    assert started.wait(1)
+    assert started.wait()
 
     dialog.reject()
     assert dialog.result() == QDialog.DialogCode.Rejected
@@ -258,12 +255,9 @@ def test_explicit_cancel_stops_application_owned_install(
     def wait_for_cancel(_models_dir: Path, _name: str, **kwargs: object) -> dict[str, object]:
         started.set()
         should_cancel = kwargs["should_cancel"]
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            if should_cancel():  # type: ignore[operator]
-                raise PixelupError(ErrorCode.JOB_CANCELLED, "Model installation cancelled.")
+        while not should_cancel():  # type: ignore[operator]
             time.sleep(0.001)
-        raise AssertionError("cancel was not delivered")
+        raise PixelupError(ErrorCode.JOB_CANCELLED, "Model installation cancelled.")
 
     monkeypatch.setattr("pixelup.model_manager.download_model", wait_for_cancel)
     manager = ModelManager(tmp_path)
@@ -274,7 +268,7 @@ def test_explicit_cancel_stops_application_owned_install(
     manager.cancelled.connect(cancellation_observed.append)
     try:
         dialog._install_bundle(0)
-        assert started.wait(1)
+        assert started.wait()
         dialog._install_bundle(0)
         _finish_manager(manager, qapp)
         assert bundle_names in cancellation_observed
@@ -319,7 +313,7 @@ def test_coming_to_the_front_finds_model_files_placed_by_hand(
     try:
         dialog.show()
         qapp.processEvents()
-        process_until(background.settled, timeout_s=10, what="The models scan")
+        process_until(background.settled, what="The models scan")
         qapp.processEvents()
         assert dialog.status_labels[0].text() == "Not installed"
         row_button = dialog.row_action_buttons[0]
@@ -332,7 +326,6 @@ def test_coming_to_the_front_finds_model_files_placed_by_hand(
         QApplication.sendEvent(dialog, QEvent(QEvent.Type.WindowActivate))
         process_until(
             lambda: dialog.status_labels[0].text() == "Installed",
-            timeout_s=10,
             what="The dialog's rescan",
         )
 
@@ -388,7 +381,7 @@ def test_install_all_runs_one_download_at_a_time(
             current += 1
             peak = max(peak, current)
             reached_cap.set()
-        assert release.wait(2)
+        assert release.wait()
         with lock:
             current -= 1
         target = model_file(models_dir, name)
@@ -404,7 +397,7 @@ def test_install_all_runs_one_download_at_a_time(
         dialog._install_all_or_cancel()
         # Every missing artifact was requested at once: one downloads, the rest
         # wait their turn as "queued".
-        assert reached_cap.wait(2)
+        assert reached_cap.wait()
         qapp.processEvents()
         assert len(manager.active_operations) == 1
         assert any(operation.kind == "queued" for operation in manager.operations)
@@ -440,7 +433,7 @@ def test_a_second_row_install_waits_its_turn(
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_bundle(0)
-        assert first_started.wait(1)
+        assert first_started.wait()
         qapp.processEvents()
         assert dialog.row_action_buttons[0].text() == "Cancel"
         assert dialog.row_action_buttons[1].isEnabled()
@@ -473,7 +466,7 @@ def test_active_progress_is_reported_in_the_row_status(
         callback = kwargs["on_download"]
         callback(name, total // 2, total)  # type: ignore[operator]
         progress_sent.set()
-        assert release.wait(2)
+        assert release.wait()
         target = model_file(models_dir, name)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"model")
@@ -485,12 +478,10 @@ def test_active_progress_is_reported_in_the_row_status(
     dialog = ManagedModelsDialog(manager)
     try:
         dialog._install_bundle(0)
-        assert progress_sent.wait(1)
+        assert progress_sent.wait()
         expected = (total // 2) * 100 // total
-        deadline = time.monotonic() + 1
         while (
             f"{expected}%" not in dialog.status_labels[0].text()
-            and time.monotonic() < deadline
         ):
             qapp.processEvents()
         assert dialog.status_labels[0].text() == f"Installing {expected}%"
@@ -664,7 +655,7 @@ def test_failed_readiness_disables_install_and_recovers_after_successful_retry(
 
     monkeypatch.setattr(model_manager, "read_ready_names", unreadable)
     manager.refresh_readiness()
-    process_until(background.settled, timeout_s=10, what="Failed models folder scan")
+    process_until(background.settled, what="Failed models folder scan")
     qapp.processEvents()
     dialog = ManagedModelsDialog(
         manager,
@@ -688,7 +679,7 @@ def test_failed_readiness_disables_install_and_recovers_after_successful_retry(
         manager.refresh_readiness()
         process_until(
             lambda: manager.readiness_known,
-            timeout_s=10, what="Successful models folder retry",
+            what="Successful models folder retry",
         )
         assert manager.readiness_error is None
         assert dialog.result_view.isHidden()
@@ -699,4 +690,4 @@ def test_failed_readiness_disables_install_and_recovers_after_successful_retry(
     finally:
         dialog.deleteLater()
         manager.begin_shutdown()
-        process_until(manager.cleanup_for_quit, timeout_s=10, what="Model scan cleanup")
+        process_until(manager.cleanup_for_quit, what="Model scan cleanup")

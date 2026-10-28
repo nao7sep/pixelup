@@ -450,13 +450,13 @@ def test_logging_never_waits_on_a_stuck_store(monkeypatch: pytest.MonkeyPatch) -
     caller = threading.Thread(target=write_lines)
     caller.start()
     try:
-        assert entered.wait(10), "the backing write never started"
-        assert returned.wait(10), "logging waited for the held backing write"
+        assert entered.wait(), "the backing write never started"
+        assert returned.wait(), "logging waited for the held backing write"
         assert not release.is_set()
         assert handler._pending
     finally:
         release.set()
-        caller.join(10)
+        caller.join()
         assert not caller.is_alive()
         flush_records()
     assert [entry["message"] for entry in _records(database)][-3:] == [

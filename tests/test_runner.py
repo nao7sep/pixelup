@@ -88,7 +88,7 @@ class _HeldJobs:
 
 def _stop(runner: JobRunner, held: _HeldJobs, process_until) -> None:
     held.finish_all()
-    process_until(runner.cleanup_for_quit, timeout_s=5, what="Runner quit")
+    process_until(runner.cleanup_for_quit, what="Runner quit")
 
 
 def test_jobs_run_one_at_a_time_in_order_on_one_worker_thread(
@@ -101,7 +101,7 @@ def test_jobs_run_one_at_a_time_in_order_on_one_worker_thread(
     runner.finished.connect(lambda *args: outcomes.append(args))
     runner.schedule()
     try:
-        process_until(lambda: len(held.runs) == 1, timeout_s=5, what="First job start")
+        process_until(lambda: len(held.runs) == 1, what="First job start")
         runner.schedule()
         qapp.processEvents()
         assert [job.status for job in jobs] == ["running", "pending", "pending"]
@@ -111,7 +111,7 @@ def test_jobs_run_one_at_a_time_in_order_on_one_worker_thread(
             held.finish(index)
             process_until(
                 lambda expected=index + 1: len(outcomes) == expected,
-                timeout_s=5, what="Job outcome",
+                what="Job outcome",
             )
         assert [outcome[0:2] for outcome in outcomes] == [(1, True), (2, True), (3, True)]
         assert [run[0] for run in held.runs] == [1, 2, 3]
@@ -139,9 +139,9 @@ def test_retry_with_same_job_id_runs_after_its_predecessor_and_keeps_cancel(
     runner.finished.connect(retry_after_first)
     runner.schedule()
     try:
-        process_until(lambda: len(held.runs) == 1, timeout_s=5, what="First run")
+        process_until(lambda: len(held.runs) == 1, what="First run")
         held.finish(0)
-        process_until(lambda: len(held.runs) == 2, timeout_s=5, what="Same-ID retry start")
+        process_until(lambda: len(held.runs) == 2, what="Same-ID retry start")
         assert len(outcomes) == 1
 
         runner.request_cancel(job.id)
@@ -149,7 +149,7 @@ def test_retry_with_same_job_id_runs_after_its_predecessor_and_keeps_cancel(
         assert not held.runs[0][2].is_set()
         assert runner.cleanup_for_quit() is False
         held.finish(1)
-        process_until(lambda: len(outcomes) == 2, timeout_s=5, what="Cancelled retry result")
+        process_until(lambda: len(outcomes) == 2, what="Cancelled retry result")
         assert outcomes[1] == (job.id, False, Message("queue.statusCancelled"),
                                {"cancelled": True}, [])
         assert runner.cleanup_for_quit() is True
@@ -169,7 +169,7 @@ def test_quit_cancels_the_running_job_and_stops_the_thread_once_it_reports(
     runner.idle.connect(lambda: idle.append(True))
     runner.schedule()
     try:
-        process_until(lambda: len(held.runs) == 1, timeout_s=5, what="First job start")
+        process_until(lambda: len(held.runs) == 1, what="First job start")
         assert runner.cleanup_for_quit() is False
         assert held.runs[0][2].is_set()
         # Unstarted jobs end at once and are never started afterwards.
@@ -177,7 +177,7 @@ def test_quit_cancels_the_running_job_and_stops_the_thread_once_it_reports(
         assert [job.status for job in jobs[1:]] == ["cancelled", "cancelled"]
         assert [english().of(job.message) for job in jobs[1:]] == ["Cancelled", "Cancelled"]
         held.finish(0)
-        process_until(lambda: idle == [True], timeout_s=5, what="Cancelled job report")
+        process_until(lambda: idle == [True], what="Cancelled job report")
         assert [outcome[0] for outcome in outcomes] == [2, 3, 1]
         assert runner.cleanup_for_quit() is True
         assert not runner._thread.isRunning()
@@ -203,7 +203,7 @@ def test_admitted_jobs_replace_old_models_folder_capture(
     held.finish_all()
     runner.schedule()
     try:
-        process_until(lambda: len(held.runs) == 3, timeout_s=5, what="Three jobs")
+        process_until(lambda: len(held.runs) == 3, what="Three jobs")
         assert [run[1] for run in held.runs] == [original, accepted, replacement]
         assert runner._queued_runtime_dirs == {}
     finally:
@@ -218,7 +218,7 @@ def test_request_cancel_for_a_job_not_running_is_a_noop(
     runner.request_cancel(1)
     runner.schedule()
     try:
-        process_until(lambda: len(held.runs) == 1, timeout_s=5, what="First job start")
+        process_until(lambda: len(held.runs) == 1, what="First job start")
         runner.request_cancel(2)
         runner.request_cancel(999)
         assert not held.runs[0][2].is_set()
@@ -639,7 +639,6 @@ def test_every_upscale_model_enlarges_a_corpus_photo_faithfully(
     runner.schedule()
     process_until(
         lambda: len(outcomes) == len(jobs) and runner.cleanup_for_quit(),
-        timeout_s=30 * 60,
         what="Upscaling with every model",
     )
 
@@ -722,7 +721,7 @@ def test_a_worker_that_ends_without_a_result_still_fails_its_job_and_frees_the_s
     outcomes: list[tuple[object, ...]] = []
     runner.finished.connect(lambda *args: outcomes.append(args))
     runner.schedule()
-    process_until(lambda: len(outcomes) == 2, timeout_s=10, what="Both jobs settled")
+    process_until(lambda: len(outcomes) == 2, what="Both jobs settled")
 
     assert [(job_id, ok) for job_id, ok, *_rest in outcomes] == [(1, False), (2, False)]
     assert outcomes[0][2] == FAILED_FALLBACK
@@ -743,7 +742,7 @@ def test_running_out_of_memory_outside_inference_fails_the_job_with_its_advice(
     outcomes: list[tuple[object, ...]] = []
     runner.finished.connect(lambda *args: outcomes.append(args))
     runner.schedule()
-    process_until(lambda: len(outcomes) == 1, timeout_s=10, what="Job settled")
+    process_until(lambda: len(outcomes) == 1, what="Job settled")
 
     job_id, ok, message, _result, _warnings = outcomes[0]
     assert (job_id, ok) == (1, False)

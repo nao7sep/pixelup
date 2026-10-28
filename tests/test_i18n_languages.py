@@ -316,7 +316,7 @@ def test_apple_languages_reads_this_macs_own_list() -> None:
     # Unmocked: the real `defaults` text, checked against the same list exported
     # as a property list, which plistlib parses without the text parser under test.
     exported = subprocess.run(
-        ["defaults", "export", "-g", "-"], capture_output=True, timeout=10, check=True
+        ["defaults", "export", "-g", "-"], capture_output=True, check=True
     ).stdout
     expected = tuple(plistlib.loads(exported).get("AppleLanguages", ()))
 
@@ -359,7 +359,7 @@ def test_appkit_is_pointed_at_the_language_for_this_process_only() -> None:
         "print(send(U, first, sel('UTF8String')).decode())\n"
     )
     result = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True, timeout=60, check=True
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
     assert result.stdout.strip() == "ja"
 

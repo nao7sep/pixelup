@@ -524,7 +524,7 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
         window.quality.setValue(window.quality.value() - 1)
         saved = []
         window._flush_parameters_save(finished=saved.append)
-        process_until(lambda: window._config_save is None, timeout_s=5, what="settings save")
+        process_until(lambda: window._config_save is None, what="settings save")
         assert saved == [False]
         assert window.parameters_result.message == Message("error.configNewer")
         assert (home / "config.json").read_text(encoding="utf-8") == text

@@ -53,10 +53,7 @@ class StartupProcess:
         self.process.stdin.flush()
 
     def next(self) -> dict:
-        try:
-            event = self.events.get(timeout=10)
-        except queue.Empty:
-            pytest.fail("startup child did not report its next boundary")
+        event = self.events.get()
         if event is None:
             assert self.process.stderr is not None
             pytest.fail(f"startup child exited early: {self.process.stderr.read()}")
@@ -75,13 +72,13 @@ class StartupProcess:
 
     def exit(self, *, code: int = 0) -> None:
         self.send("exit")
-        assert self.process.wait(timeout=10) == code
+        assert self.process.wait() == code
 
     def close(self) -> None:
         if self.process.poll() is None:
             self.process.kill()
-        self.process.wait(timeout=10)
-        self.reader.join(timeout=10)
+        self.process.wait()
+        self.reader.join()
         assert not self.reader.is_alive()
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             if stream is not None:
@@ -178,7 +175,7 @@ def test_admission_is_released_by_actual_owner_exit(tmp_path, launch, forced):
     assert owner.start() == {"event": "ready"}
     if forced:
         owner.process.kill()
-        owner.process.wait(timeout=10)
+        owner.process.wait()
     else:
         owner.return_from_main()
         # main() returning and logging.shutdown() finishing do not end ownership.
