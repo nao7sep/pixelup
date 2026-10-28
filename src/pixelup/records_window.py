@@ -108,9 +108,6 @@ INITIAL_SIZE = QSize(1240, 820)
 SEARCH_DELAY_MS = 300
 # New records are read at most this often while they keep arriving.
 LIVE_INTERVAL_MS = 1000
-# How long quitting waits for a read in flight, which its own bound already
-# limits (records.READ_TIMEOUT_SECONDS) and a cancel interrupts at once.
-STOP_WAIT_MS = 2000
 _ROW_PADDING_X = 10
 _ROW_PADDING_Y = 8
 _ROW_LINE_GAP = 2
@@ -269,8 +266,8 @@ class RecordsReads(QObject):
     """The one thread every records read runs on, one read at a time.
 
     Answers arrive on the GUI thread as ``answered`` or ``failed`` with the id
-    ``request`` returned. ``stop`` cancels the read in flight and is part of
-    quitting; ``stopped`` says the thread has ended.
+    ``request`` returned. ``stop`` cancels the read in flight and ends the
+    thread as part of quitting; ``stopped`` says the thread has ended.
     """
 
     answered = Signal(int, object)
@@ -282,27 +279,48 @@ class RecordsReads(QObject):
         super().__init__(parent)
         self._reader = reader
         self._ids = count(1)
+        self._unanswered = 0
         self._thread = QThread(self)
         self._worker = _ReadWorker(reader)
         self._worker.moveToThread(self._thread)
         self._requested.connect(self._worker.run)
-        self._worker.answered.connect(self.answered)
-        self._worker.failed.connect(self.failed)
+        self._worker.answered.connect(self._answered)
+        self._worker.failed.connect(self._failed)
         # The connection is closed on the thread that opened it, as it ends.
         self._thread.finished.connect(self._worker.close, Qt.ConnectionType.DirectConnection)
         self._thread.finished.connect(self.stopped)
+        thread = self._thread
+        # A QThread destroyed while running ends the process; whatever deletes
+        # this owner, its thread stops first.
+        self.destroyed.connect(lambda: (reader.cancel(), thread.quit(), thread.wait()))
         self._thread.start()
+
+    @property
+    def busy(self) -> bool:
+        """Whether a read asked for has not answered yet."""
+        return self._unanswered > 0
 
     def request(self, op: str, argument: object = None) -> int:
         request_id = next(self._ids)
+        self._unanswered += 1
         self._requested.emit(request_id, op, argument)
         return request_id
 
-    def stop(self) -> bool:
-        """Cancel what is in flight and end the thread; whether it ended within the bound."""
+    @Slot(int, object)
+    def _answered(self, request_id: int, result: object) -> None:
+        self._unanswered -= 1
+        self.answered.emit(request_id, result)
+
+    @Slot(int, object)
+    def _failed(self, request_id: int, error: object) -> None:
+        self._unanswered -= 1
+        self.failed.emit(request_id, error)
+
+    def stop(self) -> None:
+        """Cancel what is in flight and end the thread; the quit's bound limits the wait."""
         self._reader.cancel()
         self._thread.quit()
-        return self._thread.wait(STOP_WAIT_MS)
+        self._thread.wait()
 
 
 def records_reads(database: Path, parent: QObject | None = None) -> RecordsReads:
@@ -663,15 +681,11 @@ class RecordsWindow(QWidget):
         self._generation = 0
         self._status = "loading"
         self._more = False
+        # The next page is being read; the end of the list says so.
         self._loading_more = False
         self._more_failed = False
-        # The busy claim for the next page (PLAYBOOK, Own the work in flight).
-        self._fetching_more = False
         # New records arrived while the list was scrolled away from the top.
-        self._newest_pending = False
-        # A newest-page read is in flight; live ticks wait for it rather than
-        # queuing more reads behind a slow one.
-        self._newest_reading = False
+        self._newest_wanted = False
         # A failed read is itself logged as a record, whose signal would start the
         # next read; live reads stop after a failure and resume after a read succeeds.
         self._live_suspended = False
@@ -873,8 +887,7 @@ class RecordsWindow(QWidget):
     def _read_first_page(self) -> None:
         self._generation += 1
         generation = self._generation
-        self._fetching_more = False
-        self._newest_pending = False
+        self._newest_wanted = False
         self._status = "loading"
         self._more = False
         self._loading_more = False
@@ -913,7 +926,6 @@ class RecordsWindow(QWidget):
         shown rather than replacing them, so the list never falls back to the
         loading note and the pages already read stay."""
         generation = self._generation
-        self._newest_reading = True
         self._read(
             "page",
             (self._query, None),
@@ -922,7 +934,6 @@ class RecordsWindow(QWidget):
         )
 
     def _newest_read(self, generation: int, page: object) -> None:
-        self._newest_reading = False
         if generation != self._generation or not isinstance(page, RecordsPage):
             return
         self._live_suspended = False
@@ -936,7 +947,6 @@ class RecordsWindow(QWidget):
         self._check_end_soon()
 
     def _newest_failed(self, generation: int, error: object) -> None:
-        self._newest_reading = False
         if generation == self._generation:
             self._read_failed("page", error)
 
@@ -944,9 +954,8 @@ class RecordsWindow(QWidget):
     def _load_more(self) -> None:
         # Loading more: composite-control-conventions, Integration Points. A
         # failed page is read again when the end is reached again.
-        if self._status != "ready" or not self._more or self._fetching_more:
+        if self._status != "ready" or not self._more or self._loading_more:
             return
-        self._fetching_more = True
         generation = self._generation
         self._loading_more = True
         self._more_failed = False
@@ -962,7 +971,6 @@ class RecordsWindow(QWidget):
     def _more_read(self, generation: int, page: object) -> None:
         if generation != self._generation or not isinstance(page, RecordsPage):
             return
-        self._fetching_more = False
         self._live_suspended = False
         self._loading_more = False
         self.model.append(page.records)
@@ -973,7 +981,6 @@ class RecordsWindow(QWidget):
     def _more_failed_read(self, generation: int, error: object) -> None:
         if generation != self._generation:
             return
-        self._fetching_more = False
         self._read_failed("page", error)
         self._loading_more = False
         self._more_failed = True
@@ -997,8 +1004,8 @@ class RecordsWindow(QWidget):
     @Slot(int)
     def _list_scrolled(self, _value: int) -> None:
         bar = self.list.verticalScrollBar()
-        if self._newest_pending and bar.value() <= bar.minimum():
-            self._newest_pending = False
+        if self._newest_wanted and bar.value() <= bar.minimum():
+            self._newest_wanted = False
             self._read_newest()
         if near_end(bar.value(), bar.maximum(), bar.pageStep()):
             self._load_more()
@@ -1016,7 +1023,8 @@ class RecordsWindow(QWidget):
         # signal that arrived just before a read failed starts nothing either.
         if self._live_suspended:
             return
-        if self._newest_reading:
+        if self._reads.busy:
+            # Wait for the next interval rather than queue reads behind a slow one.
             self._live_timer.start()
             return
         # A stored record reaches the list at once while it is scrolled to the
@@ -1027,7 +1035,7 @@ class RecordsWindow(QWidget):
         if bar.value() <= bar.minimum():
             self._read_newest()
         else:
-            self._newest_pending = True
+            self._newest_wanted = True
 
     # Filters -----------------------------------------------------------------------
 

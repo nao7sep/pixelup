@@ -204,17 +204,6 @@ def test_a_read_never_stores_a_record() -> None:
     assert stored == []
 
 
-def test_a_read_past_its_deadline_is_interrupted(
-    database: Path, reader: RecordsReader, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _seed(database, [{"time": _time(i % 3600)} for i in range(500)])
-    monkeypatch.setattr(records, "_PROGRESS_STEPS", 1)
-    monkeypatch.setattr(records, "READ_TIMEOUT_SECONDS", -1.0)
-
-    with pytest.raises(sqlite3.OperationalError, match="interrupted"):
-        reader.page(RecordsQuery(search="nothing"), None)
-
-
 def test_a_cancelled_reader_reads_nothing_more(database: Path, reader: RecordsReader) -> None:
     _seed(database, [{"time": _time(i % 3600)} for i in range(500)])
     assert reader.page(RecordsQuery(), None).records
@@ -340,7 +329,7 @@ def test_records_without_their_format_version_are_unreadable(database: Path) -> 
 
 
 
-def test_reader_primary_survives_failed_rollback_and_deadline_always_clears(
+def test_reader_primary_survives_failed_rollback(
     database: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed(database, [{"time": OLD}])
@@ -359,9 +348,8 @@ def test_reader_primary_survives_failed_rollback_and_deadline_always_clears(
     monkeypatch.setattr(reader, "_open", lambda: FailingCleanup())
     try:
         with pytest.raises(sqlite3.OperationalError) as raised:
-            reader._bounded(lambda _: (_ for _ in ()).throw(primary))
+            reader._in_read(lambda _: (_ for _ in ()).throw(primary))
         assert raised.value is primary
         assert "cleanup rollback failure" in raised.value.__notes__[0]
-        assert reader._deadline is None
     finally:
         reader.close()

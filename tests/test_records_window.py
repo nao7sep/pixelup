@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from localization_support import speaking
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QCloseEvent, QColor
+from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -399,7 +399,7 @@ def test_leaves_the_list_alone_while_scrolled_down_and_updates_it_back_at_the_to
 
     _seed_count(database, 1, start=100)
     stored_signal().emit()
-    _until(process_until, lambda: window._newest_pending, "the signal")
+    _until(process_until, lambda: window._newest_wanted, "the signal")
     assert len(reader.pages) == 1
     assert _messages(window)[0] == "m59"
 
@@ -746,39 +746,6 @@ def test_closing_the_main_window_closes_the_records_window_and_ends_its_reads(
     assert main._records_window is None
     assert records is not None and reads is not None
     assert reads._thread.isFinished()
-
-
-def test_a_second_quit_while_a_read_is_still_in_flight_waits_for_it(
-    make_main, database: Path, monkeypatch: pytest.MonkeyPatch, process_until
-) -> None:
-    gate = threading.Event()
-    reader_holder: list[ScriptedReader] = []
-
-    def held_reads(path: Path, parent: object) -> RecordsReads:
-        reader = ScriptedReader(path)
-        reader.gate = gate
-        reader_holder.append(reader)
-        return RecordsReads(reader, parent)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(gui, "records_reads", held_reads)
-    monkeypatch.setattr(records_window, "STOP_WAIT_MS", 20)
-    main = make_main()
-    main.show()
-    main._open_records_window()
-    _until(process_until, reader_holder[0].waiting.is_set, "the held page")
-    monkeypatch.setattr(gui, "warn_jobs_stopping", lambda _parent: None)
-
-    first = QCloseEvent()
-    main.closeEvent(first)
-    second = QCloseEvent()
-    main.closeEvent(second)
-
-    assert first.isAccepted() is False
-    assert second.isAccepted() is False
-    assert main.isVisible()
-    gate.set()
-    _until(process_until, lambda: not main.isVisible(), "the deferred quit")
-    assert main._records_reads._thread.isFinished()
 
 
 def test_no_records_window_opens_once_quitting_has_begun(make_main, monkeypatch) -> None:

@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,8 +23,7 @@ from pixelup.formats import RECORDS_FORMAT_VERSION, check_sqlite_format, rollbac
 
 PAGE_SIZE = 100
 LOCK_TIMEOUT_SECONDS = 2.0
-READ_TIMEOUT_SECONDS = 10.0
-# How many SQLite virtual-machine steps run between two looks at the deadline.
+# How many SQLite virtual-machine steps run between two looks at cancellation.
 _PROGRESS_STEPS = 1000
 # The list shows the start of a record's fields; the detail reads them whole.
 # Display-only: the store keeps every field. The list pane is at most 640 px wide,
@@ -154,7 +152,6 @@ class RecordsReader:
         self._database = database
         self._cancelled = threading.Event()
         self._connection: sqlite3.Connection | None = None
-        self._deadline: float | None = None
 
     @property
     def cancelled(self) -> bool:
@@ -164,21 +161,20 @@ class RecordsReader:
         self._cancelled.set()
 
     def page(self, query: RecordsQuery, after: RecordCursor | None) -> RecordsPage:
-        return self._bounded(lambda connection: read_page(connection, query, after))
+        return self._in_read(lambda connection: read_page(connection, query, after))
 
     def detail(self, record_id: int) -> RecordDetail | None:
-        return self._bounded(lambda connection: read_detail(connection, record_id))
+        return self._in_read(lambda connection: read_detail(connection, record_id))
 
     def sessions(self) -> tuple[str, ...]:
-        return self._bounded(read_sessions)
+        return self._in_read(read_sessions)
 
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()
             self._connection = None
 
-    def _bounded[T](self, read: Callable[[sqlite3.Connection], T]) -> T:
-        self._deadline = time.monotonic() + READ_TIMEOUT_SECONDS
+    def _in_read[T](self, read: Callable[[sqlite3.Connection], T]) -> T:
         connection = None
         try:
             connection = self._open()
@@ -191,8 +187,6 @@ class RecordsReader:
         else:
             connection.rollback()
             return result
-        finally:
-            self._deadline = None
 
     def _open(self) -> sqlite3.Connection:
         if self._connection is None:
@@ -213,9 +207,7 @@ class RecordsReader:
     def _interrupted(self) -> int:
         # A non-zero answer makes SQLite abandon the statement with an
         # OperationalError, which the caller reports like any other failed read.
-        deadline = self._deadline
-        late = deadline is not None and time.monotonic() > deadline
-        return 1 if late or self._cancelled.is_set() else 0
+        return 1 if self._cancelled.is_set() else 0
 
 
 def cursor_after(records: Sequence[RecordSummary]) -> RecordCursor | None:

@@ -920,8 +920,13 @@ class MainWindow(QMainWindow):
             self._config_save is None
             and self.runner.cleanup_for_quit()
             and self.model_manager.cleanup_for_quit()
-            and (self._records_reads is None or self._records_reads.stop())
+            and self._stop_records_reads()
         )
+
+    def _stop_records_reads(self) -> bool:
+        if self._records_reads is not None:
+            self._records_reads.stop()
+        return True
 
     def open_paths(self, paths: list[Path]) -> None:
         """Offer ``paths`` as images. The filesystem checks and the header read run on
