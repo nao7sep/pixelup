@@ -6,13 +6,13 @@ import sqlite3
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from config_support import load_app_config
+from event_wait import process_until
 from localization_support import speaking
 from PIL import Image, PngImagePlugin
 from PySide6.QtCore import QEvent, QMargins, QRect, QSettings, QSize, Qt, QTimer, QUrl
@@ -56,35 +56,22 @@ DISK_WARNING = Message.of("warning.extensionMismatch", extension="png", format="
 
 
 def _settle_models(window) -> None:
-    while (
-        not window.model_manager.readiness_known
-        or getattr(window, "_active_job_plan", None) is not None
-        or getattr(window, "_pending_job_plans", ())
-    ):
-        QApplication.processEvents()
-        time.sleep(0.001)
+    process_until(
+        lambda: window.model_manager.readiness_known
+        and getattr(window, "_active_job_plan", None) is None
+        and not getattr(window, "_pending_job_plans", ()),
+        what="Models and plans settle",
+    )
 
 
 def _settle_opens(window) -> None:
-    import time as _time
-
-    from PySide6.QtWidgets import QApplication as _QApplication
-
-    while window.opening or window.preview.loading:
-        _QApplication.processEvents()
-        _time.sleep(0.005)
+    process_until(lambda: not (window.opening or window.preview.loading), what="Opening")
 
 def _open(window, paths) -> None:
     """Offer ``paths`` and wait until the window has checked and applied them, and
     any preview they selected has loaded."""
-    import time as _time
-
-    from PySide6.QtWidgets import QApplication as _QApplication
-
     window.open_paths(paths)
-    while window.opening or window.preview.loading:
-        _QApplication.processEvents()
-        _time.sleep(0.005)
+    _settle_opens(window)
 
 def _png(tmp_path: Path, name: str, size: tuple[int, int] = (8, 6)) -> Path:
     path = tmp_path / name
@@ -93,9 +80,7 @@ def _png(tmp_path: Path, name: str, size: tuple[int, int] = (8, 6)) -> Path:
 
 
 def _settle_config(window: MainWindow) -> None:
-    while window._config_save is not None:
-        QApplication.instance().processEvents()
-        threading.Event().wait(0.001)
+    process_until(lambda: window._config_save is None, what="settings save")
     QApplication.instance().processEvents()
 
 
@@ -1089,9 +1074,7 @@ def test_install_and_queue_survives_closing_its_presentation(
     assert window.jobs == []
 
     release.set()
-    while not window.model_manager.cleanup_for_quit():
-        qapp.processEvents()
-        time.sleep(0.001)
+    process_until(window.model_manager.cleanup_for_quit, what="Installs settle")
     qapp.processEvents()
 
     assert window.model_manager.cleanup_for_quit()
@@ -1120,8 +1103,8 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
     def wait_for_cancel(_models_dir: Path, name: str, **kwargs: object) -> dict[str, object]:
         first_started.set()
         should_cancel = kwargs["should_cancel"]
-        while not should_cancel():  # type: ignore[operator]
-            time.sleep(0.001)
+        # should_cancel is the install's cancel Event.is_set: wait on that Event.
+        should_cancel.__self__.wait()  # type: ignore[attr-defined]
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Installation cancelled.")
 
     monkeypatch.setattr("pixelup.model_manager.download_model", wait_for_cancel)
@@ -1134,9 +1117,7 @@ def test_cancelling_preflight_downloads_abandons_the_captured_queue(
 
     # One install runs and the other waits its turn; Cancel ends both.
     dialog._install_all_or_cancel()
-    while not window.model_manager.cleanup_for_quit():
-        qapp.processEvents()
-        time.sleep(0.001)
+    process_until(window.model_manager.cleanup_for_quit, what="Installs settle")
     qapp.processEvents()
 
     assert window.model_manager.cleanup_for_quit()
@@ -2721,17 +2702,13 @@ def _blocking_downloads(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Even
 
 def _finish_downloads(window, qapp: QApplication, release: threading.Event) -> None:
     release.set()
-    while not window.model_manager.cleanup_for_quit():
-        qapp.processEvents()
-        time.sleep(0.001)
+    process_until(window.model_manager.cleanup_for_quit, what="Installs settle")
     qapp.processEvents()
     _settle_models(window)
 
 
 def _wait_for(qapp: QApplication, condition) -> None:
-    while not condition():
-        qapp.processEvents()
-        time.sleep(0.001)
+    process_until(condition, what="Condition")
     assert condition()
 
 

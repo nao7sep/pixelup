@@ -5,12 +5,13 @@ import os
 import subprocess
 import sys
 import threading
-import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop
+from event_wait import process_until as _process_until
+from event_wait import wake, waking_on_thread_events
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QStyleFactory
 from shiboken6 import delete, isValid
 
@@ -106,7 +107,7 @@ def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(scope="session")
-def _session_qapp() -> QApplication:
+def _session_qapp() -> Iterator[QApplication]:
     """A single offscreen QApplication shared by all GUI tests.
 
     Widget construction needs a running QApplication. The offscreen platform
@@ -121,7 +122,8 @@ def _session_qapp() -> QApplication:
     # the same style rather than the platform default.
     if "Fusion" in QStyleFactory.keys():
         app.setStyle(PixelupStyle())
-    return app
+    with waking_on_thread_events(app):
+        yield app
 
 
 @pytest.fixture
@@ -172,6 +174,7 @@ def background(monkeypatch: pytest.MonkeyPatch) -> BackgroundReads:
     def submit(*args, **kwargs):
         future = real_submit(*args, **kwargs)
         reads.futures.append(future)
+        future.add_done_callback(lambda _future: wake())
         return future
 
     monkeypatch.setattr(read_threads._pool, "submit", submit)
@@ -183,15 +186,7 @@ ProcessUntil = Callable[..., None]
 
 @pytest.fixture(scope="session")
 def process_until(_session_qapp: QApplication) -> ProcessUntil:
-    """Run the Qt event loop until ``done()`` holds, with no bound: a stalled
-    wait shows in the faulthandler dump, which names ``what`` in its frame."""
-
-    def run(done: Callable[[], bool], *, what: str) -> None:
-        while not done():
-            _session_qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 100)
-            time.sleep(0.001)
-
-    return run
+    return _process_until
 
 
 class _InstallFailureLog(logging.Handler):

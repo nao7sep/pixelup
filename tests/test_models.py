@@ -525,17 +525,18 @@ def test_verify_model_file_honors_cancellation_during_hash(tmp_path: Path) -> No
     assert excinfo.value.code == "job_cancelled"
 
 
-def test_fragmented_real_http_response_can_progress_beyond_old_poll_timeout() -> None:
+def test_fragmented_real_http_response_reads_a_fragment_sent_while_the_read_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client, server = socket.socketpair()
-    first_sent, continue_body = threading.Event(), threading.Event()
+    first_sent, body_read_started = threading.Event(), threading.Event()
 
     def send() -> None:
         try:
             server.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
             first_sent.set()
-            assert continue_body.wait()
-            # A healthy fragment may arrive later than the removed 250 ms poll.
-            time.sleep(0.3)
+            # The next fragment arrives only once the read is already waiting for it.
+            assert body_read_started.wait()
             server.sendall(b"def")
         finally:
             server.close()
@@ -549,11 +550,18 @@ def test_fragmented_real_http_response_can_progress_beyond_old_poll_timeout() ->
         deadline = time.monotonic() + 5
         first = models_module._read_download_chunk(response, deadline, None)
         assert first == b"abc"
-        continue_body.set()
+        raw = response.fp.raw
+        real_readinto = raw.readinto
+
+        def observed_readinto(buffer):
+            body_read_started.set()
+            return real_readinto(buffer)
+
+        monkeypatch.setattr(raw, "readinto", observed_readinto)
         assert models_module._read_download_chunk(response, deadline, None) == b"def"
         assert models_module._read_download_chunk(response, deadline, None) == b""
     finally:
-        continue_body.set()
+        body_read_started.set()
         response.close()
         client.close()
         sender.join()
@@ -623,9 +631,7 @@ def test_fragmented_tls_record_keeps_real_http_response_readable_below_deadline(
             server.sendall(record[:7])
             first_fragment.set()
             assert body_read_started.wait(), "the client never attempted its body read"
-            # Start this delay only once the real TLS read has begun. A complete
-            # record arrives after the removed 250 ms timeout but within its budget.
-            time.sleep(0.35)
+            # The rest of the record arrives only once the real TLS read is waiting.
             server.sendall(record[7:])
         except BaseException as exc:
             server_errors.append(exc)

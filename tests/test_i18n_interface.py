@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from event_wait import process_until
 from localization_support import speaking
 from PIL import Image
 from PySide6.QtCore import QCoreApplication, QEvent, Qt, QTimer
@@ -115,14 +116,8 @@ _ENGLISH_WORD = re.compile(r"[A-Za-z]{3,}")
 def _open(window, paths) -> None:
     """Offer ``paths`` and wait until the window has checked and applied them, and
     any preview they selected has loaded."""
-    import time as _time
-
-    from PySide6.QtWidgets import QApplication as _QApplication
-
     window.open_paths(paths)
-    while window.opening or window.preview.loading:
-        _QApplication.processEvents()
-        _time.sleep(0.005)
+    process_until(lambda: not (window.opening or window.preview.loading), what="Opening")
 
 def _png(directory: Path, name: str) -> Path:
     path = directory / name
@@ -168,13 +163,11 @@ def window(
 
 
 def _settle_models(window):
-    import time
-    while (
-        not window.model_manager.readiness_known
-        or window._active_job_plan is not None or window._pending_job_plans
-    ):
-        QApplication.processEvents()
-        time.sleep(0.001)
+    process_until(
+        lambda: window.model_manager.readiness_known
+        and window._active_job_plan is None and not window._pending_job_plans,
+        what="Models and plans settle",
+    )
 
 
 def _populate(main: MainWindow, directory: Path) -> None:

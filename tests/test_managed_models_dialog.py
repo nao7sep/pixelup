@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 
 import pytest
+from event_wait import process_until
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
@@ -23,15 +23,11 @@ from pixelup.models import model_file
 
 
 def _ready(manager: ModelManager, qapp: QApplication) -> None:
-    while not manager.readiness_known:
-        qapp.processEvents()
-        time.sleep(0.001)
+    process_until(lambda: manager.readiness_known, what="Model readiness")
 
 
 def _finish_manager(manager: ModelManager, qapp: QApplication) -> None:
-    while not manager.cleanup_for_quit():
-        qapp.processEvents()
-        time.sleep(0.001)
+    process_until(manager.cleanup_for_quit, what="Installs settle")
     qapp.processEvents()
     assert manager.cleanup_for_quit()
     _ready(manager, qapp)
@@ -255,8 +251,8 @@ def test_explicit_cancel_stops_application_owned_install(
     def wait_for_cancel(_models_dir: Path, _name: str, **kwargs: object) -> dict[str, object]:
         started.set()
         should_cancel = kwargs["should_cancel"]
-        while not should_cancel():  # type: ignore[operator]
-            time.sleep(0.001)
+        # should_cancel is the install's cancel Event.is_set: wait on that Event.
+        should_cancel.__self__.wait()  # type: ignore[attr-defined]
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Model installation cancelled.")
 
     monkeypatch.setattr("pixelup.model_manager.download_model", wait_for_cancel)

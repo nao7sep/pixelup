@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from event_wait import process_until
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QScrollArea, QWidget
@@ -49,8 +50,7 @@ def dialog(request: pytest.FixtureRequest, qapp: QApplication) -> Iterator[Dialo
     surface = BUILDERS[request.param]()
     if isinstance(surface, ManagedModelsDialog):
         # Geometry assertions compare the same loaded state before and after show.
-        while not surface._manager.readiness_known:
-            qapp.processEvents()
+        process_until(lambda: surface._manager.readiness_known, what="Model readiness")
     yield surface
     surface.close()
     surface.deleteLater()
