@@ -28,7 +28,7 @@ def make_window(
     # redirected as well as the load stubbed, because the window also writes
     # config.json (first-run materialize, and the Parameters panel's own save).
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),

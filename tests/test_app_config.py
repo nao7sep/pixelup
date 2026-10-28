@@ -28,9 +28,7 @@ def _save(candidate: AppConfig, previous: AppConfig, path: Path) -> ConfigSaveRe
 
 def test_app_config_round_trips_json(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    config = AppConfig(
-        max_concurrent_jobs=3,
-    )
+    config = AppConfig(font_family="Menlo")
 
     _save(config, AppConfig(), path)
 
@@ -138,13 +136,13 @@ def test_next_edit_keeps_unknown_keys_and_writes_the_format_version(tmp_path: Pa
         encoding="utf-8",
     )
     previous = load_app_config(path)
-    _save(replace(previous, max_concurrent_jobs=3), previous, path)
+    _save(replace(previous, font_family="Menlo"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
         "version": 99,
         "future": {"a": [1, 2]},
         "language": "ja",
-        "max_concurrent_jobs": 3,
+        "font_family": "Menlo",
     }
 
 
@@ -255,12 +253,12 @@ def test_a_save_replaces_hand_edits_made_after_load(tmp_path: Path) -> None:
     loaded = load_app_config_result(path)
     path.write_text("{ broken by hand", encoding="utf-8")
 
-    save_app_config(replace(loaded.config, max_concurrent_jobs=3), loaded.config, loaded.file)
+    save_app_config(replace(loaded.config, font_family="Menlo"), loaded.config, loaded.file)
 
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
         "language": "ja",
-        "max_concurrent_jobs": 3,
+        "font_family": "Menlo",
     }
     assert list(tmp_path.glob("*.invalid")) == []
 
@@ -443,7 +441,7 @@ def test_corrupt_config_lets_window_open(
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     (home / "config.json").write_text("{ broken", encoding="utf-8")
 
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     notices: list[str] = []
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset",
@@ -508,7 +506,7 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
     text = '{"format_version": 2, "language": "ja"}'
     (home / "config.json").write_text(text, encoding="utf-8")
 
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     notices: list[str] = []
     monkeypatch.setattr("pixelup.gui.warn_config_newer", lambda _parent, path: notices.append(path))
     monkeypatch.setattr(
@@ -571,10 +569,6 @@ def test_config_read_oserror_propagates_without_touching_the_store(
 @pytest.mark.parametrize(
     "data",
     [
-        {"max_concurrent_jobs": 0},
-        {"max_concurrent_jobs": 99},
-        {"max_concurrent_jobs": "4"},
-        {"max_concurrent_jobs": True},
         {"language": "JA"},
         {"language": 7},
         {"parameters": "nope"},
@@ -621,7 +615,6 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
         json.dumps(
             {
                 "format_version": 1,
-                "max_concurrent_jobs": 4,
                 "future_setting": {"future": True},
                 "parameters": _parameter_map(scale=2, future_parameter="ignored"),
             }
@@ -632,7 +625,6 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
     result = load_app_config_result(path)
 
     assert result.quarantined_to is None
-    assert result.config.max_concurrent_jobs == 4
     assert result.config.parameters.scale == 2
     assert result.config.parameters.quality == JobSettings().quality
 
@@ -672,7 +664,7 @@ def test_null_target_profile_is_a_valid_choice(tmp_path: Path) -> None:
 
 def test_a_save_that_changes_nothing_writes_nothing(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    opened = AppConfig(max_concurrent_jobs=3)
+    opened = AppConfig(font_family="Menlo")
     first = _save(opened, AppConfig(), path)
     written_at = path.stat().st_mtime_ns
 
@@ -684,12 +676,10 @@ def test_a_save_that_changes_nothing_writes_nothing(tmp_path: Path) -> None:
 
 def test_config_log_payload_shape() -> None:
     config = AppConfig(
-        max_concurrent_jobs=2,
         parameters=JobSettings(quality=70, tile=128, device="cpu"),
     )
 
     assert config_log_payload(config) == {
-        "max_concurrent_jobs": 2,
         "font_family": AppConfig().font_family,
         "language": "system",
         "display_zone": "system",

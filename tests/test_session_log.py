@@ -23,7 +23,7 @@ def _records(database: Path) -> list[dict]:
     """Every log row as the line it stands for: columns and fields in one object,
     once the writer has written every queued line (unless called from the writer)."""
     if threading.current_thread().name != "pixelup-records":
-        assert flush_records(5)
+        flush_records()
     connection = sqlite3.connect(database)
     try:
         rows = connection.execute(
@@ -93,7 +93,7 @@ def test_domain_ids_are_columns() -> None:
     database = configure_session_logging()
     log.info("job.started", job_id=4)
     log.info("models.install_started", operation_id=2)
-    assert flush_records(5)
+    flush_records()
 
     connection = sqlite3.connect(database)
     try:
@@ -257,7 +257,7 @@ def test_an_unwritable_database_falls_back_to_a_text_file(tmp_path: Path) -> Non
     configure_session_logging()
     log.info("image.added", input="a.png", job_id=3)
 
-    assert flush_records(5)
+    flush_records()
     fallbacks = list((tmp_path / "logs").glob("*-utc.log"))
     assert len(fallbacks) == 1
     lines = _read_jsonl(fallbacks[0])
@@ -274,13 +274,13 @@ def test_with_no_fallback_file_the_record_reaches_stderr(
 ) -> None:
     (tmp_path / RECORDS_FILE_NAME).mkdir()
     configure_session_logging()
-    assert flush_records(5)
+    flush_records()
     shutil.rmtree(tmp_path / "logs")
     (tmp_path / "logs").write_text("not a directory", encoding="utf-8")
 
     log.info("image.added", input="a.png")
 
-    assert flush_records(5)
+    flush_records()
     entry = json.loads(capsys.readouterr().err.splitlines()[-1])
     assert entry["message"] == "image.added"
     assert entry["records_error"]
@@ -304,14 +304,14 @@ def test_excepthook_does_not_stack_across_reconfiguration() -> None:
 
 def test_the_stored_listener_hears_each_line_the_database_stored() -> None:
     database = configure_session_logging()
-    assert flush_records(5)
+    flush_records()
     heard: list[int] = []
     set_stored_listener(lambda: heard.append(len(_records(database))))
 
     log.info("image.added", input="a.png")
     log.warning("open.ignored_directory", path="d")
 
-    assert flush_records(5)
+    flush_records()
     # Called after the line is in the database, so a read it starts sees it.
     assert heard == [2, 3]
 
@@ -324,7 +324,7 @@ def test_a_line_that_went_to_the_fallback_file_tells_no_listener(tmp_path: Path)
 
     log.info("image.added", input="a.png")
 
-    assert flush_records(5)
+    flush_records()
     assert heard == []
 
 
@@ -359,7 +359,7 @@ def _existing_records(database: Path, version: int) -> bytes:
 def test_the_records_database_is_stamped_at_creation(tmp_path: Path) -> None:
     database = configure_session_logging()
     log.info("image.added")
-    assert flush_records(5)
+    flush_records()
     connection = sqlite3.connect(database)
     try:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
@@ -377,10 +377,10 @@ def test_unmarked_or_newer_records_are_left_untouched_and_lines_go_to_the_fallba
     configure_session_logging()
     log.info("image.added", input="a.png")
 
-    assert flush_records(5)
+    flush_records()
     assert database.read_bytes() == before
     assert not (tmp_path / f"{RECORDS_FILE_NAME}-wal").exists()
-    assert flush_records(5)
+    flush_records()
     fallbacks = list((tmp_path / "logs").glob("*-utc.log"))
     lines = _read_jsonl(fallbacks[0])
     assert [line["message"] for line in lines] == ["log.session_started", "image.added"]
@@ -412,7 +412,7 @@ def test_insert_and_rollback_failure_falls_back_with_primary_and_cleanup(
     handler._connection = FailingCleanup()
     try:
         handler.emit(logging.LogRecord("pixelup", logging.INFO, "", 0, "entry", (), None))
-        assert handler.flush_pending(5)
+        handler.flush_pending()
     finally:
         handler._connection = None
         connection.close()
@@ -428,7 +428,7 @@ def test_logging_never_waits_on_a_stuck_store(monkeypatch: pytest.MonkeyPatch) -
     from pixelup import session_log
 
     database = configure_session_logging()
-    assert flush_records(5)
+    flush_records()
     entered = threading.Event()
     release = threading.Event()
     returned = threading.Event()
@@ -453,12 +453,12 @@ def test_logging_never_waits_on_a_stuck_store(monkeypatch: pytest.MonkeyPatch) -
         assert entered.wait(10), "the backing write never started"
         assert returned.wait(10), "logging waited for the held backing write"
         assert not release.is_set()
-        assert flush_records(0) is False
+        assert handler._pending
     finally:
         release.set()
         caller.join(10)
         assert not caller.is_alive()
-        assert flush_records(5)
+        flush_records()
     assert [entry["message"] for entry in _records(database)][-3:] == [
         "first.line",
         "second.line",

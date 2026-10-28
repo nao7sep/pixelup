@@ -160,22 +160,21 @@ class _Recorder:
             except Exception:  # noqa: BLE001 - the warning was attempted; keep the save successful.
                 pass
 
-    def drain(self, timeout: float) -> bool:
-        """Wait up to ``timeout`` seconds for pending writes; True when none remain."""
+    def drain(self) -> None:
+        """Wait for pending writes to land; the quit's bound limits the wait."""
         with self._condition:
-            return self._condition.wait_for(
-                lambda: not self._pending and not self._writing, timeout
-            )
+            self._condition.wait_for(lambda: not self._pending and not self._writing)
 
-    def close(self, timeout: float) -> None:
-        """Drain, then close the store and let the thread end (tests and teardown)."""
-        self.drain(timeout)
+    def close(self) -> None:
+        """Drain, close the store and end the thread, leaving the recorder ready to
+        open the store again at its next write (tests and teardown)."""
+        self.drain()
         with self._condition:
             self._disabled = True
             self._condition.notify_all()
             thread = self._thread
         if thread is not None:
-            thread.join(timeout)
+            thread.join()
         connection = self._connection
         self._connection = None
         if connection is not None:
@@ -183,6 +182,10 @@ class _Recorder:
                 connection.close()
             except Exception:  # noqa: BLE001 - a close failure on teardown is harmless.
                 pass
+        with self._condition:
+            self._thread = None
+            self._session = None
+            self._disabled = False
 
     def _run(self) -> None:
         while True:
@@ -244,7 +247,6 @@ class _Recorder:
 
 
 _recorder = _Recorder()
-_recorder_gate = threading.Lock()
 
 
 def record(absolute_path: Path, data: bytes) -> None:
@@ -254,26 +256,18 @@ def record(absolute_path: Path, data: bytes) -> None:
     the exact raw bytes just written (the caller already holds them — never re-read
     the file). It never raises and never waits on the store.
     """
-    with _recorder_gate:
-        recorder = _recorder
-    recorder.submit(str(absolute_path), data)
+    _recorder.submit(str(absolute_path), data)
 
 
-def drain_backups(timeout: float) -> bool:
-    """Give pending writes up to ``timeout`` seconds, for an ordinary quit; an OS
-    session end skips this. True when nothing remains pending."""
-    with _recorder_gate:
-        recorder = _recorder
-    return recorder.drain(timeout)
+def drain_backups() -> None:
+    """Wait for pending writes, for an ordinary quit; an OS session end skips this."""
+    _recorder.drain()
 
 
 def close_backup_store() -> None:
     """Drain and close the store (best-effort). For tests that need to release the
     file handle between throwaway roots; the app itself lets the process exit close
-    it. Replaces the recorder so the next :func:`record` re-opens against the current
+    it. The next :func:`record` re-opens the store against the current
     ``PIXELUP_DATA_DIR`` with a fresh session.
     """
-    global _recorder
-    with _recorder_gate:
-        recorder, _recorder = _recorder, _Recorder()
-    recorder.close(5)
+    _recorder.close()

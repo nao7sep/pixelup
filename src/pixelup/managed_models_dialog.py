@@ -76,7 +76,6 @@ class ManagedModelsDialog(DialogShell):
         self._folder_locked = folder_locked
         self._save_folder = save_folder
         self._saving_folder = False
-        self._dismissed = False
         self._after_scan: Callable[[], None] | None = None
         self.finished.connect(self._finished)
 
@@ -292,8 +291,7 @@ class ManagedModelsDialog(DialogShell):
         self.fit()
         if self._after_scan is not None and self._manager.readiness_known:
             action, self._after_scan = self._after_scan, None
-            if not self._dismissed and isValid(self):
-                action()
+            action()
 
     def _render_primary_action(self) -> None:
         if self._required_artifacts:
@@ -410,8 +408,8 @@ class ManagedModelsDialog(DialogShell):
         self._update_folder_controls()
 
         def saved(error: Message | None) -> None:
-            if self._dismissed or not isValid(self):
-                return
+            if not isValid(self):
+                return  # An OS session end closed the dialog during the save.
             self._saving_folder = False
             self._folder_error = error
             if error is not None:
@@ -428,13 +426,17 @@ class ManagedModelsDialog(DialogShell):
         self._save_folder(value, saved)
 
     def _finished(self, _result: int) -> None:
-        self._dismissed = True
         self._after_scan = None
 
     def reject(self) -> None:
+        if self._session_shutdown():
+            super().reject()
+            return
+        # A folder save runs to its end; the dialog stays open until its result.
+        if self._saving_folder:
+            return
         if (
-            not self._session_shutdown()
-            and not self._saving_folder and not self._folder_locked
+            not self._folder_locked
             and self.folder_edit.text() != self._saved_folder
             and DiscardChangesDialog(self).exec() != QDialog.DialogCode.Accepted
         ):
@@ -453,8 +455,6 @@ class ManagedModelsDialog(DialogShell):
         self._manager.prepare_folder_reveal()
 
     def _open_models_folder(self, models_dir: Path, available: bool) -> None:
-        if self._dismissed:
-            return
         self.reveal_button.setEnabled(True)
         if not available or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(models_dir))):
             log.warning("models.reveal_failed", models_dir=str(models_dir))

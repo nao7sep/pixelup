@@ -12,11 +12,7 @@ from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
 from pixelup.imaging import _temp_output_path, temp_file_guard
 from pixelup.output_publication import publish_complete
-from pixelup.output_reservation import (
-    PublishedFile,
-    published_file_is_current,
-    remove_published_file,
-)
+from pixelup.output_reservation import remove_published_file
 from pixelup.timestamps import utc_now_iso_ms
 from pixelup.upscale import UpscaleOptions
 
@@ -29,7 +25,7 @@ def write_sidecar(
     result: dict[str, object],
     warnings: list[Message],
     should_cancel: Callable[[], bool] | None = None,
-) -> PublishedFile:
+) -> Path:
     sidecar_path = output_path.with_suffix(".json")
     payload = {
         "format_version": SIDECAR_FORMAT_VERSION,
@@ -106,12 +102,4 @@ def write_sidecar(
     if should_cancel is not None and should_cancel():
         remove_published_file(claim)
         raise PixelupError(ErrorCode.JOB_CANCELLED, "Job cancelled.")
-    if not published_file_is_current(claim):
-        remove_published_file(claim)
-        raise PixelupError(
-            ErrorCode.OUTPUT_EXISTS,
-            Message("error.sidecarChanged"),
-            hint=Message("error.hintRetryNewName"),
-            details={"sidecar": str(sidecar_path)},
-        )
     return claim

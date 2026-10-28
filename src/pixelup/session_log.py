@@ -175,12 +175,10 @@ class RecordsHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         self.handle(record)
 
-    def flush_pending(self, timeout: float) -> bool:
-        """Wait up to ``timeout`` seconds for queued lines; True when none remain."""
+    def flush_pending(self) -> None:
+        """Wait for queued lines to be written."""
         with self._condition:
-            return self._condition.wait_for(
-                lambda: not self._pending and not self._writing, timeout
-            )
+            self._condition.wait_for(lambda: not self._pending and not self._writing)
 
     def _run(self) -> None:
         while True:
@@ -263,14 +261,14 @@ class RecordsHandler(logging.Handler):
             sys.stderr.flush()
 
     def close(self) -> None:
-        """Give queued lines a short bound, then stop the writer. A writer still stuck
-        in the store keeps its connection; process exit ends both."""
-        self.flush_pending(_CLOSE_FLUSH_SECONDS)
+        """Write the queued lines, then stop the writer. The quit's bound limits the
+        wait; a writer stuck in the store ends with the process."""
+        self.flush_pending()
         with self._condition:
             self._closed = True
             self._condition.notify_all()
-        self._writer.join(_CLOSE_FLUSH_SECONDS)
-        if not self._writer.is_alive() and self._connection is not None:
+        self._writer.join()
+        if self._connection is not None:
             try:
                 self._connection.close()
             finally:
@@ -278,14 +276,11 @@ class RecordsHandler(logging.Handler):
         super().close()
 
 
-# Shutdown's bounded best-effort flush; the quit watchdog still owns the hard exit.
-_CLOSE_FLUSH_SECONDS = 1.0
-
-
-def flush_records(timeout: float) -> bool:
-    """Wait up to ``timeout`` seconds for this launch's queued lines to be written."""
+def flush_records() -> None:
+    """Wait for this launch's queued lines to be written."""
     handler = _records_handler()
-    return True if handler is None else handler.flush_pending(timeout)
+    if handler is not None:
+        handler.flush_pending()
 
 
 class SessionLog:

@@ -137,7 +137,7 @@ def window(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
 ) -> Iterator[MainWindow]:
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
@@ -233,7 +233,7 @@ def test_population_failure_closes_window_after_planning_returns(
     def failed_population(main: MainWindow, directory: Path) -> None:
         created.append(main)
         main.destroyed.connect(lambda *_: disposed.append(
-            (main._planning_reads.settled, not main.runner._threads)
+            (main._planning_reads.settled, not main.runner.running)
         ))
         _settle_models(main)
         _open(main, [_png(directory, "setup.png")])
@@ -271,7 +271,7 @@ def test_population_failure_closes_window_after_planning_returns(
 def _dialogs(manager: ModelManager) -> list[QDialog]:
     failed = Message("settings.saveFailed")
     settings = SettingsDialog(
-        AppConfig(), try_save=lambda _candidate, finished, waiting: finished(failed)
+        AppConfig(), try_save=lambda _candidate, finished: finished(failed)
     )
     settings.ok_button.setEnabled(True)
     settings._save()

@@ -170,7 +170,7 @@ def make_window(
     # redirected as well as the load stubbed, because the Parameters panel's save
     # resolves config.json through the storage root and must not land in the real one.
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
@@ -819,7 +819,7 @@ def test_saved_font_change_refreshes_live_layout_metrics(
 
         def exec(self):
             saved = []
-            self._try_save(candidate, saved.append, lambda: None)
+            self._try_save(candidate, saved.append)
             _settle_config(window)
             assert saved == [None]
             return QDialog.DialogCode.Accepted
@@ -829,7 +829,6 @@ def test_saved_font_change_refreshes_live_layout_metrics(
 
         def edits(self):
             return {
-                "max_concurrent_jobs": candidate.max_concurrent_jobs,
                 "font_family": candidate.font_family,
                 "language": candidate.language,
                 "display_zone": candidate.display_zone,
@@ -926,8 +925,8 @@ def test_action_buttons_reflect_state(make_window, tmp_path: Path) -> None:
 
 
 def test_settings_only_options_have_no_main_window_control(make_window) -> None:
-    # One home per thing, checked from the other side. max_concurrent_jobs is the
-    # settings dialog's; model acquisition belongs to Managed models, not to a toggle.
+    # One home per thing, checked from the other side. Language, time zone and font
+    # are the settings dialog's; model acquisition belongs to Managed models, not to a toggle.
     window = make_window()
 
     assert set(window.model_checks) == set(gui.UPSCALE_MODELS)
@@ -1366,7 +1365,7 @@ def test_delivered_config_failure_keeps_original_diagnostics_and_safe_presentati
     assert sentinel not in presented
     assert "RuntimeError" not in presented
     assert "PixelupError" not in presented
-    assert flush_records(5)
+    flush_records()
     with sqlite3.connect(config_path().parent / "records.sqlite3") as connection:
         entries = connection.execute(
             "SELECT level, fields FROM logs WHERE message = 'config.save_failed'"
@@ -1395,7 +1394,7 @@ def test_landed_config_completion_uses_its_accepted_path_after_root_becomes_unav
     # Backup behavior has its own real-boundary tests; keep this save's primary
     # settlement independent from the timing of optional store opening.
     monkeypatch.setattr("pixelup.backup_store.record", lambda *_: None)
-    assert flush_records(5)
+    flush_records()
 
     def land_then_disconnect(*args):
         result = real_save(*args)
@@ -1409,7 +1408,7 @@ def test_landed_config_completion_uses_its_accepted_path_after_root_becomes_unav
             window._flush_parameters_save(finished=outcomes.append)
         else:
             window._save_config_candidate(
-                replace(window.config, max_concurrent_jobs=3),
+                replace(window.config, display_zone="Europe/Paris"),
                 Message("settings.saveFailed"), outcomes.append,
             )
         _settle_config(window)
@@ -1425,7 +1424,7 @@ def test_landed_config_completion_uses_its_accepted_path_after_root_becomes_unav
             assert window.config.parameters.quality == 73
             assert window.parameters_result.isHidden()
         else:
-            assert window.config.max_concurrent_jobs == 3
+            assert window.config.display_zone == "Europe/Paris"
     finally:
         unavailable.restore()
 
@@ -1443,7 +1442,7 @@ def test_failed_folder_completion_releases_and_retries_after_root_becomes_unavai
     attempts = []
     outcomes = []
     monkeypatch.setattr("pixelup.backup_store.record", lambda *_: None)
-    assert flush_records(5)
+    flush_records()
 
     def disconnect_once(*args):
         attempts.append(args[0])
@@ -1494,7 +1493,7 @@ def test_failed_quit_save_settles_without_resolving_the_unavailable_root(
     monkeypatch.setattr(gui, "QuitSaveFailedDialog", _never if os_ending else dialog)
     monkeypatch.setattr("pixelup.backup_store.record", lambda *_: None)
     window._is_session_shutdown = lambda: os_ending
-    assert flush_records(5)
+    flush_records()
 
     def disconnect_before_save(*args):
         unavailable.replace()
@@ -1706,18 +1705,15 @@ def test_a_user_quit_waits_for_running_work_only_until_the_bound(
         assert notices == [window]
         assert quit_bound.started == [gui.QUIT_BUDGET_S]
         assert quit_bound.exits == 0
+        # What a forced exit would cut short is named when the bound starts.
+        [bound] = _fields(caplog, "quit.bound_started")
+        assert bound["running_jobs"] == [
+            {"job_id": window.jobs[0].id, "output": str(window.jobs[0].output_path)}
+        ]
 
         quit_bound.expire()
 
         assert quit_bound.exits == 1
-        deadline = time.monotonic() + 5
-        while not _fields(caplog, "quit.forced_exit"):
-            assert time.monotonic() < deadline
-            threading.Event().wait(0.001)
-        [forced] = _fields(caplog, "quit.forced_exit")
-        assert forced["running_jobs"] == [
-            {"job_id": window.jobs[0].id, "output": str(window.jobs[0].output_path)}
-        ]
 
 
 def test_the_bound_starts_once_however_often_the_quit_is_asked(
@@ -1798,17 +1794,6 @@ def test_a_quit_that_settles_in_time_never_forces_the_exit(make_window, quit_bou
     assert event.isAccepted() is True
     assert quit_bound.started == [gui.QUIT_BUDGET_S]
     assert quit_bound.exits == 0
-
-
-def test_the_forced_exit_happens_even_when_its_log_fails(
-    make_window, monkeypatch: pytest.MonkeyPatch, quit_bound
-) -> None:
-    window = make_window()
-    monkeypatch.setattr(window, "jobs", None)  # what the watchdog reads is mid-change
-
-    window._force_exit()
-
-    assert quit_bound.exits == 1
 
 
 def test_close_claim_precedes_the_confirmation_and_os_can_take_it_over(
@@ -1921,17 +1906,15 @@ def test_hard_quit_bounds_a_blocked_logging_tail() -> None:
     script = """
 import logging
 import threading
-from types import SimpleNamespace
 from pixelup import gui
 class HeldHandler(logging.Handler):
     def close(self):
         print('logging tail entered', flush=True)
         # Arm only after entry: host scheduling must not let the watchdog exit
         # before this test reaches the blocking relationship it verifies.
-        gui._start_quit_watchdog(0.05, lambda: gui.MainWindow._force_exit(owner))
+        gui._start_quit_watchdog(0.05, gui._exit_now)
         threading.Event().wait()
 logging.getLogger().addHandler(HeldHandler())
-owner = SimpleNamespace(_log_forced_exit=lambda: threading.Event().wait())
 logging.shutdown()
 """
     result = subprocess.run(
@@ -2097,7 +2080,7 @@ def test_window_seeds_the_panel_from_the_persisted_parameters(
     # Startup reads the persisted panel, not a defaults factory: whatever the user
     # left behind is what the panel opens on.
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     parameters = JobSettings(
         scale=2, quality=42, tile=512, alpha_mode="bicubic", target_profile="p3"
     )
@@ -2200,7 +2183,6 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
         json.dumps(
             {
                 "format_version": 1,
-                "max_concurrent_jobs": 1,
                 "auto_download": True,
                 "font_family": "",
                 "parameters": {"tile": 9999},
@@ -2208,7 +2190,7 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
         )
     )
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     notices: list[object] = []
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset",
@@ -2249,7 +2231,7 @@ def test_the_window_itself_takes_the_configured_font_at_launch(
     home.mkdir()
     (home / "config.json").write_text(json.dumps({"format_version": 1, "font_family": "Menlo"}))
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     original = qapp.font()
     window = MainWindow(log_file=configure_session_logging())
     try:
@@ -2380,7 +2362,6 @@ def test_held_config_save_keeps_gui_live_and_retains_newer_panel_edits(
         process_until(started.is_set, timeout_s=5, what="held save admission")
         window.quality.setValue(11)
         window._flush_parameters_save()
-        window._config_save_timed_out()
         assert len(attempts) == 1
         assert window._config_save is not None
         assert window.config.parameters.quality != 10
@@ -2556,7 +2537,7 @@ def test_optional_preview_metadata_failure_preserves_the_decoded_image(
     assert preview.toImage().pixelColor(0, 0) == QColor("white")
     assert window.preview.text() == ""
     process_until(lambda: window.preview.reads.settled, timeout_s=5, what="Preview read return")
-    assert flush_records(5)
+    flush_records()
     with sqlite3.connect(config_path().parent / "records.sqlite3") as connection:
         entries = connection.execute(
             "SELECT level, fields FROM logs WHERE message = 'preview.orientation_failed'"
@@ -2596,12 +2577,10 @@ def test_a_settings_save_that_lands_after_cancel_still_takes_effect(
     make_window, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The dialog may close while its save is slow; the save still lands, so its
-    # language, font and job count must apply rather than wait for a restart.
+    # language and font must apply rather than wait for a restart.
     from pixelup.i18n import localizer
 
     window = make_window()
-    scheduled: list[int] = []
-    monkeypatch.setattr(window.runner, "schedule", scheduled.append)
     release = threading.Event()
     real_save = gui.save_app_config
 
@@ -2611,7 +2590,7 @@ def test_a_settings_save_that_lands_after_cancel_still_takes_effect(
 
     monkeypatch.setattr(gui, "save_app_config", slow_save)
     outcomes: list[object] = []
-    candidate = replace(window.config, language="ja", max_concurrent_jobs=3)
+    candidate = replace(window.config, language="ja")
     try:
         window._save_config_candidate(candidate, Message("settings.saveFailed"), outcomes.append)
         # The dialog that submitted it is gone; nothing waits for the answer.
@@ -2621,7 +2600,6 @@ def test_a_settings_save_that_lands_after_cancel_still_takes_effect(
         assert outcomes == [None]
         assert window.config == candidate
         assert localizer.preference() == "ja"
-        assert scheduled == [3]
     finally:
         localizer.use("system")
 
@@ -2859,7 +2837,6 @@ def test_hard_quit_bounds_a_native_qthread_wait() -> None:
     # A disposable process exercises the real PySide6 wait and production timer.
     script = """
 import threading
-from types import SimpleNamespace
 from PySide6.QtCore import QThread
 from pixelup import gui
 assert 'torch' not in __import__('sys').modules
@@ -2868,10 +2845,9 @@ class HeldThread(QThread):
         threading.Event().wait()
 worker = HeldThread()
 worker.start()
-owner = SimpleNamespace(_log_forced_exit=lambda: None)
 def expire():
     print('watchdog expired', flush=True)
-    gui.MainWindow._force_exit(owner)
+    gui._exit_now()
 gui._start_quit_watchdog(0.05, expire)
 print('native wait entered', flush=True)
 worker.wait()
@@ -2932,7 +2908,7 @@ def test_failed_folder_save_keeps_current_location_and_starts_no_install(
     assert not dialog.isVisible()
 
 
-def test_late_folder_save_after_dialog_close_applies_without_starting_download(
+def test_managed_models_stays_open_until_its_folder_save_lands(
     make_window, tmp_path, monkeypatch
 ):
     window = make_window(injected=False)
@@ -2948,13 +2924,15 @@ def test_late_folder_save_after_dialog_close_applies_without_starting_download(
     dialog = window._active_models_dialog
     target = tmp_path / "new"
     dialog.folder_edit.setText(str(target))
+    dialog.show()
     try:
-        dialog._install_bundle(0)
+        dialog.apply_folder_button.click()
         assert entered.wait(3)
         assert window.model_manager.folder_change_pending
         assert window.model_manager.install(("RealESRGAN_x4plus",), force=False) is None
         dialog.reject()
         QApplication.processEvents()
+        assert dialog.isVisible()
     finally:
         release.set()
     _settle_config(window)
@@ -2962,6 +2940,8 @@ def test_late_folder_save_after_dialog_close_applies_without_starting_download(
     assert window.runtime_dirs.models_dir == target
     assert not window.model_manager.operations
     assert not window.model_manager.folder_change_pending
+    dialog.reject()
+    assert not dialog.isVisible()
 
 
 def test_saved_folder_load_and_environment_override(make_window, tmp_path, monkeypatch):
@@ -3014,14 +2994,14 @@ def test_first_download_uses_saved_choice_and_releases_captured_request(
     assert not window._pending_model_work
 
 
-@pytest.mark.parametrize("setting", ["models_folder", "max_concurrent_jobs"])
+@pytest.mark.parametrize("setting", ["models_folder", "display_zone"])
 def test_landed_save_applies_while_quit_question_is_cancelled(
     make_window, tmp_path, monkeypatch, setting
 ):
     window = make_window(injected=False)
     entered, release = threading.Event(), threading.Event()
     real_save = gui.save_app_config
-    value = str(tmp_path / "new") if setting == "models_folder" else 3
+    value = str(tmp_path / "new") if setting == "models_folder" else "Europe/Paris"
 
     def delayed(*args):
         entered.set()
@@ -3302,7 +3282,7 @@ class Asked:
 
 gui.QuitConfirmDialog = gui.QuitSaveFailedDialog = Asked
 gui.warn_jobs_stopping = Asked
-gui.drain_backups = lambda _seconds: None
+gui.drain_backups = lambda: None
 gui.QUIT_BUDGET_S = 1.0
 app = QApplication([])
 window = gui.MainWindow(log_file=Path(os.environ['PIXELUP_DATA_DIR']) / 'test.log')
@@ -4036,13 +4016,13 @@ def test_a_failure_applying_landed_settings_still_answers_their_editor(
     monkeypatch.setattr(window, "_apply_saved_settings", broken)
     answers: list[object] = []
     window._save_config_candidate(
-        replaced(window.config, max_concurrent_jobs=2), Message("settings.saveFailed"),
+        replaced(window.config, display_zone="Europe/Paris"), Message("settings.saveFailed"),
         answers.append,
     )
     _settle_config(window)
 
     assert answers == [None]
-    assert window.config.max_concurrent_jobs == 2
+    assert window.config.display_zone == "Europe/Paris"
     assert window._config_save is None
 
 
@@ -4113,7 +4093,7 @@ def test_everyday_shortcuts_press_their_buttons_only_while_those_are_on(
 
 
 @pytest.mark.parametrize("changed_set", [
-    "max_concurrent_jobs", "font_family", "language", "display_zone",
+    "font_family", "language", "display_zone",
 ])
 def test_real_settings_dialog_replaces_failed_owned_edits_and_preserves_unshown_sets(
     make_window, tmp_path, monkeypatch, changed_set,
@@ -4130,13 +4110,11 @@ def test_real_settings_dialog_replaces_failed_owned_edits_and_preserves_unshown_
     _settle_config(window)
     assert outcomes == [None]
     pending = {
-        "max_concurrent_jobs": 3,
         "font_family": "Pending Font",
         "language": "de",
         "display_zone": "UTC",
     }
     replacement = {
-        "max_concurrent_jobs": 4,
         "font_family": "Menlo",
         "language": "ja",
         "display_zone": "Europe/Paris",
@@ -4146,9 +4124,7 @@ def test_real_settings_dialog_replaces_failed_owned_edits_and_preserves_unshown_
     def edit_and_save(dialog):
         dialogs.append(dialog)
         assert dialog.config() == baseline
-        if changed_set == "max_concurrent_jobs":
-            dialog.concurrent.setValue(replacement[changed_set])
-        elif changed_set == "font_family":
+        if changed_set == "font_family":
             dialog.font_family.setText(replacement[changed_set])
         else:
             combo = getattr(dialog, changed_set)

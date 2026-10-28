@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from pixelup import output_publication
-from pixelup.output_reservation import published_file_is_current
 
 
 def _without_hard_links(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -16,7 +15,7 @@ def _without_hard_links(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(output_publication.os, "link", unsupported)
 
 
-def test_rename_fallback_publishes_complete_bytes_and_preserves_identity(
+def test_rename_fallback_publishes_complete_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _without_hard_links(monkeypatch)
@@ -27,7 +26,7 @@ def test_rename_fallback_publishes_complete_bytes_and_preserves_identity(
 
     published = output_publication.publish_complete(stage, destination)
 
+    assert published == destination
     assert destination.read_bytes() == data
-    assert published_file_is_current(published)
     assert not stage.exists()
 

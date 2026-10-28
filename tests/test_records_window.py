@@ -473,7 +473,7 @@ def test_an_open_window_settles_instead_of_reading_its_own_reads_forever(
     process_until,
 ) -> None:
     database = configure_session_logging()
-    assert flush_records(5)
+    flush_records()
     set_stored_listener(stored_signal().emit)
     reader = ScriptedReader(database)
     reads = RecordsReads(reader)
@@ -652,7 +652,7 @@ def test_every_label_of_a_record_speaks_the_language(tag: str, qapp: QApplicatio
 @pytest.fixture
 def make_main(qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fast: None):
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
-    monkeypatch.setattr(JobRunner, "schedule", lambda self, max_concurrent_jobs: None)
+    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),

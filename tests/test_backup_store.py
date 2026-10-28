@@ -185,7 +185,7 @@ def test_the_session_row_follows_a_revert_within_the_session(
     record(target, b"original\n")
     _relaunch(monkeypatch, "session-2")
     record(target, b"edited\n")
-    assert drain_backups(_THREAD_WAIT_S)  # landed before the revert is saved
+    drain_backups()  # landed before the revert is saved
     record(target, b"original\n")  # back to the earlier session's content
 
     rows = _rows(home, target)
@@ -217,10 +217,12 @@ def test_record_returns_without_waiting_for_the_store(
 
     record(target, b"second\n")  # returns although the recorder is stuck
     record(target, b"third\n")  # replaces the pending "second"
-    assert drain_backups(0.05) is False
+    from pixelup import backup_store
+
+    assert list(backup_store._recorder._pending.values()) == [b"third\n"]
 
     release.set()
-    assert drain_backups(_THREAD_WAIT_S) is True
+    drain_backups()
     assert [bytes(row[1]) for row in _rows(home, target)] == [b"third\n"]
 
 
@@ -332,12 +334,12 @@ def test_backup_failure_keeps_full_diagnostics_without_failing_the_primary_save(
     )
 
     write_managed_text(target, "durable\n")
-    assert drain_backups(_THREAD_WAIT_S)
+    drain_backups()
     write_managed_text(target, "still durable\n")
 
     assert target.read_bytes() == b"still durable\n"
-    assert drain_backups(0)
-    assert flush_records(5)
+    drain_backups()
+    flush_records()
     with sqlite3.connect(database) as connection:
         entries = connection.execute(
             "SELECT level, fields FROM logs WHERE message = ?",
@@ -409,7 +411,7 @@ def test_backup_failure_disables_and_drains_with_unavailable_root_or_failed_warn
         assert recorder._disabled
         assert not recorder._pending
         assert not recorder._writing
-        assert drain_backups(0)
+        drain_backups()
         record(target, b"abandoned after failure")
         assert not recorder._pending
         assert (displaced / target.name).read_bytes() == b"landed primary save\n"

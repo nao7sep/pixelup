@@ -9,12 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QWidget
 
-from pixelup.app_config import (
-    MAX_CONCURRENT_JOBS,
-    AppConfig,
-    load_app_config_result,
-    save_app_config,
-)
+from pixelup.app_config import AppConfig, load_app_config_result, save_app_config
 from pixelup.fonts import system_ui_font_family
 from pixelup.i18n.message import Message
 from pixelup.jobs import JobSettings
@@ -22,17 +17,14 @@ from pixelup.settings_dialog import DiscardChangesDialog, SettingsDialog
 
 _FAILED = Message("settings.saveFailed")
 
-# The dialog holds only what the main window does not show: the UI font and the
-# concurrent job count. The image-processing
+# The dialog holds only what the main window does not show: the language, the time
+# zone and the UI font. The image-processing
 # parameters live in the main window's Parameters panel and are no business of this
 # dialog — not to edit, and not to reset.
 
 
 def test_round_trips_config_without_changes(qapp: QApplication) -> None:
-    config = AppConfig(
-        max_concurrent_jobs=4,
-        font_family="Courier New",
-    )
+    config = AppConfig(font_family="Courier New", language="ja")
     dialog = SettingsDialog(config)
     try:
         assert dialog.config() == config
@@ -54,18 +46,6 @@ def test_settings_is_named_by_its_title_bar_alone(qapp: QApplication) -> None:
         dialog.deleteLater()
 
 
-def test_round_trips_boundary_values_without_spurious_dirty(qapp: QApplication) -> None:
-    # The spinbox range must accommodate the full config domain, otherwise a
-    # max-valued config would be clamped on display and report false-dirty.
-    config = AppConfig(max_concurrent_jobs=MAX_CONCURRENT_JOBS)
-    dialog = SettingsDialog(config)
-    try:
-        assert dialog.config() == config
-        assert dialog.is_dirty() is False
-    finally:
-        dialog.deleteLater()
-
-
 def test_commit_disabled_until_dirty_and_back(qapp: QApplication) -> None:
     dialog = SettingsDialog(AppConfig())
     try:
@@ -74,12 +54,12 @@ def test_commit_disabled_until_dirty_and_back(qapp: QApplication) -> None:
         # OK is what saves, so it takes the primary role rather than looking like Cancel.
         assert dialog.ok_button.property("role") == "primary"
 
-        dialog.concurrent.setValue(dialog.concurrent.value() + 1)
+        dialog.font_family.setText("Menlo")
         assert dialog.is_dirty() is True
         assert dialog.ok_button.isEnabled() is True
 
         # Reverting back to the opened value clears the dirty flag again.
-        dialog.concurrent.setValue(AppConfig().max_concurrent_jobs)
+        dialog.font_family.setText(AppConfig().font_family)
         assert dialog.is_dirty() is False
         assert dialog.ok_button.isEnabled() is False
     finally:
@@ -125,13 +105,11 @@ def test_accepting_the_dialog_leaves_the_parameters_panel_untouched(qapp: QAppli
     dialog = SettingsDialog(AppConfig(parameters=parameters))
     try:
         dialog.font_family.setText("Menlo")
-        dialog.concurrent.setValue(4)
 
         committed = dialog.config()
 
         assert committed.parameters == parameters
         assert committed.font_family == "Menlo"
-        assert committed.max_concurrent_jobs == 4
     finally:
         dialog.deleteLater()
 
@@ -140,7 +118,7 @@ def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplica
     attempts: list[AppConfig] = []
     dialog = SettingsDialog(
         AppConfig(),
-        try_save=lambda candidate, finished, waiting: finished(
+        try_save=lambda candidate, finished: finished(
             attempts.append(candidate) or _FAILED
         ),
     )
@@ -161,14 +139,13 @@ def test_failed_save_stays_open_with_inline_error_and_keeps_draft(qapp: QApplica
 
 def test_failed_save_grows_dialog_instead_of_compressing_controls(qapp: QApplication) -> None:
     dialog = SettingsDialog(
-        AppConfig(), try_save=lambda _candidate, finished, waiting: finished(_FAILED)
+        AppConfig(), try_save=lambda _candidate, finished: finished(_FAILED)
     )
     try:
         dialog.show()
         qapp.processEvents()
         initial_height = dialog.height()
         font_field_height = dialog.font_family.height()
-        concurrent_field_height = dialog.concurrent.height()
 
         dialog.font_family.setText("Menlo")
         dialog.ok_button.click()
@@ -176,7 +153,6 @@ def test_failed_save_grows_dialog_instead_of_compressing_controls(qapp: QApplica
 
         assert dialog.height() > initial_height
         assert dialog.font_family.height() >= font_field_height
-        assert dialog.concurrent.height() >= concurrent_field_height
     finally:
         dialog.deleteLater()
 
@@ -184,10 +160,10 @@ def test_failed_save_grows_dialog_instead_of_compressing_controls(qapp: QApplica
 def test_successful_retry_accepts_after_an_inline_failure(qapp: QApplication) -> None:
     outcomes = iter((_FAILED, None))
     dialog = SettingsDialog(
-        AppConfig(), try_save=lambda _candidate, finished, waiting: finished(next(outcomes))
+        AppConfig(), try_save=lambda _candidate, finished: finished(next(outcomes))
     )
     try:
-        dialog.concurrent.setValue(2)
+        dialog.font_family.setText("Menlo")
         dialog.ok_button.click()
         assert dialog.result() == 0
         assert dialog.error_message.isHidden() is False
@@ -202,17 +178,17 @@ def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: P
     path = tmp_path / "config.json"
     initial = AppConfig()
 
-    def save(candidate: AppConfig, finished, waiting) -> None:
+    def save(candidate: AppConfig, finished) -> None:
         save_app_config(candidate, initial, load_app_config_result(path).file)
         finished(None)
 
     dialog = SettingsDialog(initial, try_save=save)
     try:
-        dialog.concurrent.setValue(4)
+        dialog.font_family.setText("Menlo")
         dialog.ok_button.click()
         assert json.loads(path.read_text(encoding="utf-8")) == {
             "format_version": 1,
-            "max_concurrent_jobs": 4,
+            "font_family": "Menlo",
         }
     finally:
         dialog.deleteLater()
@@ -264,7 +240,7 @@ def test_every_close_path_asks_before_discarding_a_dirty_draft(
     dialog = SettingsDialog(AppConfig())
     try:
         dialog.show()
-        dialog.concurrent.setValue(4)
+        dialog.font_family.setText("Menlo")
 
         def request_close() -> None:
             if close == "cancel":
@@ -276,7 +252,7 @@ def test_every_close_path_asks_before_discarding_a_dirty_draft(
 
         request_close()
         assert dialog.isVisible() is True
-        assert dialog.concurrent.value() == 4
+        assert dialog.font_family.text() == "Menlo"
         request_close()
         assert dialog.isVisible() is False
         assert dialog.result() == int(QDialog.DialogCode.Rejected)
@@ -292,7 +268,7 @@ def test_session_shutdown_discards_without_asking(
     dialog = SettingsDialog(AppConfig(), session_shutdown=lambda: True)
     try:
         dialog.show()
-        dialog.concurrent.setValue(4)
+        dialog.font_family.setText("Menlo")
         dialog.close()
         assert dialog.isVisible() is False
     finally:
@@ -322,13 +298,11 @@ def test_discard_confirmation_focuses_keep_editing_and_puts_discard_last(
         confirm.deleteLater()
 
 
-def test_async_save_owns_commit_and_late_success_keeps_a_newer_draft(qapp: QApplication) -> None:
+def test_the_dialog_stays_saving_until_its_save_reports(qapp: QApplication) -> None:
     callbacks = []
-
-    def save(candidate, finished, waiting):
-        callbacks.append((candidate, finished, waiting))
-
-    dialog = SettingsDialog(AppConfig(), try_save=save)
+    dialog = SettingsDialog(
+        AppConfig(), try_save=lambda _candidate, finished: callbacks.append(finished)
+    )
     try:
         dialog.font_family.setText("Menlo")
         dialog.ok_button.click()
@@ -336,17 +310,8 @@ def test_async_save_owns_commit_and_late_success_keeps_a_newer_draft(qapp: QAppl
         assert len(callbacks) == 1
         assert not dialog.ok_button.isEnabled()
         assert not dialog.font_family.isEnabled()
-        callbacks[0][2]()
-        assert dialog.font_family.isEnabled()
-        dialog.font_family.setText("Arial")
-        callbacks[0][1](None)
-        assert dialog.result() == 0
-        assert dialog.font_family.text() == "Arial"
-        assert dialog.error_message.isHidden()
-        dialog.ok_button.click()
-        callbacks[0][1](None)
-        assert dialog.result() == 0
-        callbacks[1][1](None)
+        assert not dialog.cancel_button.isEnabled()
+        callbacks[0](None)
         assert dialog.result() == QDialog.DialogCode.Accepted
     finally:
         dialog.deleteLater()
@@ -384,12 +349,10 @@ def test_a_saved_time_zone_is_selected_when_settings_opens(qapp: QApplication) -
 def test_edits_are_the_dialog_owned_values(qapp: QApplication) -> None:
     dialog = SettingsDialog(AppConfig())
     try:
-        dialog.concurrent.setValue(4)
         dialog.font_family.setText("  Menlo  ")
         dialog.language.setCurrentIndex(dialog.language.findData("ja"))
         dialog.display_zone.setCurrentIndex(dialog.display_zone.findData("Asia/Tokyo"))
         assert dialog.edits() == {
-            "max_concurrent_jobs": 4,
             "font_family": "Menlo",
             "language": "ja",
             "display_zone": "Asia/Tokyo",
@@ -414,7 +377,6 @@ def test_field_labels_and_accessible_names_follow_the_interface_language(
             dialog.language: "settings.language",
             dialog.display_zone: "settings.timeZone",
             dialog.font_family: "settings.uiFont",
-            dialog.concurrent: "settings.concurrentJobs",
         }
         for language in ("en", "ja"):
             with speaking(language):
@@ -432,7 +394,7 @@ def test_field_labels_and_accessible_names_follow_the_interface_language(
                         related.object() is label and relation == QAccessible.RelationFlag.Label
                         for related, relation in interface.relations()
                     )
-                    if control in (dialog.font_family, dialog.concurrent):
+                    if control is dialog.font_family:
                         assert interface.text(QAccessible.Text.Name) == label.text()
     finally:
         dialog.deleteLater()

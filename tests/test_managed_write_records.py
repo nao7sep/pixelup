@@ -162,7 +162,7 @@ def test_failed_backup_submission_preserves_the_landed_save_and_settles(
             def __setitem__(self, path, data):
                 fail_submission()
 
-        recorder._pending = RejectPending()
+        monkeypatch.setattr(recorder, "_pending", RejectPending())
     else:
         real_start = threading.Thread.start
 
@@ -192,11 +192,11 @@ def test_failed_backup_submission_preserves_the_landed_save_and_settles(
         assert recorder._disabled
         assert not recorder._pending
         assert recorder._thread is None
-        assert recorder.drain(0)
-        recorder.close(0)  # It cannot try joining the unstarted thread.
+        recorder.drain()
+        recorder.close()  # It cannot try joining the unstarted thread.
         assert starts == (["pixelup-backups"] if stage == "start" else [])
         assert warning_lock_owned == [False]
-        assert flush_records(5)
+        flush_records()
         with sqlite3.connect(database) as connection:
             entries = connection.execute(
                 "SELECT level, fields FROM logs WHERE message = 'backup_store.submit_failed'"

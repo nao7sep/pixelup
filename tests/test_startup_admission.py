@@ -190,17 +190,18 @@ def test_admission_is_released_by_actual_owner_exit(tmp_path, launch, forced):
     replacement.exit()
 
 
-def test_admission_remains_held_during_background_settlement(tmp_path, launch):
+def test_an_ordinary_quit_holds_admission_while_its_backups_land(tmp_path, launch):
     owner = launch(tmp_path, mode="settlement")
     assert owner.start() == {"event": "ready"}
-    owner.return_from_main()
+    owner.send("quit")
+    assert owner.next() == {"event": "quitting"}
     path = str(tmp_path / "settlement.txt")
     with sqlite3.connect(tmp_path / "backups.sqlite3") as connection:
         rows = connection.execute("SELECT content FROM backups WHERE path=?", (path,)).fetchall()
         assert rows == []
     assert_contended(launch(tmp_path))
     owner.send("settle")
-    assert owner.next() == {"event": "settled"}
+    assert owner.next() == {"event": "returned", "result": 0}
     with sqlite3.connect(tmp_path / "backups.sqlite3") as connection:
         row = connection.execute("SELECT content FROM backups WHERE path=?", (path,)).fetchone()
         assert row == (b"settled\n",)

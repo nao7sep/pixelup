@@ -189,7 +189,7 @@ def test_a_read_never_stores_a_record() -> None:
     # Every stored record tells the Records window to read again, so a read
     # that logged would read forever.
     database = configure_session_logging()
-    assert flush_records(5)
+    flush_records()
     stored: list[None] = []
     set_stored_listener(lambda: stored.append(None))
     reader = RecordsReader(database)
@@ -200,7 +200,7 @@ def test_a_read_never_stores_a_record() -> None:
     finally:
         reader.close()
 
-    assert flush_records(5)
+    flush_records()
     assert stored == []
 
 
@@ -296,7 +296,7 @@ def test_the_list_reads_a_bounded_start_of_each_records_fields(
 def test_a_log_line_is_read_back_as_it_was_written() -> None:
     database = configure_session_logging()
     log.info("image.added", input="a.png", job_id=4)
-    assert flush_records(5)
+    flush_records()
     reader = RecordsReader(database)
     try:
         newest = reader.page(RecordsQuery(), None).records[0]

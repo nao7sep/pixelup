@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from pixelup.errors import PixelupError
-from pixelup.output_reservation import (
-    PublishedFile,
-    assert_output_bundle_available,
-    remove_published_file,
-)
+from pixelup.output_reservation import assert_output_bundle_available, remove_published_file
 
 
 def test_other_format_remnant_blocks_the_bundle(tmp_path: Path) -> None:
@@ -73,33 +68,11 @@ def test_case_variant_broken_symlink_occupies_the_normalized_bundle(
     assert occupied.is_symlink()
 
 
-@pytest.mark.parametrize("name", ["result.png", "result.json"])
-def test_cleanup_removes_only_its_own_file(tmp_path: Path, name: str) -> None:
-    path = tmp_path / name
-    path.write_bytes(b"pixelup")
-    identity = os.lstat(path)
-    claim = PublishedFile(path, identity.st_dev, identity.st_ino)
-    winner = tmp_path / "winner.tmp"
-    winner.write_bytes(b"external winner")
-    os.replace(winner, path)
-
-    assert remove_published_file(claim) is False
-    assert path.read_bytes() == b"external winner"
-
-    path.unlink()
-    path.write_bytes(b"pixelup")
-    identity = os.lstat(path)
-    claim = PublishedFile(path, identity.st_dev, identity.st_ino)
-
-    assert remove_published_file(claim) is True
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_cleanup_of_a_vanished_file_leaves_nothing_and_reports_it(tmp_path: Path) -> None:
+def test_cleanup_removes_its_file_and_reports_one_already_gone(tmp_path: Path) -> None:
     path = tmp_path / "result.png"
     path.write_bytes(b"pixelup")
-    identity = os.lstat(path)
-    path.unlink()
 
-    assert remove_published_file(PublishedFile(path, identity.st_dev, identity.st_ino)) is False
+    remove_published_file(path)
+    remove_published_file(path)
+
     assert list(tmp_path.iterdir()) == []

@@ -269,39 +269,6 @@ def test_save_output_image_preserves_an_exact_boundary_winner(
 
 
 @pytest.mark.parametrize("late_name", ["out.jpg", "out.json"])
-def test_save_output_image_removes_only_its_claim_when_a_companion_wins_at_publish(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    late_name: str,
-) -> None:
-    output = tmp_path / "out.png"
-    late = tmp_path / late_name
-    real_link = os.link
-
-    def companion_then_link(source: Path, target: Path, **kwargs: object) -> None:
-        late.write_bytes(b"publication-winner")
-        real_link(source, target, **kwargs)
-
-    monkeypatch.setattr("pixelup.imaging.os.link", companion_then_link)
-
-    with pytest.raises(PixelupError) as excinfo:
-        save_output_image(
-            Image.new("RGB", (1, 1), "white"),
-            output_path=output,
-            output_format=OutputFormat.PNG,
-            quality=95,
-            background="white",
-            source_metadata=SourceMetadata(),
-            strip_metadata=True,
-            target_profile=None,
-        )
-
-    assert excinfo.value.code == "output_exists"
-    assert not output.exists()
-    assert late.read_bytes() == b"publication-winner"
-
-
-@pytest.mark.parametrize("late_name", ["out.jpg", "out.json"])
 def test_save_output_image_revalidates_the_whole_bundle_after_encoding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

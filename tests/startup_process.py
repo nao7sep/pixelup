@@ -42,7 +42,7 @@ real_backup_write = backup_store._write
 def backup_write(store, session, path, data) -> None:
     if mode == "settlement" and Path(path).name == "settlement.txt":
         pending_write.set()
-        assert release_write.wait(20)
+        release_write.wait()
     real_backup_write(store, session, path, data)
 
 
@@ -58,7 +58,7 @@ class ProbeWindow:
         emit("writer_entered")
         self.runtime_dirs = runtime_dirs or resolve_runtime_dirs()
         loaded = load_app_config_result()
-        save_app_config(replace(loaded.config, max_concurrent_jobs=2), loaded.config, loaded.file)
+        save_app_config(replace(loaded.config, font_family="Menlo"), loaded.config, loaded.file)
         state = gui.window_state()
         state.save("admission-probe", os.getpid())
         if mode == "startup_failure":
@@ -75,15 +75,22 @@ gui.MainWindow = ProbeWindow
 
 
 def run_loop(self) -> int:
-    assert flush_records(5)
-    assert gui.drain_backups(5)
+    flush_records()
+    gui.drain_backups()
     if mode == "settlement":
-        # Admit a real optional backup write, hold its physical writer, and let
-        # main's bounded drain return while that daemon thread is still settling.
+        # Admit a real optional backup write and hold its physical writer: main's
+        # drain waits for it, so the release arrives on a thread of its own.
         write_managed_text(resolve_state_dir() / "settlement.txt", "settled\n")
-        assert pending_write.wait(5)
+        pending_write.wait()
     emit("ready")
     assert command() == "quit"
+    if mode == "settlement":
+        def settle() -> None:
+            assert command() == "settle"
+            release_write.set()
+
+        threading.Thread(target=settle, daemon=True).start()
+        emit("quitting")
     return 0
 
 
@@ -106,10 +113,5 @@ if entry == "module":
 else:
     result = gui.main()
 emit("returned", result=result)
-if mode == "settlement":
-    assert command() == "settle"
-    release_write.set()
-    assert gui.drain_backups(5)
-    emit("settled")
 assert command() == "exit"
 raise SystemExit(result)

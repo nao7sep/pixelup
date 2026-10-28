@@ -113,7 +113,6 @@ from pixelup.model_management import (
     required_artifact_names,
 )
 from pixelup.model_manager import ModelManager
-from pixelup.output_cleanup import output_cleanup
 from pixelup.parameters import (
     ALPHA_MODE_CHOICES,
     DEFAULT_SCALE,
@@ -182,8 +181,6 @@ _PARAMETERS_SAVE_DELAY_MS = 500
 # How long a quit may take once it is under way, under the five or so seconds an OS
 # gives an app to end at logout or shutdown (unsaved-edits-conventions, Quitting).
 QUIT_BUDGET_S = 4.0
-# How long an ordinary quit waits for pending backup writes, inside the quit budget.
-BACKUP_DRAIN_S = 1.0
 
 
 def _start_quit_watchdog(seconds: float, expire: Callable[[], None]) -> None:
@@ -497,9 +494,8 @@ class MainWindow(QMainWindow):
         self._config_save: ConfigSave | None = None
         self._config_save_callback: Callable[[Message | None], None] | None = None
         self._config_save_failure: Message | None = None
-        self._config_save_pending: Callable[[], None] | None = None
         # Submitted edits belong to the app until saved, even if their editor
-        # closes after a timeout or failure. Each editor replaces only its sets.
+        # closes after a failure. Each editor replaces only its sets.
         self._unsaved_config_changes: dict[str, object] = {}
         self._parameter_edit_generation = 0
         self._saving_parameter_generation = 0
@@ -567,7 +563,6 @@ class MainWindow(QMainWindow):
         self.runner.progress.connect(self._job_progress)
         self.runner.finished.connect(self._job_finished)
         self.runner.idle.connect(self._close_when_workers_stop)
-        output_cleanup.finished.connect(self._close_when_workers_stop)
         self._closing = False
         self._quit_ready = False
         self._quit_dialog = None
@@ -828,10 +823,7 @@ class MainWindow(QMainWindow):
             return
         self._closing = True
         try:
-            self._flush_parameters_save(
-                finished=self._user_quit_save_finished,
-                waiting=lambda: self._user_quit_save_finished(False),
-            )
+            self._flush_parameters_save(finished=self._user_quit_save_finished)
         except Exception:
             self._abandon_quit()
             return
@@ -872,10 +864,7 @@ class MainWindow(QMainWindow):
                 log.info("quit.cancelled")
                 return
             if choice == "retry":
-                self._flush_parameters_save(
-                    finished=self._user_quit_save_finished,
-                    waiting=lambda: self._user_quit_save_finished(False),
-                )
+                self._flush_parameters_save(finished=self._user_quit_save_finished)
                 return
             log.warning(
                 "quit.parameters_unsaved",
@@ -907,7 +896,6 @@ class MainWindow(QMainWindow):
         self._bound_quit()
         self.runner.begin_shutdown()
         self.model_manager.begin_shutdown()
-        output_cleanup.begin_shutdown()
         if self._records_window is not None:
             self._records_window.close()
         if self._workers_clean_for_quit():
@@ -936,35 +924,22 @@ class MainWindow(QMainWindow):
         self._pending_job_plans.clear()
         self._job_plan_abandoned = True
         self.preview.reads.closing = True
-        _start_quit_watchdog(QUIT_BUDGET_S, self._force_exit)
-
-    def _force_exit(self) -> None:
-        # Diagnostics may wait on a handler or volume; they cannot own the hard exit.
-        try:
-            threading.Thread(
-                target=self._log_forced_exit, name="pixelup-quit-log", daemon=True
-            ).start()
-        finally:
-            _exit_now()
-
-    def _log_forced_exit(self) -> None:
-        try:
-            log.warning(
-                "quit.forced_exit",
-                budget_seconds=QUIT_BUDGET_S,
-                running_jobs=[
-                    {"job_id": job.id, "output": str(job.output_path)}
-                    for job in list(self.jobs)
-                    if job.status in {"running", "cancelling"}
-                ],
-                model_installs=[
-                    list(operation.artifact_names)
-                    for operation in list(self.model_manager.in_progress_operations)
-                ],
-            )
-        except Exception:
-            # Forced exit is already under way; another diagnostic sink could stall too.
-            pass
+        # Logged as the bound starts, so the watchdog itself only exits: past the
+        # bound this names what the forced exit cut short.
+        log.info(
+            "quit.bound_started",
+            budget_seconds=QUIT_BUDGET_S,
+            running_jobs=[
+                {"job_id": job.id, "output": str(job.output_path)}
+                for job in self.jobs
+                if job.status in {"running", "cancelling"}
+            ],
+            model_installs=[
+                list(operation.artifact_names)
+                for operation in self.model_manager.in_progress_operations
+            ],
+        )
+        _start_quit_watchdog(QUIT_BUDGET_S, _exit_now)
 
     def holds_work_after_os_close(self) -> bool:
         """Whether an accepted OS close still owns work the event loop must settle."""
@@ -983,7 +958,6 @@ class MainWindow(QMainWindow):
             and self._device_reads.settled
             and self._planning_reads.settled
             and self.preview.reads.settled
-            and output_cleanup.settled
             and self.runner.cleanup_for_quit()
             and self.model_manager.cleanup_for_quit()
             and (self._records_reads is None or self._records_reads.stop())
@@ -1587,8 +1561,8 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(
             self.config,
             self,
-            try_save=lambda candidate, finished, waiting: self._save_config_candidate(
-                candidate, Message("settings.saveFailed"), finished, waiting,
+            try_save=lambda candidate, finished: self._save_config_candidate(
+                candidate, Message("settings.saveFailed"), finished,
                 edited_sets=tuple(dialog.edits()),
             ),
             session_shutdown=self._is_session_shutdown,
@@ -1610,16 +1584,8 @@ class MainWindow(QMainWindow):
             set_display_zone(current.display_zone)
             if self._records_window is not None:
                 self._records_window.show_times_again()
-        if (
-            previous.font_family,
-            previous.language,
-            previous.display_zone,
-            previous.max_concurrent_jobs,
-        ) == (
-            current.font_family,
-            current.language,
-            current.display_zone,
-            current.max_concurrent_jobs,
+        if (previous.font_family, previous.language, previous.display_zone) == (
+            current.font_family, current.language, current.display_zone,
         ):
             return
         if previous.font_family != current.font_family:
@@ -1639,7 +1605,6 @@ class MainWindow(QMainWindow):
             previous=config_log_payload(previous),
             current=config_log_payload(current),
         )
-        self.runner.schedule(current.max_concurrent_jobs)
 
     def _managed_models_dialog(self) -> None:
         self.model_manager.refresh_readiness()
@@ -2172,17 +2137,15 @@ class MainWindow(QMainWindow):
         *,
         surface_failure: bool = True,
         finished: Callable[[bool], None] | None = None,
-        waiting: Callable[[], None] | None = None,
     ) -> None:
         self._parameters_save_timer.stop()
-        self._save_parameters(surface_failure=surface_failure, finished=finished, waiting=waiting)
+        self._save_parameters(surface_failure=surface_failure, finished=finished)
 
     def _save_parameters(
         self,
         *,
         surface_failure: bool = True,
         finished: Callable[[bool], None] | None = None,
-        waiting: Callable[[], None] | None = None,
     ) -> None:
         parameters = self.current_job_settings()
         if (parameters == self.config.parameters and self._config_save is None
@@ -2207,25 +2170,14 @@ class MainWindow(QMainWindow):
                 if failure is None and self.current_job_settings() != self.config.parameters:
                     # Quit and Settings opening need the visible panel's latest basis,
                     # rather than authorizing from an older save's successful result.
-                    self._flush_parameters_save(
-                        surface_failure=surface_failure, finished=finished, waiting=waiting
-                    )
+                    self._flush_parameters_save(surface_failure=surface_failure, finished=finished)
                 else:
                     finished(failure is None)
-
-        def pending() -> None:
-            if surface_failure:
-                self.parameters_result.show_result(
-                    Message("notice.configSaving"), severity="warning"
-                )
-            if waiting is not None:
-                waiting()
 
         self._save_config_candidate(
             replace(self.config, parameters=parameters),
             Message("parameters.saveFailed"),
             saved,
-            pending,
             edited_sets=("parameters",),
         )
 
@@ -2234,7 +2186,6 @@ class MainWindow(QMainWindow):
         candidate: AppConfig,
         failed: Message,
         finished: Callable[[Message | None], None],
-        waiting: Callable[[], None] | None = None,
         *,
         edited_sets: tuple[str, ...] | None = None,
     ) -> None:
@@ -2266,19 +2217,10 @@ class MainWindow(QMainWindow):
         )
         self._config_save = operation
         self._config_save_callback = finished
-        self._config_save_pending = waiting
         self._config_save_failure = failed
         self._saving_parameter_generation = self._parameter_edit_generation
         operation.completed.connect(self._config_saved)
-        operation.timed_out.connect(self._config_save_timed_out)
         operation.start()
-
-    @Slot()
-    def _config_save_timed_out(self) -> None:
-        pending = self._config_save_pending
-        self._config_save_pending = None
-        if pending is not None:
-            pending()
 
     @Slot(object)
     def _config_saved(self, outcome: ConfigSaveOutcome) -> None:
@@ -2289,7 +2231,6 @@ class MainWindow(QMainWindow):
         failed = self._config_save_failure
         self._config_save = None
         self._config_save_callback = None
-        self._config_save_pending = None
         failure = None
         if outcome.error is not None:
             exc = outcome.error
@@ -2416,7 +2357,7 @@ class MainWindow(QMainWindow):
         self._refresh_image_job_summaries_for(job.input_path for job in new_jobs)
         self._update_action_buttons()
         self.runner.retain_runtime_dirs((job.id for job in new_jobs), runtime_dirs)
-        self.runner.schedule(self.config.max_concurrent_jobs)
+        self.runner.schedule()
 
     def _add_queue_rows(self, jobs: list[Job]) -> None:
         self.queue_model.append(jobs)
@@ -2485,7 +2426,7 @@ class MainWindow(QMainWindow):
             self._refresh_image_job_summaries_for(touched_paths)
             self._update_action_buttons()
             self.runner.retain_runtime_dirs(retried_jobs, runtime_dirs)
-            self.runner.schedule(self.config.max_concurrent_jobs)
+            self.runner.schedule()
 
     @Slot(int, object)
     def _job_progress(self, job_id: int, message: Message) -> None:
@@ -2625,7 +2566,6 @@ _SET_LABELS = {
     "font_family": Message("settings.uiFont"),
     "language": Message("settings.language"),
     "display_zone": Message("settings.timeZone"),
-    "max_concurrent_jobs": Message("settings.concurrentJobs"),
     "parameters": Message("parameters.title"),
     "models_folder": Message("managedModels.folder"),
 }
@@ -2858,11 +2798,10 @@ def main() -> int:
             app.exec()
         return code
     finally:
-        # An ordinary quit gives pending backup writes a short bound; an OS session
-        # end skips them (data-backup-conventions). The quit watchdog still owns the
-        # hard exit.
+        # An ordinary quit lets pending backup writes land; an OS session end skips
+        # them (data-backup-conventions). The quit watchdog bounds both.
         if not getattr(_window, "_os_close_accepted", False):
-            drain_backups(BACKUP_DRAIN_S)
+            drain_backups()
         logging.shutdown()
 
 

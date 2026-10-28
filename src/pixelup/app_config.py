@@ -45,14 +45,6 @@ def config_path() -> Path:
     return resolve_state_dir() / "config.json"
 
 
-# Valid domain of the settings this module still owns. The settings dialog and this
-# loader both reference these, so a value can never be representable in one place but
-# not the other. The image-processing parameters' own domains live beside JobSettings
-# (see pixelup.jobs), which is where their meaning now lives.
-MIN_CONCURRENT_JOBS = 1
-MAX_CONCURRENT_JOBS = 8
-
-
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     """Effective settings; ``config.json`` holds only the sets that differ from their
@@ -65,7 +57,6 @@ class AppConfig:
     defaults are written, so there is no second defaults layer to drift against.
     """
 
-    max_concurrent_jobs: int = MIN_CONCURRENT_JOBS
     font_family: str = DEFAULT_UI_FONT_FAMILY
     # The interface language: "system" to follow the computer, or a language tag
     # (localization-conventions).
@@ -258,10 +249,6 @@ def _decode_display_zone(value: Any) -> str:
     return value
 
 
-def _decode_max_concurrent_jobs(value: Any) -> int:
-    return _int_range(value, "max_concurrent_jobs", MIN_CONCURRENT_JOBS, MAX_CONCURRENT_JOBS)
-
-
 def _decode_parameters(value: Any) -> JobSettings:
     data = _object(value, "parameters")
     if not _parameters_to_json(JobSettings()).keys() <= data.keys():
@@ -291,7 +278,6 @@ _SET_DECODERS: dict[str, Callable[[Any], Any]] = {
     "font_family": _decode_font_family,
     "language": _decode_language,
     "display_zone": _decode_display_zone,
-    "max_concurrent_jobs": _decode_max_concurrent_jobs,
     "parameters": _decode_parameters,
     "models_folder": _decode_models_folder,
 }
@@ -338,7 +324,6 @@ def _to_json(config: AppConfig) -> dict[str, Any]:
         "font_family": config.font_family,
         "language": config.language,
         "display_zone": config.display_zone,
-        "max_concurrent_jobs": config.max_concurrent_jobs,
         "parameters": _parameters_to_json(config.parameters),
         "models_folder": config.models_folder,
     }
@@ -360,7 +345,6 @@ def _parameters_to_json(parameters: JobSettings) -> dict[str, Any]:
 
 def config_log_payload(config: AppConfig) -> dict[str, object]:
     return {
-        "max_concurrent_jobs": config.max_concurrent_jobs,
         "font_family": config.font_family,
         "language": config.language,
         "display_zone": config.display_zone,

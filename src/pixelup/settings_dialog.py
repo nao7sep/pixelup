@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pixelup.app_config import MAX_CONCURRENT_JOBS, MIN_CONCURRENT_JOBS, AppConfig
+from pixelup.app_config import AppConfig
 from pixelup.dialog_shell import FORM_WIDTH, NOTICE_WIDTH, DialogShell
 from pixelup.fonts import system_ui_font_family
 from pixelup.i18n import localizer
@@ -25,7 +25,7 @@ from pixelup.i18n.message import Message
 from pixelup.text_cleanup import single_line
 from pixelup.time_zones import SYSTEM_ZONE, system_zone_id, zone_ids
 from pixelup.ui_common import secondary_label, use_regular_spacing
-from pixelup.widgets import NoWheelComboBox, NoWheelSpinBox
+from pixelup.widgets import NoWheelComboBox
 
 # A settled column width for the value field so the control and its wrapped
 # caption share one edge, and the caption wraps predictably instead of stretching
@@ -86,7 +86,7 @@ class SettingsDialog(DialogShell):
     One home per thing. The image-processing parameters live in the main window's
     Parameters panel, which persists its own edits and resets to its own built-ins,
     so this dialog deliberately holds only the leftovers: the interface language, the
-    time zone, the UI font and the concurrent job count. It carries no reset button —
+    time zone and the UI font. It carries no reset button —
     no setting here is a stale-able built-in or a tuned, interacting set worth
     returning to, so there is no default worth a control (config-sets-conventions).
 
@@ -100,13 +100,11 @@ class SettingsDialog(DialogShell):
         config: AppConfig,
         parent: QWidget | None = None,
         *,
-        try_save: Callable[[AppConfig, Callable[[Message | None], None], Callable[[], None]], None]
-        | None = None,
+        try_save: Callable[[AppConfig, Callable[[Message | None], None]], None] | None = None,
         session_shutdown: Callable[[], bool] = lambda: False,
     ) -> None:
         super().__init__("settings.title", parent, width=FORM_WIDTH)
         self._saving = False
-        self._save_generation = 0
         self._initial = config
         self._try_save = try_save
         self._session_shutdown = session_shutdown
@@ -114,10 +112,6 @@ class SettingsDialog(DialogShell):
         form_widget = QWidget()
         form = QGridLayout(form_widget)
         use_regular_spacing(form)
-
-        self.concurrent = NoWheelSpinBox()
-        self.concurrent.setRange(MIN_CONCURRENT_JOBS, MAX_CONCURRENT_JOBS)
-        self.concurrent.setValue(config.max_concurrent_jobs)
 
         self.font_family = QLineEdit()
         self.font_family.setText(config.font_family)
@@ -169,9 +163,6 @@ class SettingsDialog(DialogShell):
         row += 1
         form.addWidget(field_label(self.font_family, "settings.uiFont"), row, 0, label_align)
         form.addWidget(_captioned(self.font_family, "settings.uiFontCaption"), row, 1)
-        row += 1
-        form.addWidget(field_label(self.concurrent, "settings.concurrentJobs"), row, 0)
-        form.addWidget(self.concurrent, row, 1, Qt.AlignmentFlag.AlignLeft)
         form.setColumnStretch(0, 0)
         form.setColumnStretch(1, 0)
         form.setColumnStretch(2, 1)
@@ -202,7 +193,6 @@ class SettingsDialog(DialogShell):
         self.fit()
 
         for changed in (
-            self.concurrent.valueChanged,
             self.font_family.textChanged,
             self.language.currentIndexChanged,
             self.display_zone.currentIndexChanged,
@@ -223,7 +213,6 @@ class SettingsDialog(DialogShell):
     def edits(self) -> dict[str, object]:
         """The values authored by this dialog, also defining its save scope."""
         return {
-            "max_concurrent_jobs": self.concurrent.value(),
             "font_family": single_line(self.font_family.text()),
             "language": self.language.currentData(),
             "display_zone": self.display_zone.currentData(),
@@ -242,7 +231,6 @@ class SettingsDialog(DialogShell):
             and DiscardChangesDialog(self).exec() != QDialog.DialogCode.Accepted
         ):
             return
-        self._save_generation += 1
         super().reject()
 
     def _update_commit_enabled(self) -> None:
@@ -258,26 +246,17 @@ class SettingsDialog(DialogShell):
             self.accept()
             return
         self._saving = True
-        self._save_generation += 1
-        generation = self._save_generation
         self._update_commit_enabled()
         self.cancel_button.setEnabled(False)
-        self.concurrent.setEnabled(False)
         self.font_family.setEnabled(False)
         self.language.setEnabled(False)
         self.display_zone.setEnabled(False)
-        self._try_save(
-            candidate,
-            lambda failure: self._saved(generation, candidate, failure),
-            lambda: self._saved(generation, candidate, Message("notice.configSaving")),
-        )
+        # The save runs to its end; the dialog stays in its saving state until then.
+        self._try_save(candidate, self._saved)
 
-    def _saved(self, generation: int, candidate: AppConfig, failure: Message | None) -> None:
-        if generation != self._save_generation:
-            return
+    def _saved(self, failure: Message | None) -> None:
         self._saving = False
         self.cancel_button.setEnabled(True)
-        self.concurrent.setEnabled(True)
         self.font_family.setEnabled(True)
         self.language.setEnabled(True)
         self.display_zone.setEnabled(True)
@@ -289,5 +268,4 @@ class SettingsDialog(DialogShell):
             return
         self.error_message.clear()
         self.error_message.hide()
-        if candidate == self.config():
-            self.accept()
+        self.accept()

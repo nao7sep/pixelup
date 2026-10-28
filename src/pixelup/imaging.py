@@ -22,14 +22,8 @@ from pixelup.derived_metadata import (
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
 from pixelup.icc_profiles import profile_bytes as generated_profile_bytes
-from pixelup.output_cleanup import open_output_handle, output_cleanup
 from pixelup.output_publication import publish_complete
-from pixelup.output_reservation import (
-    PublishedFile,
-    assert_output_bundle_available,
-    assert_output_bundle_claims_current,
-    remove_published_file,
-)
+from pixelup.output_reservation import assert_output_bundle_available
 from pixelup.paths import OutputFormat
 from pixelup.session_log import log
 
@@ -66,7 +60,7 @@ class _ColorPlan:
     converted_to: OutputColor | None
 
 
-PublishedCallback = Callable[[PublishedFile], None]
+PublishedCallback = Callable[[Path], None]
 
 
 def register_image_plugins() -> None:
@@ -303,7 +297,6 @@ def save_output_image(
             encoded.save(staged, **save_kwargs)
             staged.flush()
             os.fsync(staged.fileno())
-            output_cleanup.check_open()
             # not recorded: this is the harvest-then-discard OUTPUT image, a binary
             # written for the user at a user-chosen location — not managed text the
             # app owns and reloads as state. Binaries are out of scope for the text
@@ -315,11 +308,6 @@ def save_output_image(
             if os.name != "nt":
                 os.fchmod(staged.fileno(), final_mode & (read_permissions | 0o222))
             published = _publish_image_no_clobber(temp_path, output_path)
-            try:
-                assert_output_bundle_claims_current(output_path, (published,))
-            except PixelupError:
-                remove_published_file(published)
-                raise
             if on_published:
                 on_published(published)
     except PixelupError:
@@ -335,7 +323,7 @@ def save_output_image(
     return encoded.size
 
 
-def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> PublishedFile:
+def _publish_image_no_clobber(temp_path: Path, output_path: Path) -> Path:
     try:
         return publish_complete(temp_path, output_path)
     except FileExistsError as exc:
@@ -485,19 +473,17 @@ def _save_kwargs(
 def _temp_output_path(output_path: Path) -> Path:
     # Staged beside output_path, not in a central temp directory: the atomic
     # complete-file publication requires one filesystem volume, and output_path
-    # may be on a USB stick or second disk. Only the name
-    # comes from here: tempfile's own functions would create the file through the
-    # C runtime, whose Windows handle quit could not delete (open_output_handle).
+    # may be on a USB stick or second disk.
     return output_path.parent / f"pixelup-{secrets.token_hex(8)}.tmp"
 
 
 @contextmanager
 def temp_file_guard(path: Path) -> Iterator[tuple[Any, int]]:
-    output_cleanup.check_open()
-    descriptor = open_output_handle(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    # O_BINARY exists only on Windows, where a descriptor otherwise opens in text mode.
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
     primary: BaseException | None = None
     try:
-        output_cleanup.admit(descriptor, path, staging=True)
         # Capture ordinary creation's umask-filtered mode before keeping staged
         # bytes private; publication later intersects this with source read permissions.
         final_mode = os.fstat(descriptor).st_mode & 0o777
@@ -509,7 +495,6 @@ def temp_file_guard(path: Path) -> Iterator[tuple[Any, int]]:
         primary = exc
         raise
     finally:
-        output_cleanup.release(descriptor)
         cleanup_error: BaseException | None = None
         for cleanup in (lambda: os.close(descriptor), lambda: path.unlink(missing_ok=True)):
             try:

@@ -385,7 +385,7 @@ def test_the_planned_record_keeps_the_input_version_when_inference_fails(
             RuntimeDirs(models_dir),
         )
 
-    assert flush_records(5)
+    flush_records()
     connection = sqlite3.connect(database)
     try:
         (fields,) = connection.execute(

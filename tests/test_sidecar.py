@@ -2,7 +2,6 @@ import errno
 import json
 import os
 import re
-import threading
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ from PIL import Image
 
 from pixelup import sidecar as sidecar_module
 from pixelup.errors import PixelupError
-from pixelup.output_cleanup import output_cleanup
 from pixelup.paths import OutputFormat
 from pixelup.sidecar import write_sidecar
 from pixelup.upscale import UpscaleOptions
@@ -59,7 +57,7 @@ def _write_sample_sidecar(
         },
         warnings=[],
     )
-    return published.path, json.loads(published.path.read_text())
+    return published, json.loads(published.read_text())
 
 
 def test_sidecar_omits_private_paths(tmp_path: Path) -> None:
@@ -142,69 +140,6 @@ def test_sidecar_fsync_failure_happens_before_publication(
     assert excinfo.value.code == "output_unwritable"
     assert not sidecar.exists()
     assert list(tmp_path.glob("*.tmp")) == []
-
-
-def test_sidecar_success_verification_rejects_an_exact_boundary_replacement(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sidecar = tmp_path / "source-realesr-general-x4v3-4x.json"
-    real_is_current = sidecar_module.published_file_is_current
-
-    def replace_before_verification(claim) -> bool:
-        winner = tmp_path / "winner.tmp"
-        winner.write_bytes(b"external winner")
-        os.replace(winner, sidecar)
-        return real_is_current(claim)
-
-    monkeypatch.setattr(
-        "pixelup.sidecar.published_file_is_current", replace_before_verification
-    )
-
-    with pytest.raises(PixelupError) as excinfo:
-        _write_sample_sidecar(tmp_path)
-
-    assert excinfo.value.code == "output_exists"
-    assert sidecar.read_bytes() == b"external winner"
-
-
-def test_quit_removes_a_sidecar_still_being_written(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A forced exit must not leave a half-written sidecar: while its bytes are
-    # written it belongs to the quit like a partial image does.
-    entered = threading.Event()
-    release = threading.Event()
-    real_fsync = sidecar_module.os.fsync
-    errors: list[BaseException] = []
-
-    def held_fsync(descriptor: int) -> None:
-        entered.set()
-        assert release.wait(5)
-        real_fsync(descriptor)
-
-    monkeypatch.setattr(sidecar_module.os, "fsync", held_fsync)
-
-    def write() -> None:
-        try:
-            _write_sample_sidecar(tmp_path)
-        except BaseException as exc:
-            errors.append(exc)
-
-    worker = threading.Thread(target=write)
-    worker.start()
-    try:
-        assert entered.wait(5)
-        output_cleanup.begin_shutdown()
-        assert output_cleanup._settled.wait(5)
-        if os.name != "nt":
-            assert list(tmp_path.glob("*.json")) == []
-    finally:
-        release.set()
-        worker.join(5)
-    assert not worker.is_alive()
-    assert list(tmp_path.glob("*.json")) == []
-
 
 
 @pytest.mark.parametrize("hard_links", [True, False])

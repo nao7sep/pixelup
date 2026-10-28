@@ -101,12 +101,8 @@ def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     to the root it first opened under, so it is closed after every test and the next
     test's first save re-opens it under that test's own root.
     """
-    from pixelup.output_cleanup import output_cleanup
-
-    output_cleanup.reset()
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path))
     yield
-    assert output_cleanup._settled.wait(5), "output cleanup did not settle"
     close_backup_store()
 
 

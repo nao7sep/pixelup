@@ -253,11 +253,11 @@ def test_the_language_setting_round_trips_and_an_unknown_value_means_system(
     assert load_app_config(path).language == "zh-Hans"
     # Unknown to this build is not corruption: the rest of the settings survive.
     path.write_text(
-        json.dumps({"format_version": 1, "language": "tlh", "max_concurrent_jobs": 3}),
+        json.dumps({"format_version": 1, "language": "tlh", "font_family": "Menlo"}),
         encoding="utf-8",
     )
     loaded = load_app_config(path)
-    assert (loaded.language, loaded.max_concurrent_jobs) == ("system", 3)
+    assert (loaded.language, loaded.font_family) == ("system", "Menlo")
 
 
 def test_computer_languages_prefer_apple_languages_over_the_environment(
