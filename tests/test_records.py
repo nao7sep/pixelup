@@ -1,10 +1,12 @@
 """Reading records.sqlite3 for the Records window: pages, filters, a record
-whole, the launches, and reads that are bounded and never write."""
+whole and the launches, read on the records writer's thread and connection,
+never logging."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -17,17 +19,21 @@ from pixelup.records import (
     RecordDetail,
     RecordsPage,
     RecordsQuery,
-    RecordsReader,
     RecordSummary,
     cursor_after,
     merge_newest_page,
+    read_detail,
+    read_page,
+    read_sessions,
     split_fields,
 )
 from pixelup.session_log import (
+    RecordsHandler,
     _open_records,
     configure_session_logging,
     flush_records,
     log,
+    records_store,
     set_stored_listener,
 )
 
@@ -66,10 +72,28 @@ def database(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def reader(database: Path):
-    reader = RecordsReader(database)
-    yield reader
-    reader.close()
+def connection(database: Path):
+    connection = _open_records(database)
+    yield connection
+    connection.close()
+
+
+def _read_through(handler: RecordsHandler, run):  # type: ignore[no-untyped-def]
+    """A read the handler's writer runs, waited for: its result, or its failure."""
+    settled = threading.Event()
+    outcome: list[object] = []
+
+    def done(result: object, error: Exception | None) -> None:
+        outcome.append(result if error is None else error)
+        settled.set()
+
+    handler.read(run, done)
+    assert settled.wait()
+    return outcome[0]
+
+
+def _handler(database: Path) -> RecordsHandler:
+    return RecordsHandler(database, session=NEW, fallback=database.with_suffix(".log"))
 
 
 def _messages(page: RecordsPage) -> list[str]:
@@ -77,33 +101,35 @@ def _messages(page: RecordsPage) -> list[str]:
 
 
 def test_pages_every_record_newest_first_and_continues_from_the_last_one(
-    database: Path, reader: RecordsReader
+    database: Path, connection: sqlite3.Connection
 ) -> None:
     total = PAGE_SIZE * 2 + 5
     _seed(database, [{"time": _time(i), "message": f"m{i}"} for i in range(total)])
 
-    first = reader.page(RecordsQuery(), None)
+    first = read_page(connection, RecordsQuery(), None)
     assert len(first.records) == PAGE_SIZE and first.more
     assert first.records[0].message == f"m{total - 1}"
     seen = list(first.records)
     page = first
     while page.more:
-        page = reader.page(RecordsQuery(), cursor_after(page.records))
+        page = read_page(connection, RecordsQuery(), cursor_after(page.records))
         seen += page.records
     assert [record.message for record in seen] == [f"m{i}" for i in reversed(range(total))]
 
 
-def test_records_of_one_instant_page_by_their_id(database: Path, reader: RecordsReader) -> None:
+def test_records_of_one_instant_page_by_their_id(
+    database: Path, connection: sqlite3.Connection
+) -> None:
     _seed(database, [{"time": NEW, "message": f"m{i}"} for i in range(PAGE_SIZE + 3)])
 
-    first = reader.page(RecordsQuery(), None)
-    rest = reader.page(RecordsQuery(), cursor_after(first.records))
+    first = read_page(connection, RecordsQuery(), None)
+    rest = read_page(connection, RecordsQuery(), cursor_after(first.records))
 
     assert not rest.more
     assert len({record.id for record in (*first.records, *rest.records)}) == PAGE_SIZE + 3
 
 
-def test_filters_by_launch_level_and_search(database: Path, reader: RecordsReader) -> None:
+def test_filters_by_launch_level_and_search(database: Path, connection: sqlite3.Connection) -> None:
     _seed(
         database,
         [
@@ -120,22 +146,22 @@ def test_filters_by_launch_level_and_search(database: Path, reader: RecordsReade
         ],
     )
 
-    assert _messages(reader.page(RecordsQuery(session=OLD), None)) == ["app.started"]
-    assert _messages(reader.page(RecordsQuery(level="attention"), None)) == [
+    assert _messages(read_page(connection, RecordsQuery(session=OLD), None)) == ["app.started"]
+    assert _messages(read_page(connection, RecordsQuery(level="attention"), None)) == [
         "job.failed",
         "open.ignored_directory",
     ]
-    assert _messages(reader.page(RecordsQuery(level="debug"), None)) == ["job.progress"]
+    assert _messages(read_page(connection, RecordsQuery(level="debug"), None)) == ["job.progress"]
     # Search reads the message and every stored field.
-    assert _messages(reader.page(RecordsQuery(search=" ignored "), None)) == [
+    assert _messages(read_page(connection, RecordsQuery(search=" ignored "), None)) == [
         "open.ignored_directory"
     ]
-    assert _messages(reader.page(RecordsQuery(search="b.png"), None)) == ["image.added"]
-    assert _messages(reader.page(RecordsQuery(level="error", search="b.png"), None)) == []
+    assert _messages(read_page(connection, RecordsQuery(search="b.png"), None)) == ["image.added"]
+    assert _messages(read_page(connection, RecordsQuery(level="error", search="b.png"), None)) == []
 
 
 def test_search_takes_percent_and_underscore_literally(
-    database: Path, reader: RecordsReader
+    database: Path, connection: sqlite3.Connection
 ) -> None:
     _seed(
         database,
@@ -145,12 +171,12 @@ def test_search_takes_percent_and_underscore_literally(
         ],
     )
 
-    assert _messages(reader.page(RecordsQuery(search="a_b"), None)) == ["a_b"]
-    assert _messages(reader.page(RecordsQuery(search="50%"), None)) == ["a_b"]
+    assert _messages(read_page(connection, RecordsQuery(search="a_b"), None)) == ["a_b"]
+    assert _messages(read_page(connection, RecordsQuery(search="50%"), None)) == ["a_b"]
 
 
 def test_reads_a_record_whole_and_the_launches_newest_first(
-    database: Path, reader: RecordsReader
+    database: Path, connection: sqlite3.Connection
 ) -> None:
     fields = {"input": "a.png", "error": {"type": "ValueError", "message": "boom"}}
     _seed(
@@ -160,59 +186,35 @@ def test_reads_a_record_whole_and_the_launches_newest_first(
             {"time": _time(2), "job_id": 3, "operation_id": 2, "level": "error", "fields": fields},
         ],
     )
-    newest = reader.page(RecordsQuery(), None).records[0]
+    newest = read_page(connection, RecordsQuery(), None).records[0]
 
-    detail = reader.detail(newest.id)
+    detail = read_detail(connection, newest.id)
 
     assert detail == RecordDetail(
         newest.id, NEW, _time(2), "error", "image.added", 3, 2, json.dumps(fields)
     )
-    assert reader.detail(newest.id + 100) is None
-    assert reader.sessions() == (NEW, OLD)
-
-
-def test_a_read_neither_creates_the_database_nor_writes_to_it(
-    database: Path, reader: RecordsReader
-) -> None:
-    with pytest.raises(sqlite3.OperationalError):
-        reader.page(RecordsQuery(), None)
-    assert not database.exists()
-
-    _seed(database, [{"time": _time(1)}])
-    reader.page(RecordsQuery(), None)
-    connection = reader._open()
-    with pytest.raises(sqlite3.OperationalError, match="readonly"):
-        connection.execute("DELETE FROM logs")
+    assert read_detail(connection, newest.id + 100) is None
+    assert read_sessions(connection) == (NEW, OLD)
 
 
 def test_a_read_never_stores_a_record() -> None:
     # Every stored record tells the Records window to read again, so a read
     # that logged would read forever.
-    database = configure_session_logging()
+    configure_session_logging()
     flush_records()
     stored: list[None] = []
     set_stored_listener(lambda: stored.append(None))
-    reader = RecordsReader(database)
-    try:
-        page = reader.page(RecordsQuery(), None)
-        reader.detail(page.records[0].id)
-        reader.sessions()
-    finally:
-        reader.close()
+    handler = records_store()
+    assert handler is not None
 
+    def read_all(connection: sqlite3.Connection) -> None:
+        page = read_page(connection, RecordsQuery(), None)
+        read_detail(connection, page.records[0].id)
+        read_sessions(connection)
+
+    assert _read_through(handler, read_all) is None
     flush_records()
     assert stored == []
-
-
-def test_a_cancelled_reader_reads_nothing_more(database: Path, reader: RecordsReader) -> None:
-    _seed(database, [{"time": _time(i % 3600)} for i in range(500)])
-    assert reader.page(RecordsQuery(), None).records
-    reader.cancel()
-
-    assert reader.cancelled
-    with pytest.raises(sqlite3.OperationalError, match="interrupted"):
-        reader.page(RecordsQuery(search="nothing"), None)
-
 
 def _summary(record_id: int, time: str) -> RecordSummary:
     return RecordSummary(record_id, NEW, time, "info", f"m{record_id}", "{}")
@@ -272,29 +274,30 @@ def test_a_records_error_is_shown_apart_from_its_details() -> None:
 
 
 def test_the_list_reads_a_bounded_start_of_each_records_fields(
-    database: Path, reader: RecordsReader
+    database: Path, connection: sqlite3.Connection
 ) -> None:
     _seed(database, [{"time": _time(1), "fields": {"traceback": "x" * 5000}}])
 
-    summary = reader.page(RecordsQuery(), None).records[0]
+    summary = read_page(connection, RecordsQuery(), None).records[0]
 
     assert len(summary.fields) == records._SUMMARY_FIELDS_LENGTH
-    assert len(reader.detail(summary.id).fields) > 5000
+    assert len(read_detail(connection, summary.id).fields) > 5000
 
 
 def test_a_log_line_is_read_back_as_it_was_written() -> None:
-    database = configure_session_logging()
+    configure_session_logging()
     log.info("image.added", input="a.png", job_id=4)
-    flush_records()
-    reader = RecordsReader(database)
-    try:
-        newest = reader.page(RecordsQuery(), None).records[0]
-        detail = reader.detail(newest.id)
-    finally:
-        reader.close()
+    handler = records_store()
+    assert handler is not None
 
-    assert newest.message == "image.added"
-    assert detail is not None and detail.job_id == 4
+    # Queued behind the line, so it reads the line without waiting for a flush.
+    def newest(connection: sqlite3.Connection) -> RecordDetail | None:
+        return read_detail(connection, read_page(connection, RecordsQuery(), None).records[0].id)
+
+    detail = _read_through(handler, newest)
+
+    assert isinstance(detail, RecordDetail) and detail.message == "image.added"
+    assert detail.job_id == 4
     assert json.loads(detail.fields) == {"input": "a.png"}
 
 
@@ -304,14 +307,14 @@ def test_newer_records_are_named_and_never_read(database: Path) -> None:
     connection.execute("PRAGMA user_version = 2")
     connection.close()
     before = database.read_bytes()
-    reader = RecordsReader(database)
+    handler = _handler(database)
     try:
-        with pytest.raises(NewerFormatError) as raised:
-            reader.page(RecordsQuery(), None)
+        failure = _read_through(handler, lambda c: read_page(c, RecordsQuery(), None))
     finally:
-        reader.close()
-    assert raised.value.version == 2
-    assert raised.value.path == database
+        handler.close()
+    assert isinstance(failure, NewerFormatError)
+    assert failure.version == 2
+    assert failure.path == database
     assert database.read_bytes() == before
 
 
@@ -320,36 +323,9 @@ def test_records_without_their_format_version_are_unreadable(database: Path) -> 
     connection = sqlite3.connect(database)
     connection.execute("PRAGMA user_version = 0")
     connection.close()
-    reader = RecordsReader(database)
+    handler = _handler(database)
     try:
-        with pytest.raises(ValueError, match="no format version"):
-            reader.page(RecordsQuery(), None)
+        failure = _read_through(handler, lambda c: read_page(c, RecordsQuery(), None))
     finally:
-        reader.close()
-
-
-
-def test_reader_primary_survives_failed_rollback(
-    database: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _seed(database, [{"time": OLD}])
-    reader = RecordsReader(database)
-    connection = reader._open()
-    primary = sqlite3.OperationalError("primary read failure")
-
-    class FailingCleanup:
-        def execute(self, sql, *args):
-            return connection.execute(sql, *args)
-
-        def rollback(self):
-            connection.rollback()
-            raise sqlite3.OperationalError("cleanup rollback failure")
-
-    monkeypatch.setattr(reader, "_open", lambda: FailingCleanup())
-    try:
-        with pytest.raises(sqlite3.OperationalError) as raised:
-            reader._in_read(lambda _: (_ for _ in ()).throw(primary))
-        assert raised.value is primary
-        assert "cleanup rollback failure" in raised.value.__notes__[0]
-    finally:
-        reader.close()
+        handler.close()
+    assert isinstance(failure, ValueError) and "no format version" in str(failure)

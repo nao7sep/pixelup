@@ -5,6 +5,7 @@ import sqlite3
 import stat
 import sys
 import threading
+from collections import deque
 from pathlib import Path
 
 import pytest
@@ -158,8 +159,8 @@ def test_failed_backup_submission_preserves_the_landed_save_and_settles(
             raise RuntimeError("backup submission failed") from cause
 
     if stage == "admission":
-        class RejectPending(dict):
-            def __setitem__(self, path, data):
+        class RejectPending(deque):
+            def append(self, item):
                 fail_submission()
 
         monkeypatch.setattr(recorder, "_pending", RejectPending())

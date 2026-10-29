@@ -3,18 +3,18 @@ the selected record whole.
 
 It is a durable secondary window with its own placement (window-conventions,
 Placement), and there is only ever one: the main window opens it and brings it
-forward when it is opened again. Every read runs on the reads thread
-(RecordsReads), never on the GUI thread, and the window takes no part in
+forward when it is opened again. Every read runs on the records database's
+own thread (RecordsReads), never on the GUI thread, and the window takes no part in
 quitting: it does not keep the app running once the main window has closed.
 """
 
 from __future__ import annotations
 
 import html
+import sqlite3
 import traceback
 from collections.abc import Callable, Sequence
 from itertools import count
-from pathlib import Path
 
 from PySide6.QtCore import (
     QAbstractListModel,
@@ -28,7 +28,6 @@ from PySide6.QtCore import (
     QRectF,
     QSize,
     Qt,
-    QThread,
     QTimer,
     Signal,
     SignalInstance,
@@ -76,13 +75,15 @@ from pixelup.records import (
     RecordLevelFilter,
     RecordsPage,
     RecordsQuery,
-    RecordsReader,
     RecordSummary,
     cursor_after,
     merge_newest_page,
+    read_detail,
+    read_page,
+    read_sessions,
     split_fields,
 )
-from pixelup.session_log import current_session, log
+from pixelup.session_log import RecordsHandler, current_session, log
 from pixelup.theme import accent_colours, danger_colours, surfaces, warning_text
 from pixelup.time_zones import display_zone
 from pixelup.ui_common import REGULAR_SPACING, bind_close_shortcut, use_regular_spacing
@@ -224,76 +225,34 @@ def load_failure_note(error: object) -> Message:
     return Message("records.loadFailed")
 
 
-class _ReadWorker(QObject):
-    answered = Signal(int, object)
-    failed = Signal(int, object)
-
-    def __init__(self, reader: RecordsReader) -> None:
-        super().__init__()
-        self._reader = reader
-
-    @Slot(int, str, object)
-    def run(self, request_id: int, op: str, argument: object) -> None:
-        if self._reader.cancelled:
-            return
-        try:
-            if op == "page":
-                query, after = argument  # type: ignore[misc]
-                result: object = self._reader.page(query, after)
-            elif op == "detail":
-                result = self._reader.detail(argument)  # type: ignore[arg-type]
-            else:
-                result = self._reader.sessions()
-        except Exception as exc:  # noqa: BLE001 - a failed read is answered, never raised into Qt.
-            self.failed.emit(
-                request_id,
-                {
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                    "traceback": traceback.format_exc().rstrip(),
-                    "newer_format": isinstance(exc, NewerFormatError),
-                },
-            )
-            return
-        self.answered.emit(request_id, result)
-
-    @Slot()
-    def close(self) -> None:
-        self._reader.close()
+def _read_failure(error: Exception) -> dict[str, object]:
+    return {
+        "type": type(error).__name__,
+        "message": str(error),
+        "traceback": "".join(traceback.format_exception(error)).rstrip(),
+        "newer_format": isinstance(error, NewerFormatError),
+    }
 
 
 class RecordsReads(QObject):
-    """The one thread every records read runs on, one read at a time.
+    """Records reads, sent to the records database's owner (session_log), which
+    runs them one at a time in order with the records it writes.
 
     Answers arrive on the GUI thread as ``answered`` or ``failed`` with the id
-    ``request`` returned. ``stop`` cancels the read in flight and ends the
-    thread as part of quitting; ``stopped`` says the thread has ended.
+    ``request`` returned.
     """
 
     answered = Signal(int, object)
     failed = Signal(int, object)
-    stopped = Signal()
-    _requested = Signal(int, str, object)
+    # Emitted on the store's thread; queued to this object's thread.
+    _settled = Signal(int, bool, object)
 
-    def __init__(self, reader: RecordsReader, parent: QObject | None = None) -> None:
+    def __init__(self, store: RecordsHandler, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._reader = reader
+        self._store = store
         self._ids = count(1)
         self._unanswered = 0
-        self._thread = QThread(self)
-        self._worker = _ReadWorker(reader)
-        self._worker.moveToThread(self._thread)
-        self._requested.connect(self._worker.run)
-        self._worker.answered.connect(self._answered)
-        self._worker.failed.connect(self._failed)
-        # The connection is closed on the thread that opened it, as it ends.
-        self._thread.finished.connect(self._worker.close, Qt.ConnectionType.DirectConnection)
-        self._thread.finished.connect(self.stopped)
-        thread = self._thread
-        # A QThread destroyed while running ends the process; whatever deletes
-        # this owner, its thread stops first.
-        self.destroyed.connect(lambda: (reader.cancel(), thread.quit(), thread.wait()))
-        self._thread.start()
+        self._settled.connect(self._answer)
 
     @property
     def busy(self) -> bool:
@@ -303,28 +262,29 @@ class RecordsReads(QObject):
     def request(self, op: str, argument: object = None) -> int:
         request_id = next(self._ids)
         self._unanswered += 1
-        self._requested.emit(request_id, op, argument)
+
+        def done(result: object, error: Exception | None) -> None:
+            if error is None:
+                self._settled.emit(request_id, True, result)
+            else:
+                self._settled.emit(request_id, False, _read_failure(error))
+
+        self._store.read(lambda connection: self.run(connection, op, argument), done)
         return request_id
 
-    @Slot(int, object)
-    def _answered(self, request_id: int, result: object) -> None:
+    def run(self, connection: sqlite3.Connection, op: str, argument: object) -> object:
+        """One read, on the store's thread."""
+        if op == "page":
+            query, after = argument  # type: ignore[misc]
+            return read_page(connection, query, after)
+        if op == "detail":
+            return read_detail(connection, argument)  # type: ignore[arg-type]
+        return read_sessions(connection)
+
+    @Slot(int, bool, object)
+    def _answer(self, request_id: int, ok: bool, value: object) -> None:
         self._unanswered -= 1
-        self.answered.emit(request_id, result)
-
-    @Slot(int, object)
-    def _failed(self, request_id: int, error: object) -> None:
-        self._unanswered -= 1
-        self.failed.emit(request_id, error)
-
-    def stop(self) -> None:
-        """Cancel what is in flight and end the thread; the quit's bound limits the wait."""
-        self._reader.cancel()
-        self._thread.quit()
-        self._thread.wait()
-
-
-def records_reads(database: Path, parent: QObject | None = None) -> RecordsReads:
-    return RecordsReads(RecordsReader(database), parent)
+        (self.answered if ok else self.failed).emit(request_id, value)
 
 
 class RecordsListModel(QAbstractListModel):

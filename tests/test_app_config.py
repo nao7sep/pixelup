@@ -447,9 +447,9 @@ def test_corrupt_config_lets_window_open(
         "pixelup.gui.warn_config_reset",
         lambda _parent, path: notices.append(path),
     )
-    log_file = configure_session_logging()
+    configure_session_logging()
 
-    window = MainWindow(log_file=log_file)
+    window = MainWindow()
     try:
         # The window opened on defaults instead of crashing on the corrupt file.
         assert window.config == AppConfig()
@@ -512,9 +512,9 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
     monkeypatch.setattr(
         "pixelup.gui.warn_config_reset", lambda _parent, path: notices.append("reset")
     )
-    log_file = configure_session_logging()
+    configure_session_logging()
 
-    window = MainWindow(log_file=log_file)
+    window = MainWindow()
     try:
         assert window.config == AppConfig()
         assert window._config_quarantined_to is None

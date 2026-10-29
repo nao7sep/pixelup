@@ -150,7 +150,7 @@ def make_window(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
     )
-    log_file = configure_session_logging()
+    configure_session_logging()
 
     created: list[MainWindow] = []
 
@@ -162,7 +162,7 @@ def make_window(
         runtime_dirs = SimpleNamespace(
             models_dir=models_dir,
         )
-        window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs if injected else None)
+        window = MainWindow(runtime_dirs=runtime_dirs if injected else None)
         created.append(window)
         _settle_models(window)
         return window
@@ -2049,9 +2049,9 @@ def test_window_seeds_the_panel_from_the_persisted_parameters(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(parameters=parameters), SettingsFile(config_path())),
     )
-    log_file = configure_session_logging()
+    configure_session_logging()
 
-    window = MainWindow(log_file=log_file)
+    window = MainWindow()
     try:
         assert window.current_job_settings() == parameters
         assert window.quality.value() == 42
@@ -2161,9 +2161,9 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
         "pixelup.gui.warn_config_rejected",
         lambda _parent, settings, path: notices.append((settings, path)),
     )
-    log_file = configure_session_logging()
+    configure_session_logging()
 
-    window = MainWindow(log_file=log_file)
+    window = MainWindow()
     try:
         assert window._config_quarantined_to is None
         assert window.tile.currentIndex() != -1, "the combo blanked on an unknown tile"
@@ -2194,7 +2194,7 @@ def test_the_window_itself_takes_the_configured_font_at_launch(
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     original = qapp.font()
-    window = MainWindow(log_file=configure_session_logging())
+    window = MainWindow()
     try:
         assert window.font().family() == "Menlo"
         assert window.settings_button.font().family() == "Menlo"
@@ -3183,7 +3183,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 from pixelup import gui
 app = QApplication([])
-window = gui.MainWindow(log_file=Path(os.environ['PIXELUP_DATA_DIR']) / 'test.log')
+window = gui.MainWindow()
 entered, release = threading.Event(), threading.Event()
 def held_probe(paths):
     entered.set()
@@ -3234,7 +3234,7 @@ gui.warn_jobs_stopping = Asked
 gui.drain_backups = lambda: None
 gui.QUIT_BUDGET_S = 1.0
 app = QApplication([])
-window = gui.MainWindow(log_file=Path(os.environ['PIXELUP_DATA_DIR']) / 'test.log')
+window = gui.MainWindow()
 window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 window.setWindowOpacity(0.0)
 window.show()

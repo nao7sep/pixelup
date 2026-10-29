@@ -216,10 +216,14 @@ def test_record_returns_without_waiting_for_the_store(
     assert entered.wait()
 
     record(target, b"second\n")  # returns although the recorder is stuck
-    record(target, b"third\n")  # replaces the pending "second"
+    record(target, b"third\n")
     from pixelup import backup_store
 
-    assert list(backup_store._recorder._pending.values()) == [b"third\n"]
+    # Every save waits its turn, in save order.
+    assert list(backup_store._recorder._pending) == [
+        (str(target), b"second\n"),
+        (str(target), b"third\n"),
+    ]
 
     release.set()
     drain_backups()

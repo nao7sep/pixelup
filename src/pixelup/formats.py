@@ -65,7 +65,7 @@ def open_sqlite_store(path: Path, supported: int, schema: str) -> sqlite3.Connec
     a store without one takes its unreadable branch.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=5, isolation_level=None, check_same_thread=False)
+    connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     try:
         connection.execute("BEGIN IMMEDIATE")
         stored = connection.execute("PRAGMA user_version").fetchone()[0]

@@ -131,10 +131,15 @@ from pixelup.queue_table import QUEUE_COLUMNS as _QUEUE_COLUMNS
 from pixelup.queue_table import QueueTableModel, QueueTableView
 from pixelup.quit_dialog import QuitConfirmDialog, QuitSaveFailedDialog
 from pixelup.read_threads import run_in_background
-from pixelup.records_window import RecordsReads, RecordsWindow, records_reads, stored_signal
+from pixelup.records_window import RecordsReads, RecordsWindow, stored_signal
 from pixelup.runner import JobRunner
 from pixelup.session_end import os_session_ending
-from pixelup.session_log import configure_session_logging, log, set_stored_listener
+from pixelup.session_log import (
+    configure_session_logging,
+    log,
+    records_store,
+    set_stored_listener,
+)
 from pixelup.settings_dialog import SettingsDialog
 from pixelup.shortcuts_dialog import ShortcutsDialog
 from pixelup.startup_admission import admit_data_root
@@ -453,7 +458,7 @@ class ImagePreview(QLabel):
 class MainWindow(QMainWindow):
     _GEOMETRY_KEY = "mainWindow/geometry"
 
-    def __init__(self, *, log_file: Path, runtime_dirs: RuntimeDirs | None = None) -> None:
+    def __init__(self, *, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
         # A corrupt config.json is quarantined, a newer PixelUp's is left alone, and
         # a set that fails validation keeps its stored value while it runs on its
@@ -491,7 +496,6 @@ class MainWindow(QMainWindow):
         # The window itself was made before that, so it takes the font too, as the
         # Settings path does; otherwise what inherits from it keeps the platform font.
         self.setFont(QApplication.instance().font())
-        self.log_file = log_file
         # The Records window and the one thread its reads run on, made when the
         # window is first opened; the thread lasts until PixelUp quits.
         self._records_window: RecordsWindow | None = None
@@ -920,13 +924,7 @@ class MainWindow(QMainWindow):
             self._config_save is None
             and self.runner.cleanup_for_quit()
             and self.model_manager.cleanup_for_quit()
-            and self._stop_records_reads()
         )
-
-    def _stop_records_reads(self) -> bool:
-        if self._records_reads is not None:
-            self._records_reads.stop()
-        return True
 
     def open_paths(self, paths: list[Path]) -> None:
         """Offer ``paths`` as images. The filesystem checks and the header read run on
@@ -1902,9 +1900,9 @@ class MainWindow(QMainWindow):
             self._records_window.bring_forward()
             return
         if self._records_reads is None:
-            self._records_reads = records_reads(self.log_file, self)
-            # A quit deferred behind a read still in flight retries once it ends.
-            self._records_reads.stopped.connect(self._close_when_workers_stop)
+            store = records_store()
+            assert store is not None, "logging is set up before the main window"
+            self._records_reads = RecordsReads(store, self)
         log.info("records.window_opened")
         window = RecordsWindow(self._records_reads)
         window.closed.connect(lambda: self._records_window_closed(window))
@@ -2714,7 +2712,7 @@ def build_app(
         icon_path = Path(__file__).parent / "resources" / "icon-win.png"
         if icon_path.is_file():
             app.setWindowIcon(QIcon(str(icon_path)))
-    window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
+    window = MainWindow(runtime_dirs=runtime_dirs)
     log.info(
         "app.started",
         version=__version__,

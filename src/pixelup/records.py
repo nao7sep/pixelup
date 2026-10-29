@@ -1,30 +1,22 @@
 """What the Records window reads from records.sqlite3: a filtered page of
 summaries, newest first, one record whole, and the launches that have records.
 
-Reads only: nothing here writes to the database or logs, because every stored
-record signals the Records window to read again (session_log's stored
-listener), so a read that logged would start the next read forever. Each read
-is bounded (PLAYBOOK, Bound every external wait): a lock waits at most
-LOCK_TIMEOUT_SECONDS and the query itself is interrupted after
-READ_TIMEOUT_SECONDS, or as soon as the caller cancels it.
+Each read runs on the records writer's thread and connection (session_log's
+RecordsHandler.read). Reads only: nothing here writes to the database or logs,
+because every stored record signals the Records window to read again
+(session_log's stored listener), so a read that logged would start the next read
+forever.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
-from pixelup.formats import RECORDS_FORMAT_VERSION, check_sqlite_format, rollback_sqlite
-
 PAGE_SIZE = 100
-LOCK_TIMEOUT_SECONDS = 2.0
-# How many SQLite virtual-machine steps run between two looks at cancellation.
-_PROGRESS_STEPS = 1000
 # The list shows the start of a record's fields; the detail reads them whole.
 # Display-only: the store keeps every field. The list pane is at most 640 px wide,
 # far short of 400 characters, so Qt always elides the row and draws its one marker.
@@ -137,77 +129,6 @@ def read_sessions(connection: sqlite3.Connection) -> tuple[str, ...]:
     """Every launch that has records, newest first."""
     rows = connection.execute("SELECT DISTINCT session FROM logs ORDER BY session DESC")
     return tuple(row[0] for row in rows)
-
-
-class RecordsReader:
-    """One read-only connection to the records database, used from one thread.
-
-    The connection opens on the first read, read-only, so a read never creates
-    or changes the file; a read that fails to open tries again on the next one.
-    ``cancel`` may be called from any thread: it interrupts the read in flight,
-    and every read after it fails at once.
-    """
-
-    def __init__(self, database: Path) -> None:
-        self._database = database
-        self._cancelled = threading.Event()
-        self._connection: sqlite3.Connection | None = None
-
-    @property
-    def cancelled(self) -> bool:
-        return self._cancelled.is_set()
-
-    def cancel(self) -> None:
-        self._cancelled.set()
-
-    def page(self, query: RecordsQuery, after: RecordCursor | None) -> RecordsPage:
-        return self._in_read(lambda connection: read_page(connection, query, after))
-
-    def detail(self, record_id: int) -> RecordDetail | None:
-        return self._in_read(lambda connection: read_detail(connection, record_id))
-
-    def sessions(self) -> tuple[str, ...]:
-        return self._in_read(read_sessions)
-
-    def close(self) -> None:
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None
-
-    def _in_read[T](self, read: Callable[[sqlite3.Connection], T]) -> T:
-        connection = None
-        try:
-            connection = self._open()
-            connection.execute("BEGIN")
-            result = read(connection)
-        except BaseException as exc:
-            if connection is not None:
-                rollback_sqlite(connection, exc)
-            raise
-        else:
-            connection.rollback()
-            return result
-
-    def _open(self) -> sqlite3.Connection:
-        if self._connection is None:
-            connection = sqlite3.connect(
-                f"{self._database.absolute().as_uri()}?mode=ro",
-                uri=True,
-                timeout=LOCK_TIMEOUT_SECONDS,
-            )
-            connection.set_progress_handler(self._interrupted, _PROGRESS_STEPS)
-            try:
-                check_sqlite_format(connection, self._database, RECORDS_FORMAT_VERSION)
-            except BaseException:
-                connection.close()
-                raise
-            self._connection = connection
-        return self._connection
-
-    def _interrupted(self) -> int:
-        # A non-zero answer makes SQLite abandon the statement with an
-        # OperationalError, which the caller reports like any other failed read.
-        return 1 if self._cancelled.is_set() else 0
 
 
 def cursor_after(records: Sequence[RecordSummary]) -> RecordCursor | None:

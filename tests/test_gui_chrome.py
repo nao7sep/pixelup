@@ -33,12 +33,12 @@ def make_window(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
     )
-    log_file = configure_session_logging()
+    configure_session_logging()
 
     created: list[MainWindow] = []
 
     def _make() -> MainWindow:
-        window = MainWindow(log_file=log_file)
+        window = MainWindow()
         created.append(window)
         return window
 

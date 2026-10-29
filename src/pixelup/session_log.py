@@ -9,6 +9,7 @@ import threading
 import traceback
 from collections import deque
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -130,6 +131,15 @@ def _open_records(database: Path) -> sqlite3.Connection:
     return open_sqlite_store(database, RECORDS_FORMAT_VERSION, _SCHEMA)
 
 
+@dataclass(frozen=True, slots=True)
+class _Read:
+    """A read of the records database, queued behind the lines before it."""
+
+    run: Callable[[sqlite3.Connection], object]
+    # Called on the writer thread with the result, or with the read's failure.
+    done: Callable[[object, Exception | None], None]
+
+
 class RecordsHandler(logging.Handler):
     """Writes each log line as one row of this launch's session in the records
     database (logging-conventions, data-lifecycle-conventions).
@@ -137,7 +147,9 @@ class RecordsHandler(logging.Handler):
     The thread that logs only builds the line and queues it; one writer thread owns
     the database, the fallback file and the stored listener, so a stalled store
     never holds up the window or a worker (logging-conventions, "Execution and
-    durability"). Lines keep their order.
+    durability"). Lines keep their order. The Records window's reads queue on the
+    same thread and run in order with the lines, on its one connection
+    (rejected-mechanisms-conventions, Synchronous stores on the interface thread).
     """
 
     def __init__(self, database: Path, *, session: str, fallback: Path) -> None:
@@ -151,7 +163,7 @@ class RecordsHandler(logging.Handler):
         # nothing. The Records window reads the newest records on it.
         self.stored_listener: Callable[[], None] | None = None
         self._condition = threading.Condition()
-        self._pending: deque[dict[str, Any]] = deque()
+        self._pending: deque[dict[str, Any] | _Read] = deque()
         self._writing = False
         self._closed = False
         self._writer = threading.Thread(target=self._run, name="pixelup-records", daemon=True)
@@ -175,8 +187,22 @@ class RecordsHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         self.handle(record)
 
+    def read(
+        self,
+        run: Callable[[sqlite3.Connection], object],
+        done: Callable[[object, Exception | None], None],
+    ) -> None:
+        """Run ``run`` on the database after the lines queued so far, then call
+        ``done`` on the writer thread with its result or its failure. A read must
+        not log: each stored line signals the Records window to read again."""
+        with self._condition:
+            if self._closed:
+                return
+            self._pending.append(_Read(run, done))
+            self._condition.notify_all()
+
     def flush_pending(self) -> None:
-        """Wait for queued lines to be written."""
+        """Wait for queued lines (and reads) to be done."""
         with self._condition:
             self._condition.wait_for(lambda: not self._pending and not self._writing)
 
@@ -186,10 +212,13 @@ class RecordsHandler(logging.Handler):
                 self._condition.wait_for(lambda: self._pending or self._closed)
                 if not self._pending:
                     return
-                entry = self._pending.popleft()
+                item = self._pending.popleft()
                 self._writing = True
             try:
-                self._write(entry)
+                if isinstance(item, _Read):
+                    self._read(item)
+                else:
+                    self._write(item)
             except Exception:  # noqa: BLE001 - the writer outlives one bad record.
                 traceback.print_exc(file=sys.stderr)
             finally:
@@ -211,6 +240,16 @@ class RecordsHandler(logging.Handler):
         except Exception as exc:  # noqa: BLE001 - logging never crashes the app.
             sys.stderr.write(f"[pixelup:records] stored listener failed: {exc!r}\n")
             sys.stderr.flush()
+
+    def _read(self, read: _Read) -> None:
+        try:
+            if self._connection is None:
+                self._connection = _open_records(self._database)
+            result = read.run(self._connection)
+        except Exception as exc:  # noqa: BLE001 - a failed read is answered, never raised.
+            read.done(None, exc)
+            return
+        read.done(result, None)
 
     def _insert(self, entry: dict[str, Any]) -> None:
         # not recorded: records.sqlite3 is a binary store written through SQLite,
@@ -336,6 +375,11 @@ def _records_handler() -> RecordsHandler | None:
         (handler for handler in get_logger().handlers if isinstance(handler, RecordsHandler)),
         None,
     )
+
+
+def records_store() -> RecordsHandler | None:
+    """The records database's owner, once logging is set up."""
+    return _records_handler()
 
 
 def current_session() -> str | None:

@@ -17,8 +17,8 @@ to record with a diagnostic.
 Two absolute musts drive every line below:
 
 - It never delays, breaks or fails a save. :func:`record` only hands the exact bytes
-  just written to one serial recorder thread and returns; the thread applies writes
-  in save order, keeping only the newest pending write per path. Any failure there
+  just written to one serial recorder thread and returns; the thread applies every
+  write in save order (data-backup-conventions, Capture). Any failure there
   (the DB is locked, the disk is full, an insert throws) is logged once at ``warn``
   and recording stays disabled for this session.
 - It logs only failures. A successful record logs nothing.
@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import threading
+from collections import deque
 from pathlib import Path
 
 from pixelup.config import resolve_state_dir
@@ -116,14 +117,13 @@ def _write(store: sqlite3.Connection, session: str, path: str, data: bytes) -> N
 class _Recorder:
     """The one serial owner of backup writes, on its own daemon thread.
 
-    Pending writes wait in save order with only the newest per path, so an earlier
-    save never replaces a later one and the backlog stays bounded by the number of
-    protected paths. The thread is a daemon: an OS exit never waits for it.
+    Pending writes wait and are applied in save order, so an earlier save never
+    replaces a later one. The thread is a daemon: an OS exit never waits for it.
     """
 
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._pending: dict[str, bytes] = {}
+        self._pending: deque[tuple[str, bytes]] = deque()
         self._writing = False
         self._thread: threading.Thread | None = None
         self._connection: sqlite3.Connection | None = None
@@ -136,8 +136,7 @@ class _Recorder:
             if self._disabled:
                 return
             try:
-                self._pending.pop(path, None)
-                self._pending[path] = data
+                self._pending.append((path, data))
                 if self._thread is None:
                     thread = threading.Thread(target=self._run, name="pixelup-backups", daemon=True)
                     thread.start()
@@ -195,8 +194,7 @@ class _Recorder:
                     self._pending.clear()
                     self._condition.notify_all()
                     return
-                path = next(iter(self._pending))
-                data = self._pending.pop(path)
+                path, data = self._pending.popleft()
                 self._writing = True
             try:
                 self._apply(path, data)

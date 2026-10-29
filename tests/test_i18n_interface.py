@@ -135,7 +135,7 @@ def window(
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
     )
-    log_file = configure_session_logging()
+    configure_session_logging()
     models_dir = tmp_path / "home" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     # Every model but the denoise companion, which no queued job here needs, so
@@ -144,7 +144,7 @@ def window(
         if info.name != GENERAL_DENOISE_MODEL:
             (models_dir / info.filename).write_bytes(b"ready")
     runtime_dirs = SimpleNamespace(models_dir=models_dir)
-    main = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
+    main = MainWindow(runtime_dirs=runtime_dirs)
     try:
         _populate(main, tmp_path)
         yield main

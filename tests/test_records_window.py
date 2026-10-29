@@ -24,7 +24,7 @@ from pixelup.gui import MainWindow, is_reopen
 from pixelup.i18n.languages import TAGS
 from pixelup.i18n.message import Message
 from pixelup.model_registry import ALL_MODELS
-from pixelup.records import PAGE_SIZE, RecordDetail, RecordsQuery, RecordsReader
+from pixelup.records import PAGE_SIZE, RecordDetail, RecordsQuery
 from pixelup.records_window import (
     GEOMETRY_KEY,
     LIST_WIDTH_DEFAULT,
@@ -40,10 +40,12 @@ from pixelup.records_window import (
 )
 from pixelup.runner import JobRunner
 from pixelup.session_log import (
+    RecordsHandler,
     _open_records,
     configure_session_logging,
     flush_records,
     log,
+    records_store,
     set_stored_listener,
 )
 from pixelup.window_placement import WindowState, window_state
@@ -82,33 +84,42 @@ def _seed_count(database: Path, count: int, *, start: int = 0) -> None:
     _seed(database, [{"time": _time(i), "message": f"m{i}"} for i in range(start, start + count)])
 
 
-class ScriptedReader(RecordsReader):
-    """The real reader, counting the pages it is asked for, failing the ones
-    named, and holding one at a gate until the test lets it go."""
+class ScriptedReads(RecordsReads):
+    """The real reads, counting the pages asked for, failing the ones named, and
+    holding one at a gate (on the store's thread) until the test lets it go."""
 
-    def __init__(self, database: Path) -> None:
-        super().__init__(database)
+    def __init__(self, store: RecordsHandler) -> None:
+        super().__init__(store)
         self.pages: list[tuple[RecordsQuery, object]] = []
         self.fail: set[int] = set()
         self.gate: threading.Event | None = None
         self.waiting = threading.Event()
         self._lock = threading.Lock()
 
-    def page(self, query, after):  # type: ignore[no-untyped-def]
-        with self._lock:
-            number = len(self.pages)
-            self.pages.append((query, after))
-        if self.gate is not None:
-            self.waiting.set()
-            self.gate.wait()
-        if number in self.fail:
-            raise sqlite3.OperationalError("disk I/O error in /secret/records.sqlite3")
-        return super().page(query, after)
+    def run(self, connection, op, argument):  # type: ignore[no-untyped-def]
+        if op == "page":
+            with self._lock:
+                number = len(self.pages)
+                self.pages.append(argument)
+            if self.gate is not None:
+                self.waiting.set()
+                self.gate.wait()
+            if number in self.fail:
+                raise sqlite3.OperationalError("disk I/O error in /secret/records.sqlite3")
+        return super().run(connection, op, argument)
 
 
 @pytest.fixture
 def database(tmp_path: Path) -> Path:
     return tmp_path / "records.sqlite3"
+
+
+@pytest.fixture
+def store(database: Path, tmp_path: Path):
+    """The records database's owner, which runs the window's reads."""
+    handler = RecordsHandler(database, session=NEW, fallback=tmp_path / "fallback.log")
+    yield handler
+    handler.close()
 
 
 @pytest.fixture
@@ -123,20 +134,18 @@ def fast(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def open_records(qapp: QApplication, database: Path, settings: QSettings, fast: None):
-    created: list[tuple[RecordsWindow, RecordsReads]] = []
+def open_records(qapp: QApplication, store: RecordsHandler, settings: QSettings, fast: None):
+    created: list[RecordsWindow] = []
 
-    def make(reader: RecordsReader | None = None, *, show: bool = True) -> RecordsWindow:
-        reads = RecordsReads(reader or RecordsReader(database))
-        window = RecordsWindow(reads, WindowState(Path(settings.fileName())))
-        created.append((window, reads))
+    def make(reads: RecordsReads | None = None, *, show: bool = True) -> RecordsWindow:
+        window = RecordsWindow(reads or RecordsReads(store), WindowState(Path(settings.fileName())))
+        created.append(window)
         if show:
             window.show()
         return window
 
     yield make
-    for window, reads in created:
-        reads.stop()
+    for window in created:
         try:
             window.close()
         except RuntimeError:
@@ -181,7 +190,7 @@ def test_lists_the_records_newest_first_with_nothing_selected_yet(
 
 
 def test_says_when_no_record_matches_and_when_the_records_cannot_be_read(
-    open_records, database: Path, process_until
+    open_records, store, database: Path, process_until
 ) -> None:
     _seed_count(database, 1)
     window = open_records()
@@ -190,7 +199,7 @@ def test_says_when_no_record_matches_and_when_the_records_cannot_be_read(
     _until(process_until, lambda: _loaded(window) and window.model.rowCount() == 0, "search")
     assert window.list.accessibleDescription() == "No records match these filters."
 
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     reader.fail = {0}
     failing = open_records(reader)
     _until(process_until, lambda: failing._status == "failed", "the failed page")
@@ -249,7 +258,7 @@ def test_offers_needs_attention_first_among_the_levels_with_every_filter_off(
 
 
 def test_reads_again_with_each_filter_and_searches_once_typing_pauses(
-    open_records, database: Path, process_until, monkeypatch: pytest.MonkeyPatch
+    open_records, store, database: Path, process_until, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(records_window, "SEARCH_DELAY_MS", 300)
     _seed(
@@ -261,7 +270,7 @@ def test_reads_again_with_each_filter_and_searches_once_typing_pauses(
             {"time": _time(4), "message": "image.added"},
         ],
     )
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window) and window.launch_filter.count() == 3, "open")
 
@@ -287,10 +296,10 @@ def test_reads_again_with_each_filter_and_searches_once_typing_pauses(
 
 
 def test_reads_the_next_page_from_the_last_row_once_scrolled_near_the_end(
-    open_records, database: Path, process_until
+    open_records, store, database: Path, process_until
 ) -> None:
     _seed_count(database, PAGE_SIZE * 2 + 10)
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window), "the first page")
     assert window.model.rowCount() == PAGE_SIZE
@@ -315,10 +324,10 @@ def test_reads_the_next_page_when_down_is_pressed_on_the_last_row(
 
 
 def test_makes_one_request_for_two_scroll_events_together(
-    open_records, database: Path, process_until
+    open_records, store, database: Path, process_until
 ) -> None:
     _seed_count(database, PAGE_SIZE * 3)
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window), "the first page")
     reader.gate = threading.Event()
@@ -344,10 +353,10 @@ def test_reads_the_next_page_by_itself_while_a_page_does_not_fill_the_list(
 
 
 def test_keeps_a_failed_pages_note_at_the_end_and_reads_it_again_there(
-    open_records, database: Path, process_until
+    open_records, store, database: Path, process_until
 ) -> None:
     _seed_count(database, PAGE_SIZE + 5)
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     reader.fail = {1}
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window), "the first page")
@@ -368,11 +377,11 @@ def test_keeps_a_failed_pages_note_at_the_end_and_reads_it_again_there(
 
 
 def test_reads_the_newest_page_once_for_a_burst_of_new_records_keeping_the_rows(
-    open_records, database: Path, process_until, monkeypatch: pytest.MonkeyPatch
+    open_records, store, database: Path, process_until, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(records_window, "LIVE_INTERVAL_MS", 200)
     _seed_count(database, 3)
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window), "the first page")
 
@@ -389,10 +398,10 @@ def test_reads_the_newest_page_once_for_a_burst_of_new_records_keeping_the_rows(
 
 
 def test_leaves_the_list_alone_while_scrolled_down_and_updates_it_back_at_the_top(
-    open_records, database: Path, process_until
+    open_records, store, database: Path, process_until
 ) -> None:
     _seed_count(database, 60)
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window), "the first page")
     window.list.verticalScrollBar().setValue(200)
@@ -426,12 +435,12 @@ def test_keeps_the_selected_record_selected_through_an_update(
 
 
 def test_ignores_new_record_signals_after_a_failed_read_until_one_succeeds(
-    open_records, database: Path, process_until
+    open_records, store, database: Path, process_until
 ) -> None:
     # The failed read is itself logged as a record, whose signal would start the
     # next read.
     _seed_count(database, 3)
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     reader.fail = {1}
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window), "the first page")
@@ -451,10 +460,10 @@ def test_ignores_new_record_signals_after_a_failed_read_until_one_succeeds(
 
 
 def test_stops_listening_for_new_records_once_closed(
-    open_records, database: Path, process_until
+    open_records, store, database: Path, process_until
 ) -> None:
     _seed_count(database, 3)
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window), "the first page")
 
@@ -472,12 +481,13 @@ def test_an_open_window_settles_instead_of_reading_its_own_reads_forever(
     fast: None,
     process_until,
 ) -> None:
-    database = configure_session_logging()
+    configure_session_logging()
     flush_records()
     set_stored_listener(stored_signal().emit)
-    reader = ScriptedReader(database)
-    reads = RecordsReads(reader)
-    window = RecordsWindow(reads, WindowState(tmp_path / "w.ini"))
+    store = records_store()
+    assert store is not None
+    reader = ScriptedReads(store)
+    window = RecordsWindow(reader, WindowState(tmp_path / "w.ini"))
     try:
         window.show()
         _until(process_until, lambda: _loaded(window), "the first page")
@@ -489,7 +499,6 @@ def test_an_open_window_settles_instead_of_reading_its_own_reads_forever(
 
         assert len(reader.pages) == settled
     finally:
-        reads.stop()
         window.close()
 
 
@@ -657,7 +666,7 @@ def make_main(qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         "pixelup.gui.load_app_config_result",
         lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
     )
-    log_file = configure_session_logging()
+    configure_session_logging()
     created: list[MainWindow] = []
 
     def make() -> MainWindow:
@@ -666,14 +675,12 @@ def make_main(qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         for info in ALL_MODELS:
             (models_dir / info.filename).write_bytes(b"ready")
         runtime_dirs = SimpleNamespace(models_dir=models_dir)
-        window = MainWindow(log_file=log_file, runtime_dirs=runtime_dirs)
+        window = MainWindow(runtime_dirs=runtime_dirs)
         created.append(window)
         return window
 
     yield make
     for window in created:
-        if window._records_reads is not None:
-            window._records_reads.stop()
         if window._records_window is not None:
             window._records_window.close()
 
@@ -732,20 +739,16 @@ def test_the_records_window_reopens_where_it_was_closed(make_main, process_until
     assert stored == expected
 
 
-def test_closing_the_main_window_closes_the_records_window_and_ends_its_reads(
-    make_main,
-) -> None:
+def test_closing_the_main_window_closes_the_records_window(make_main) -> None:
     main = make_main()
     main._open_records_window()
     records = main._records_window
-    reads = main._records_reads
     main._is_session_shutdown = lambda: True
 
     assert main.close() is True
 
+    assert records is not None
     assert main._records_window is None
-    assert records is not None and reads is not None
-    assert reads._thread.isFinished()
 
 
 def test_no_records_window_opens_once_quitting_has_begun(make_main, monkeypatch) -> None:
@@ -834,10 +837,10 @@ def test_the_list_never_scrolls_sideways(open_records, qapp: QApplication) -> No
 
 
 def test_live_ticks_wait_while_the_newest_read_runs(
-    open_records, database, process_until,
+    open_records, store, database, process_until,
 ) -> None:
     _seed_count(database, 4)
-    reader = ScriptedReader(database)
+    reader = ScriptedReads(store)
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window), "the first page")
     reader.gate = threading.Event()
