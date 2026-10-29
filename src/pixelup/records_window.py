@@ -900,6 +900,12 @@ class RecordsWindow(QWidget):
         if self._status != "ready":
             self._first_page_read(generation, page)
             return
+        bar = self.list.verticalScrollBar()
+        if bar.value() > bar.minimum():
+            # Scrolled away while the read ran: rows put above would move the
+            # list under the reader, so they wait for the top like any others.
+            self._newest_wanted = True
+            return
         records, more = merge_newest_page(self.model.records, self._more, page)
         self.model.merge(records)
         self._more = more

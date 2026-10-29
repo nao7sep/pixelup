@@ -416,6 +416,31 @@ def test_leaves_the_list_alone_while_scrolled_down_and_updates_it_back_at_the_to
     _until(process_until, lambda: _messages(window)[0] == "m100", "the newest page")
 
 
+def test_a_newest_page_answering_after_a_scroll_down_waits_for_the_top(
+    open_records, store, database: Path, process_until
+) -> None:
+    _seed_count(database, 60)
+    reader = ScriptedReads(store)
+    window = open_records(reader)
+    _until(process_until, lambda: _loaded(window), "the first page")
+    _seed_count(database, 1, start=100)
+    reader.gate = threading.Event()
+    try:
+        stored_signal().emit()
+        _until(process_until, reader.waiting.is_set, "the held newest page")
+        window.list.verticalScrollBar().setValue(200)
+    finally:
+        reader.gate.set()
+    _until(process_until, lambda: _loaded(window), "the newest page")
+
+    assert window.list.verticalScrollBar().value() == 200
+    assert _messages(window)[0] == "m59"
+    assert window._newest_wanted
+    reader.gate = None
+    window.list.scrollToTop()
+    _until(process_until, lambda: _messages(window)[0] == "m100", "the newest page again")
+
+
 def test_keeps_the_selected_record_selected_through_an_update(
     open_records, database: Path, process_until
 ) -> None:
