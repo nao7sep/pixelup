@@ -909,6 +909,7 @@ def test_an_emptied_number_field_says_it_is_required_and_holds_the_queue(
     from PySide6.QtTest import QTest
 
     window = make_window()
+    window.show()
     _open(window, [_png(tmp_path, "a.png")])
     window.model_checks["realesr-general-x4v3"].setChecked(True)
     box = getattr(window, field)
@@ -923,8 +924,12 @@ def test_an_emptied_number_field_says_it_is_required_and_holds_the_queue(
     assert not window._parameters_form.isRowVisible(required)
     saved = window.current_job_settings()
 
+    box.setFocus()
     box.lineEdit().selectAll()
     QTest.keyClick(box, Qt.Key.Key_Backspace)
+    QTest.keyClick(box, Qt.Key.Key_Return)
+    window.tile.setFocus()
+    QApplication.processEvents()
 
     assert box.text() == ""
     assert window._parameters_form.isRowVisible(required)
@@ -948,17 +953,45 @@ def test_an_emptied_number_field_says_it_is_required_and_holds_the_queue(
 
 
 def test_reset_fills_an_emptied_number_field(make_window) -> None:
+    # The rest of the panel is at its built-ins: the empty field alone turns Reset on.
     from PySide6.QtTest import QTest
 
     window = make_window()
+    reset = _reset_button(window)
+    assert not reset.isEnabled()
     window.quality.lineEdit().selectAll()
     QTest.keyClick(window.quality, Qt.Key.Key_Backspace)
-    window.tile.setCurrentIndex(window.tile.findData(1024))
+    assert reset.isEnabled()
 
-    _reset_button(window).click()
+    reset.click()
 
     assert window.quality.text() == str(JobSettings().quality)
     assert not window._parameters_form.isRowVisible(window.quality_required)
+    assert not reset.isEnabled()
+
+
+def test_an_emptied_number_field_stays_empty_across_a_language_change(make_window) -> None:
+    from PySide6.QtTest import QTest
+
+    from pixelup.i18n import localizer
+
+    window = make_window()
+    window.quality.setValue(10)
+    assert _flush(window) is True
+    window.quality.lineEdit().selectAll()
+    QTest.keyClick(window.quality, Qt.Key.Key_Backspace)
+    QTest.keyClicks(window.quality, "7")
+    window.quality.lineEdit().selectAll()
+    QTest.keyClick(window.quality, Qt.Key.Key_Backspace)
+    try:
+        localizer.use("de")
+        QApplication.processEvents()
+        assert window.quality.text() == ""
+        assert window._parameters_form.isRowVisible(window.quality_required)
+        assert _flush(window) is True
+        assert window.config.parameters.quality == 10
+    finally:
+        localizer.use("en")
 
 
 def test_settings_only_options_have_no_main_window_control(make_window) -> None:

@@ -2118,8 +2118,11 @@ class MainWindow(QMainWindow):
         self._refresh_number_fields()
 
     def _update_reset_button(self) -> None:
-        """Reset is off while the panel already holds the built-in parameters."""
-        self.reset_parameters_button.setEnabled(self.current_job_settings() != JobSettings())
+        """Reset is off while the panel already holds the built-in parameters. An
+        emptied number field holds none, so Reset stays on to fill it."""
+        self.reset_parameters_button.setEnabled(
+            not self._parameters_complete() or self.current_job_settings() != JobSettings()
+        )
 
     def _flush_parameters_save(
         self,

@@ -188,9 +188,38 @@ def test_a_moved_parameter_set_that_fails_its_check_is_kept_in_its_new_file(
     assert json.loads(config.read_text(encoding="utf-8")) == {"format_version": 1}
 
 
-def test_an_interrupted_move_keeps_the_parameters_file_that_was_written(tmp_path: Path) -> None:
-    # The move writes parameters.json first; if config.json still holds the old
-    # key afterwards, parameters.json is the copy kept and the old key is removed.
+def test_an_interrupted_move_keeps_the_parameters_file_that_was_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The move writes parameters.json first; when the config.json write then
+    # fails, the next launch keeps parameters.json and only removes the old key.
+    from pixelup import app_config
+
+    config = tmp_path / "config.json"
+    original = json.dumps({"format_version": 1, "parameters": _parameter_map(quality=42)})
+    config.write_text(original, encoding="utf-8")
+    write = app_config.write_managed_text
+
+    def fail_config(path: Path, text: str) -> None:
+        if path.name == "config.json":
+            raise OSError("disk full")
+        write(path, text)
+
+    monkeypatch.setattr(app_config, "write_managed_text", fail_config)
+    with pytest.raises(OSError, match="disk full"):
+        load_app_config_result(tmp_path)
+    assert config.read_text(encoding="utf-8") == original
+    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "parameters": _parameter_map(quality=42),
+    }
+
+    monkeypatch.setattr(app_config, "write_managed_text", write)
+    assert load_app_config(tmp_path).parameters == JobSettings(quality=42)
+    assert json.loads(config.read_text(encoding="utf-8")) == {"format_version": 1}
+
+
+def test_an_existing_parameters_file_wins_over_an_old_key(tmp_path: Path) -> None:
     (tmp_path / "parameters.json").write_text(
         json.dumps({"format_version": 1, "parameters": _parameter_map(quality=60)}),
         encoding="utf-8",
@@ -204,6 +233,34 @@ def test_an_interrupted_move_keeps_the_parameters_file_that_was_written(tmp_path
     assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8")) == {
         "format_version": 1
     }
+
+
+@pytest.mark.parametrize("stored", ["{ broken", '{"format_version": 2}'])
+def test_an_old_key_stays_while_the_parameters_file_cannot_be_read(
+    tmp_path: Path, stored: str
+) -> None:
+    # The values never rest only in a file that is moved aside or cannot be read:
+    # the old key stays in config.json, and moves once parameters.json is gone.
+    config = tmp_path / "config.json"
+    original = json.dumps({"format_version": 1, "parameters": _parameter_map(quality=42)})
+    config.write_text(original, encoding="utf-8")
+    (tmp_path / "parameters.json").write_text(stored, encoding="utf-8")
+
+    first = load_app_config_result(tmp_path)
+
+    assert config.read_text(encoding="utf-8") == original
+    assert first.config.parameters == JobSettings()
+    if stored == "{ broken":
+        assert len(first.quarantined) == 1
+        assert load_app_config(tmp_path).parameters == JobSettings(quality=42)
+        assert json.loads(config.read_text(encoding="utf-8")) == {"format_version": 1}
+    else:
+        assert first.files.parameters.newer_format == 2
+        # A later save keeps the old key in config.json as a value it does not use.
+        save_app_config(replace(first.config, language="ja"), first.config, first.files)
+        assert json.loads(config.read_text(encoding="utf-8"))["parameters"] == (
+            _parameter_map(quality=42)
+        )
 
 
 def test_the_move_records_both_files_in_the_backup_history(

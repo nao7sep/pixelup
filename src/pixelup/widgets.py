@@ -309,8 +309,9 @@ class _NumberFieldMixin:
     puts the last value back when focus leaves or Return is pressed over text that
     is not yet a number, such as an emptied field. That would hand the user a value
     they removed (number-field-conventions), so the typed text is put back after
-    Qt's own handling. ``value()`` keeps the last valid value meanwhile; the owner
-    asks ``has_value`` before using it.
+    Qt's own handling, and after a locale change, where Qt writes the value out
+    again in the new locale. ``value()`` keeps the last valid value meanwhile; the
+    owner asks ``has_value`` before using it.
     """
 
     def has_value(self) -> bool:
@@ -330,6 +331,11 @@ class _NumberFieldMixin:
             else None
         )
         super().keyPressEvent(event)  # type: ignore[misc]
+        self._keep_text(typed)
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt override name
+        typed = self._unfinished_text() if event.type() == QEvent.Type.LocaleChange else None
+        super().changeEvent(event)  # type: ignore[misc]
         self._keep_text(typed)
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 - Qt override name

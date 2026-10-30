@@ -186,22 +186,26 @@ def save_app_config(
 
     Each file is written only when what it would hold changed, so a Settings save
     leaves ``parameters.json`` alone and a Parameters save or reset leaves
-    ``config.json`` alone. Every file it would write is checked for a newer format
-    before either is written.
+    ``config.json`` alone. A file a newer PixelUp wrote is never written: a save
+    that changes one of its sets is refused before either file is written, and
+    any other save leaves it as it is.
     """
-    plans = [
-        (file, _file_data(candidate, previous, file, store))
-        for file, store in ((files.config, _CONFIG_STORE), (files.parameters, _PARAMETERS_STORE))
-    ]
-    for file, (data, _kept) in plans:
-        if data != file.data and file.newer_format is not None:
+    stores = ((files.config, _CONFIG_STORE), (files.parameters, _PARAMETERS_STORE))
+    for file, store in stores:
+        if file.newer_format is not None and any(
+            getattr(candidate, key) != getattr(previous, key) for key in store.decoders
+        ):
             raise PixelupError(
                 ErrorCode.STORE_NEWER_FORMAT,
                 Message("error.configNewer"),
                 details={"path": str(file.path), "format_version": file.newer_format},
             )
     saved = []
-    for file, (data, kept) in plans:
+    for file, store in stores:
+        if file.newer_format is not None:
+            saved.append(file)
+            continue
+        data, kept = _file_data(candidate, previous, file, store)
         if data != file.data:
             write_managed_text(file.path, json.dumps(data, indent=2, sort_keys=True) + "\n")
             file = SettingsFile(
@@ -265,11 +269,13 @@ def _move_parameters_out_of_config(config_file: Path, parameters_file: Path) -> 
 
     The stored value moves as it is, valid or not, and is judged where it lands.
     ``parameters.json`` is written first and ``config.json`` loses the key only
-    after, so an interruption leaves the value in at least one file; a
-    ``parameters.json`` that already exists is the newer copy, and the old key is
-    then only removed. A ``config.json`` this build cannot read is left for the
-    ordinary load to quarantine or keep. Writes go through the managed-text path,
-    so both files' backup histories record the move.
+    after, so an interruption leaves the value in at least one file. A
+    ``parameters.json`` that already exists and loads is the newer copy, and the
+    old key is then only removed; one that is unreadable or from a newer PixelUp
+    leaves the old key in place, so the values never rest only in a file that is
+    moved aside or cannot be read. A ``config.json`` this build cannot read is left
+    for the ordinary load to quarantine or keep. Writes go through the managed-text
+    path, so both files' backup histories record the move.
     """
     if not config_file.exists():
         return
@@ -280,7 +286,17 @@ def _move_parameters_out_of_config(config_file: Path, parameters_file: Path) -> 
         return
     if version > CONFIG_FORMAT_VERSION or _PARAMETERS_KEY not in data:
         return
-    if not parameters_file.exists():
+    if parameters_file.exists():
+        try:
+            readable = (
+                format_version(_read_object(parameters_file).get(_FORMAT_VERSION_KEY))
+                <= PARAMETERS_FORMAT_VERSION
+            )
+        except ValueError:
+            readable = False
+        if not readable:
+            return
+    else:
         moved = {
             _FORMAT_VERSION_KEY: PARAMETERS_FORMAT_VERSION,
             _PARAMETERS_KEY: data[_PARAMETERS_KEY],
