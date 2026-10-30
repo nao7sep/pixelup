@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication, QStyle, QStyleFactory
 
-from pixelup.app_config import AppConfig, ConfigLoadResult, SettingsFile, config_path
+from pixelup.app_config import AppConfig, ConfigLoadResult
 from pixelup.fonts import DEFAULT_UI_FONT_SIZE
 from pixelup.gui import MainWindow
 from pixelup.runner import JobRunner
@@ -31,7 +31,7 @@ def make_window(
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
-        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+        lambda: ConfigLoadResult(AppConfig()),
     )
     configure_session_logging()
 

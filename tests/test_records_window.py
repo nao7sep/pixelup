@@ -19,7 +19,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from pixelup import gui, records_window
-from pixelup.app_config import AppConfig, ConfigLoadResult, SettingsFile, config_path
+from pixelup.app_config import AppConfig, ConfigLoadResult
 from pixelup.gui import MainWindow, is_reopen
 from pixelup.i18n.languages import TAGS
 from pixelup.i18n.message import Message
@@ -689,7 +689,7 @@ def make_main(qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
-        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+        lambda: ConfigLoadResult(AppConfig()),
     )
     configure_session_logging()
     created: list[MainWindow] = []

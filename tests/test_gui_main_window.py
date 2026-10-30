@@ -19,13 +19,14 @@ from PySide6.QtCore import QEvent, QMargins, QRect, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QColor, QImageReader, QKeySequence, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QPushButton, QStyle
 
-from pixelup import gui, theme
+from pixelup import app_config, gui, theme
 from pixelup.app_config import (
     AppConfig,
     ConfigLoadResult,
     ConfigSaveResult,
-    SettingsFile,
+    SettingsFiles,
     config_path,
+    parameters_path,
 )
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.gui import MainWindow
@@ -116,20 +117,19 @@ def _isolate_settings_root(
     # root. Disconnect a separate accepted settings volume with no live handles,
     # so this failure is reproducible on Windows as well as POSIX.
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "settings-volume"))
-    accepted_path = config_path()
-    window._settings_file = replace(window._settings_file, path=accepted_path)
-    return _UnavailableSettingsRoot(accepted_path.parent)
+    window._settings_files = SettingsFiles.absent()
+    return _UnavailableSettingsRoot(window._settings_files.config.path.parent)
 
 
 def _track_runtime_config_resolution(monkeypatch: pytest.MonkeyPatch) -> list[None]:
     calls: list[None] = []
-    resolve = gui.config_path
+    resolve = app_config.resolve_state_dir
 
-    def resolving() -> Path:
+    def resolving(*args) -> Path:
         calls.append(None)
-        return resolve()
+        return resolve(*args)
 
-    monkeypatch.setattr(gui, "config_path", resolving)
+    monkeypatch.setattr(app_config, "resolve_state_dir", resolving)
     return calls
 
 
@@ -148,7 +148,7 @@ def make_window(
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
-        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+        lambda: ConfigLoadResult(AppConfig()),
     )
     configure_session_logging()
 
@@ -237,7 +237,7 @@ def test_build_app_wires_application_and_opens_argv_paths(
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
-        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+        lambda: ConfigLoadResult(AppConfig()),
     )
     image = _png(tmp_path, "a.png")
     runtime_dirs = SimpleNamespace(models_dir=tmp_path / "models")
@@ -280,7 +280,7 @@ def test_build_app_assigns_runtime_icon_only_on_windows(
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path / "home"))
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
-        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+        lambda: ConfigLoadResult(AppConfig()),
     )
     monkeypatch.setattr(gui.sys, "platform", platform)
     assigned_icons: list[str] = []
@@ -899,6 +899,68 @@ def test_action_buttons_reflect_state(make_window, tmp_path: Path) -> None:
     assert window.queue_all_selected_models_button.isEnabled() is True
 
 
+@pytest.mark.parametrize(
+    ("field", "message", "range_"),
+    [("quality", "quality_required", (0, 100)), ("denoise_strength", "denoise_required", (0, 1))],
+)
+def test_an_emptied_number_field_says_it_is_required_and_holds_the_queue(
+    make_window, tmp_path: Path, field: str, message: str, range_: tuple[int, int]
+) -> None:
+    from PySide6.QtTest import QTest
+
+    window = make_window()
+    _open(window, [_png(tmp_path, "a.png")])
+    window.model_checks["realesr-general-x4v3"].setChecked(True)
+    box = getattr(window, field)
+    required = getattr(window, message)
+    queue_buttons = (
+        window.queue_selected_button,
+        window.queue_selected_all_models_button,
+        window.queue_all_selected_models_button,
+        window.queue_all_all_models_button,
+    )
+    assert all(button.isEnabled() for button in queue_buttons)
+    assert not window._parameters_form.isRowVisible(required)
+    saved = window.current_job_settings()
+
+    box.lineEdit().selectAll()
+    QTest.keyClick(box, Qt.Key.Key_Backspace)
+
+    assert box.text() == ""
+    assert window._parameters_form.isRowVisible(required)
+    low, high = range_
+    assert required.text() == english().of(
+        Message.of("parameters.required", low=low, high=high)
+    )
+    assert not any(button.isEnabled() for button in queue_buttons)
+    # Nothing is saved for the empty field: the value saved last stays in force.
+    window.tile.setCurrentIndex(window.tile.findData(1024))
+    assert _flush(window) is True
+    assert getattr(window.config.parameters, field) == getattr(saved, field)
+    assert window.config.parameters.tile == 1024
+    assert box.text() == ""
+
+    # Typing back the very value it held is an edit like any other.
+    QTest.keyClicks(box, box.textFromValue(getattr(saved, field)))
+    assert not window._parameters_form.isRowVisible(required)
+    assert all(button.isEnabled() for button in queue_buttons)
+    assert window._parameters_save_timer.isActive()
+
+
+def test_reset_fills_an_emptied_number_field(make_window) -> None:
+    from PySide6.QtTest import QTest
+
+    window = make_window()
+    window.quality.lineEdit().selectAll()
+    QTest.keyClick(window.quality, Qt.Key.Key_Backspace)
+    window.tile.setCurrentIndex(window.tile.findData(1024))
+
+    _reset_button(window).click()
+
+    assert window.quality.text() == str(JobSettings().quality)
+    assert not window._parameters_form.isRowVisible(window.quality_required)
+
+
 def test_settings_only_options_have_no_main_window_control(make_window) -> None:
     # One home per thing, checked from the other side. Language, time zone and font
     # are the settings dialog's; model acquisition belongs to Managed models, not to a toggle.
@@ -1249,18 +1311,19 @@ def test_reset_parameters_ignores_the_persisted_config(make_window) -> None:
     assert window.current_job_settings() == JobSettings()
     # And the reset is itself persisted, so it survives the next launch.
     assert window.config.parameters == JobSettings()
-    assert "parameters" not in json.loads(config_path().read_text(encoding="utf-8"))
+    assert "parameters" not in json.loads(parameters_path().read_text(encoding="utf-8"))
+    assert not config_path().exists()
 
 
-def test_parameter_edits_persist_to_config_json(make_window) -> None:
-    # The panel is durable: an edit reaches config.json, so a relaunch reads it back.
+def test_parameter_edits_persist_to_parameters_json(make_window) -> None:
+    # The panel is durable: an edit reaches parameters.json, so a relaunch reads it back.
     # Loaded from disk (not from window.config) so the serializer is in the loop.
     window = make_window()
 
     _wander_from_defaults(window)
     _flush(window)
 
-    persisted = load_app_config(config_path()).parameters
+    persisted = load_app_config().parameters
     assert persisted == window.current_job_settings()
     assert persisted.quality == 10
     assert persisted.tile == 1024
@@ -1349,7 +1412,7 @@ def test_landed_config_completion_uses_its_accepted_path_after_root_becomes_unav
 ) -> None:
     window = make_window()
     unavailable = _isolate_settings_root(window, tmp_path, monkeypatch)
-    accepted_path = window._settings_file.path
+    accepted_files = window._settings_files
     calls = _track_runtime_config_resolution(monkeypatch)
     real_save = gui.save_app_config
     outcomes = []
@@ -1378,9 +1441,11 @@ def test_landed_config_completion_uses_its_accepted_path_after_root_becomes_unav
         assert unavailable.root.is_file()
         assert outcomes == ([True] if setting == "parameters" else [None])
         assert calls == []
-        assert window._settings_file.path == accepted_path
+        assert [file.path for file in window._settings_files] == [
+            file.path for file in accepted_files
+        ]
         assert not window._unsaved_config_changes
-        landed = load_app_config(unavailable.displaced / accepted_path.name)
+        landed = load_app_config(unavailable.displaced)
         assert window.config == landed
         if setting == "parameters":
             assert window.config.parameters.quality == 73
@@ -1397,7 +1462,7 @@ def test_failed_folder_completion_releases_and_retries_after_root_becomes_unavai
     window = make_window(injected=False)
     original = window.config
     unavailable = _isolate_settings_root(window, tmp_path, monkeypatch)
-    accepted_path = window._settings_file.path
+    accepted_root = window._settings_files.config.path.parent
     calls = _track_runtime_config_resolution(monkeypatch)
     target = tmp_path / "chosen models"
     real_save = gui.save_app_config
@@ -1437,7 +1502,7 @@ def test_failed_folder_completion_releases_and_retries_after_root_becomes_unavai
         assert window.model_manager.models_dir == target
         assert not window.model_manager.folder_changing
         assert not window._unsaved_config_changes
-        assert load_app_config(accepted_path).models_folder == str(target)
+        assert load_app_config(accepted_root).models_folder == str(target)
     finally:
         unavailable.restore()
 
@@ -1605,7 +1670,7 @@ def test_retry_saves_and_the_quit_goes_on(make_window, monkeypatch: pytest.Monke
     assert event.isAccepted() is False
     assert window._quit_ready is True
     assert len(attempts) == 2
-    assert load_app_config(config_path()).parameters.quality == 10
+    assert load_app_config().parameters.quality == 10
 
 
 def test_quit_anyway_quits_without_the_save_and_logs_what_was_lost(
@@ -1626,7 +1691,7 @@ def test_quit_anyway_quits_without_the_save_and_logs_what_was_lost(
     assert event.isAccepted() is False
     assert window._quit_ready is True
     assert dialog.shown == 2
-    assert not config_path().exists()
+    assert not parameters_path().exists()
     [lost] = _fields(caplog, "quit.parameters_unsaved")
     assert lost["values"]["quality"] == 10
 
@@ -2032,7 +2097,7 @@ def test_scale_edit_persists_to_config_json(make_window) -> None:
 
     _flush(window)
 
-    assert load_app_config(config_path()).parameters.scale == 2
+    assert load_app_config().parameters.scale == 2
 
 
 def test_window_seeds_the_panel_from_the_persisted_parameters(
@@ -2047,7 +2112,7 @@ def test_window_seeds_the_panel_from_the_persisted_parameters(
     )
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
-        lambda: ConfigLoadResult(AppConfig(parameters=parameters), SettingsFile(config_path())),
+        lambda: ConfigLoadResult(AppConfig(parameters=parameters)),
     )
     configure_session_logging()
 
@@ -2165,7 +2230,7 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
 
     window = MainWindow()
     try:
-        assert window._config_quarantined_to is None
+        assert window._config_quarantined == ()
         assert window.tile.currentIndex() != -1, "the combo blanked on an unknown tile"
         assert window.tile.currentData() is not None
         assert window.tile.currentData() == JobSettings().tile
@@ -2174,7 +2239,7 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
         qapp.processEvents()
         # The user is told which settings run on their built-ins, and where the
         # file keeping their stored values is; nothing was reset.
-        assert notices == [((Message("parameters.title"),), home / "config.json")]
+        assert notices == [((Message("parameters.title"),), home / "parameters.json")]
     finally:
         window._is_session_shutdown = lambda: True
         window.close()
@@ -2210,10 +2275,12 @@ def test_the_window_itself_takes_the_configured_font_at_launch(
 def test_fresh_launch_and_close_do_not_create_config(make_window) -> None:
     window = make_window()
     assert not config_path().exists()
+    assert not parameters_path().exists()
     assert window.config == AppConfig()
     window._is_session_shutdown = lambda: True
     window.close()
     assert not config_path().exists()
+    assert not parameters_path().exists()
 
 
 def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
@@ -2224,7 +2291,7 @@ def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
     window.quality.setValue(10)
     _flush(window)
     original = window.config
-    saved = config_path().read_bytes()
+    saved = parameters_path().read_bytes()
     real_save = gui.save_app_config
     attempts: list[JobSettings] = []
 
@@ -2239,10 +2306,11 @@ def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
     _settle_config(window)
     assert window.config == original
     assert window.current_job_settings() == JobSettings()
-    assert config_path().read_bytes() == saved
+    assert parameters_path().read_bytes() == saved
     assert _flush(window) is True
     assert attempts == [JobSettings(), JobSettings()]
-    assert json.loads(config_path().read_text(encoding="utf-8")) == {"format_version": 1}
+    assert json.loads(parameters_path().read_text(encoding="utf-8")) == {"format_version": 1}
+    assert not config_path().exists()
     assert window.config.parameters == JobSettings()
 
 
@@ -2339,9 +2407,8 @@ def test_held_config_save_keeps_gui_live_and_retains_newer_panel_edits(
 
 
 def test_every_stored_settings_set_has_a_name_for_the_rejected_notice() -> None:
-    from pixelup import app_config
-
-    assert set(gui._SET_LABELS) == set(app_config._SET_DECODERS)
+    stored = {*app_config._CONFIG_DECODERS, *app_config._PARAMETER_DECODERS}
+    assert set(gui._SET_LABELS) == stored
 
 
 def test_opening_images_never_waits_on_the_volume(
@@ -2904,7 +2971,7 @@ def test_managed_models_stays_open_until_its_folder_save_lands(
 def test_saved_folder_load_and_environment_override(make_window, tmp_path, monkeypatch):
     target = tmp_path / "saved models"
     monkeypatch.setattr(gui, "load_app_config_result", lambda: ConfigLoadResult(
-        AppConfig(models_folder=str(target)), SettingsFile(config_path())
+        AppConfig(models_folder=str(target))
     ))
     window = make_window(injected=False)
     assert window.runtime_dirs.models_dir == target
@@ -4084,7 +4151,7 @@ def test_real_settings_dialog_replaces_failed_owned_edits_and_preserves_unshown_
 
         expected = replace(baseline, **{changed_set: replacement[changed_set]})
         assert window.config == expected
-        assert load_app_config(window._settings_file.path) == expected
+        assert load_app_config(window._settings_files.config.path.parent) == expected
         assert window.config.parameters == baseline.parameters
         assert window.config.models_folder == baseline.models_folder
         assert not window._unsaved_config_changes

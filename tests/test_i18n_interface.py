@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from pixelup.about_dialog import AboutDialog
-from pixelup.app_config import AppConfig, ConfigLoadResult, SettingsFile, config_path
+from pixelup.app_config import AppConfig, ConfigLoadResult
 from pixelup.fonts import system_ui_font_family
 from pixelup.gui import MainWindow
 from pixelup.i18n import localizer
@@ -133,7 +133,7 @@ def window(
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     monkeypatch.setattr(
         "pixelup.gui.load_app_config_result",
-        lambda: ConfigLoadResult(AppConfig(), SettingsFile(config_path())),
+        lambda: ConfigLoadResult(AppConfig()),
     )
     configure_session_logging()
     models_dir = tmp_path / "home" / "models"

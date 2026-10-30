@@ -75,16 +75,22 @@ def test_record_fires_strictly_after_the_rename(
     assert file_exists_when_recorded == [True]
 
 
-def test_save_app_config_records_config_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("name", "candidate"),
+    [
+        ("config.json", lambda value: AppConfig(font_family=value)),
+        ("parameters.json", lambda value: AppConfig(parameters=JobSettings(quality=value))),
+    ],
+)
+def test_save_app_config_records_each_settings_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, candidate
 ) -> None:
-    # The app's one RECORD write site end-to-end: saving config.json captures it.
+    # The app's RECORD write site end-to-end: saving either settings file captures it.
     home = _home(tmp_path, monkeypatch)
-    target = home / "config.json"
+    target = home / name
 
-    for quality in (94, 94, 80):
-        candidate = AppConfig(parameters=JobSettings(quality=quality))
-        save_app_config(candidate, AppConfig(), load_app_config_result(target).file)
+    for value in ((94, 94, 80) if name == "parameters.json" else ("A", "A", "B")):
+        save_app_config(candidate(value), AppConfig(), load_app_config_result(home).files)
 
     rows = _store_rows(home, target)
     # One session keeps one row per file, holding its last save.

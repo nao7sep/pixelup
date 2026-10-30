@@ -6,12 +6,15 @@ from PySide6.QtCore import QEvent, QModelIndex, QPersistentModelIndex, QPointF, 
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
+    QFocusEvent,
     QIcon,
+    QKeyEvent,
     QPainter,
     QPaintEvent,
     QPalette,
     QPen,
     QResizeEvent,
+    QValidator,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
@@ -299,28 +302,60 @@ def inset_spin_text(box: QAbstractSpinBox) -> None:
     box.lineEdit().setTextMargins(BORDER_WIDTH + FIELD_TEXT_PADDING, 0, 0, 0)
 
 
-class NoWheelSpinBox(QSpinBox):
+class _NumberFieldMixin:
+    """A spin box that refuses invalid keystrokes and keeps what was typed.
+
+    Qt already refuses a keystroke that cannot lead to a value in range, but it
+    puts the last value back when focus leaves or Return is pressed over text that
+    is not yet a number, such as an emptied field. That would hand the user a value
+    they removed (number-field-conventions), so the typed text is put back after
+    Qt's own handling. ``value()`` keeps the last valid value meanwhile; the owner
+    asks ``has_value`` before using it.
+    """
+
+    def has_value(self) -> bool:
+        line = self.lineEdit()  # type: ignore[attr-defined]
+        state = self.validate(line.text(), line.cursorPosition())[0]  # type: ignore[attr-defined]
+        return state == QValidator.State.Acceptable
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt override name
+        typed = self._unfinished_text()
+        super().focusOutEvent(event)  # type: ignore[misc]
+        self._keep_text(typed)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt override name
+        typed = (
+            self._unfinished_text()
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            else None
+        )
+        super().keyPressEvent(event)  # type: ignore[misc]
+        self._keep_text(typed)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 - Qt override name
+        if self.hasFocus():  # type: ignore[attr-defined]
+            super().wheelEvent(event)  # type: ignore[misc]
+            return
+        event.ignore()
+
+    def _unfinished_text(self) -> str | None:
+        return None if self.has_value() else self.lineEdit().text()  # type: ignore[attr-defined]
+
+    def _keep_text(self, typed: str | None) -> None:
+        if typed is not None and self.lineEdit().text() != typed:  # type: ignore[attr-defined]
+            self.lineEdit().setText(typed)  # type: ignore[attr-defined]
+
+
+class NoWheelSpinBox(_NumberFieldMixin, QSpinBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         inset_spin_text(self)
 
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        if self.hasFocus():
-            super().wheelEvent(event)
-            return
-        event.ignore()
 
-
-class NoWheelDoubleSpinBox(QDoubleSpinBox):
+class NoWheelDoubleSpinBox(_NumberFieldMixin, QDoubleSpinBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         inset_spin_text(self)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        if self.hasFocus():
-            super().wheelEvent(event)
-            return
-        event.ignore()
 
 
 class EmptyStateTableWidget(QTableWidget):

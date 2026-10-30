@@ -179,7 +179,7 @@ def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: P
     initial = AppConfig()
 
     def save(candidate: AppConfig, finished) -> None:
-        save_app_config(candidate, initial, load_app_config_result(path).file)
+        save_app_config(candidate, initial, load_app_config_result(path.parent).files)
         finished(None)
 
     dialog = SettingsDialog(initial, try_save=save)

@@ -3,11 +3,12 @@
 It owns one SQLite file, ``backups.sqlite3``, directly under PixelUp's storage root
 (``PIXELUP_DATA_DIR`` or ``~/.pixelup``, resolved in one place by
 :func:`resolve_state_dir`). It keeps the last version of each protected file saved
-in each session (one process launch). PixelUp protects only ``config.json``, its one
-file the user creates through the app: models are derived and downloaded again,
-upscaled images and their sidecars are output the user owns, ``window.ini`` is
-state, and records are records. There is no startup scan, no capture at exit beyond
-draining pending writes, and no restore path; recovery is manual.
+in each session (one process launch). PixelUp protects only ``config.json`` and
+``parameters.json``, the files the user creates through the app: models are
+derived and downloaded again, upscaled images and their sidecars are output the
+user owns, ``window.ini`` is state, and records are records. There is no startup
+scan, no capture at exit beyond draining pending writes, and no restore path;
+recovery is manual.
 
 SQLite binding: Python's built-in ``sqlite3`` module. A ``BLOB`` round-trips through
 ``sqlite3.Binary``/``bytes`` byte-for-byte, so CR/LF, a BOM and non-UTF-8 bytes are

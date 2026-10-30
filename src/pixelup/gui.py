@@ -46,6 +46,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -74,7 +75,6 @@ from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import (
     AppConfig,
     config_log_payload,
-    config_path,
     load_app_config_result,
     save_app_config,
 )
@@ -176,7 +176,7 @@ _CELL_PADDING = 24
 # this (with a tooltip), and a stretch filename column uses it as its floor.
 _NAME_MIN_WIDTH = 180
 
-# How long the Parameters panel waits after the last edit before writing config.json.
+# How long the Parameters panel waits after the last edit before writing parameters.json.
 # Coalescing absorbs the quality and denoise spin boxes' per-digit changes before
 # each atomic rewrite and backup submission. A crash or force-quit can lose edits
 # whose save has not landed yet. Ordinary quit flushes the latest edit within its
@@ -460,7 +460,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, *, runtime_dirs: RuntimeDirs | None = None) -> None:
         super().__init__()
-        # A corrupt config.json is quarantined, a newer PixelUp's is left alone, and
+        # A corrupt settings file is quarantined, a newer PixelUp's is left alone, and
         # a set that fails validation keeps its stored value while it runs on its
         # built-in; either way the app starts rather than failing (store-recovery-
         # conventions), and the notices below tell the user. They are surfaced only
@@ -468,8 +468,9 @@ class MainWindow(QMainWindow):
         load_result = load_app_config_result()
         self.config = load_result.config
         set_display_zone(self.config.display_zone)
-        # What config.json holds; every save writes from it and replaces it.
-        self._settings_file = load_result.file
+        # What config.json and parameters.json hold; every save writes from them
+        # and replaces what it changed.
+        self._settings_files = load_result.files
         self._config_save: ConfigSave | None = None
         self._config_save_callback: Callable[[Message | None], None] | None = None
         self._config_save_failure: Message | None = None
@@ -478,8 +479,10 @@ class MainWindow(QMainWindow):
         self._unsaved_config_changes: dict[str, object] = {}
         self._parameter_edit_generation = 0
         self._saving_parameter_generation = 0
-        self._config_quarantined_to = load_result.quarantined_to
-        self._config_newer_format = load_result.file.newer_format
+        self._config_quarantined = load_result.quarantined
+        self._config_newer = tuple(
+            file for file in load_result.files if file.newer_format is not None
+        )
         self._config_rejected = load_result.rejected
         self._opens_pending = 0
         self._open_results = _Loaded(self)
@@ -596,26 +599,24 @@ class MainWindow(QMainWindow):
         set_stored_listener(stored_signal().emit)
         log.info(
             "config.loaded",
-            path=str(config_path()),
+            paths=[str(file.path) for file in self._settings_files],
             values=config_log_payload(self.config),
         )
-        if self._config_quarantined_to is not None:
-            log.warning(
-                "config.corrupt_reset",
-                path=str(config_path()),
-                quarantined_to=str(self._config_quarantined_to),
-            )
+        for quarantined_to in self._config_quarantined:
+            log.warning("config.corrupt_reset", quarantined_to=str(quarantined_to))
+        if self._config_quarantined:
             # Deferred to the event loop so the notice appears over the shown window
             # (build_app calls window.show() after __init__ returns) instead of
             # blocking construction ahead of the first paint. Non-fatal: the app is
             # already running on the built-ins; this only tells the user.
             QTimer.singleShot(0, self._notify_config_reset)
-        if self._config_newer_format is not None:
+        for file in self._config_newer:
             log.warning(
                 "config.newer_format",
-                path=str(config_path()),
-                format_version=self._config_newer_format,
+                path=str(file.path),
+                format_version=file.newer_format,
             )
+        if self._config_newer:
             QTimer.singleShot(0, self._notify_config_newer)
         if self._config_rejected:
             QTimer.singleShot(0, self._notify_config_rejected)
@@ -641,17 +642,19 @@ class MainWindow(QMainWindow):
         self._refresh_layout_metrics()
 
     def _notify_config_reset(self) -> None:
-        if self._config_quarantined_to is not None:
-            warn_config_reset(self, self._config_quarantined_to)
+        for quarantined_to in self._config_quarantined:
+            warn_config_reset(self, quarantined_to)
 
     def _notify_config_newer(self) -> None:
-        if self._config_newer_format is not None:
-            warn_config_newer(self, config_path())
+        for file in self._config_newer:
+            warn_config_newer(self, file.path)
 
     def _notify_config_rejected(self) -> None:
-        warn_config_rejected(
-            self, tuple(_SET_LABELS[key] for key in self._config_rejected), config_path()
-        )
+        for file in self._settings_files:
+            keys = [key for key in self._config_rejected
+                    if self._settings_files.holding(key) is file]
+            if keys:
+                warn_config_rejected(self, tuple(_SET_LABELS[key] for key in keys), file.path)
 
     def _on_commit_data_request(self, _manager: object) -> None:
         # Asked again for every quit on macOS, the user's own included, so each
@@ -1300,9 +1303,12 @@ class MainWindow(QMainWindow):
 
         form.addRow(_form_label("parameters.scale"), scale_row)
         form.addRow(_form_label("parameters.denoise"), self.denoise_strength)
+        self.denoise_required = _add_required_row(form, self.denoise_strength)
         form.addRow(_form_label("parameters.alphaMode"), self.alpha_mode)
         form.addRow(_form_label("parameters.outputFormat"), self.output_format)
         form.addRow(_form_label("parameters.quality"), self.quality)
+        self.quality_required = _add_required_row(form, self.quality)
+        self._parameters_form = form
         form.addRow(_form_label("parameters.tileSize"), self.tile)
         form.addRow(_form_label("parameters.device"), self.device)
         form.addRow("", self.strip_metadata)
@@ -1332,7 +1338,26 @@ class MainWindow(QMainWindow):
             self.target_profile.currentIndexChanged,
         ):
             changed.connect(self._parameters_edited)
+        # Typing is followed by the text as well: emptying a number field, or
+        # typing back the value it held, changes no value, yet decides whether
+        # the field's message shows, the queue buttons work and the panel has an
+        # edit to save. (Qt sets the text silently for setValue and steps, which
+        # valueChanged covers.)
+        for box in (self.denoise_strength, self.quality):
+            box.lineEdit().textChanged.connect(self._parameters_edited)
         return group
+
+    def _refresh_number_fields(self) -> None:
+        for box, message in (
+            (self.denoise_strength, self.denoise_required),
+            (self.quality, self.quality_required),
+        ):
+            self._parameters_form.setRowVisible(message, not box.has_value())
+        self._update_action_buttons()
+
+    def _parameters_complete(self) -> bool:
+        """Whether every number field holds a value a job can use."""
+        return self.denoise_strength.has_value() and self.quality.has_value()
 
     def _build_actions_group(self) -> QWidget:
         group = localize(QGroupBox(), title="actions.title")
@@ -1562,7 +1587,7 @@ class MainWindow(QMainWindow):
         self._refresh_layout_metrics()
         log.info(
             "settings.saved",
-            path=str(self._settings_file.path),
+            path=str(self._settings_files.config.path),
             previous=config_log_payload(previous),
             current=config_log_payload(current),
         )
@@ -2041,14 +2066,22 @@ class MainWindow(QMainWindow):
         return DEFAULT_SCALE
 
     def current_job_settings(self) -> JobSettings:
+        """The panel's parameters. A number field without a value contributes the
+        value saved last, which stays in force until the field holds a new one
+        (number-field-conventions); the queue buttons are off meanwhile."""
         profile = self.target_profile.currentData()
+        saved = self.config.parameters
         return JobSettings(
             scale=self._current_scale(),
-            denoise_strength=self.denoise_strength.value(),
+            denoise_strength=(
+                self.denoise_strength.value()
+                if self.denoise_strength.has_value()
+                else saved.denoise_strength
+            ),
             alpha_mode=self.alpha_mode.currentData(),
             device=self.device.currentData(),
             output_format=coerce_output_format(self.output_format.currentData()),
-            quality=self.quality.value(),
+            quality=self.quality.value() if self.quality.has_value() else saved.quality,
             tile=self.tile.currentData(),
             strip_metadata=self.strip_metadata.isChecked(),
             target_profile=profile,
@@ -2076,11 +2109,13 @@ class MainWindow(QMainWindow):
         # nobody touched. Reset flushes explicitly, so cancelling here costs it nothing.
         self._parameters_save_timer.stop()
         self._update_reset_button()
+        self._refresh_number_fields()
 
     def _parameters_edited(self) -> None:
         self._parameter_edit_generation += 1
         self._parameters_save_timer.start()
         self._update_reset_button()
+        self._refresh_number_fields()
 
     def _update_reset_button(self) -> None:
         """Reset is off while the panel already holds the built-in parameters."""
@@ -2116,7 +2151,7 @@ class MainWindow(QMainWindow):
             else:
                 log.info(
                     "parameters.saved",
-                    path=str(self._settings_file.path),
+                    path=str(self._settings_files.parameters.path),
                     values=job_settings_log_payload(parameters),
                 )
                 self.parameters_result.clear_result()
@@ -2162,11 +2197,11 @@ class MainWindow(QMainWindow):
                 return
             self.model_manager.begin_folder_change()
         self._unsaved_config_changes = changes
-        file = self._settings_file
+        files = self._settings_files
         operation = ConfigSave(
             candidate,
             self.config,
-            lambda candidate, previous: save_app_config(candidate, previous, file),
+            lambda candidate, previous: save_app_config(candidate, previous, files),
             self,
         )
         self._config_save = operation
@@ -2190,7 +2225,7 @@ class MainWindow(QMainWindow):
             exc = outcome.error
             log.warning(
                 "config.save_failed",
-                path=str(self._settings_file.path),
+                paths=[str(file.path) for file in self._settings_files],
                 reason=str(exc),
                 exc_info=(type(exc), exc, exc.__traceback__),
             )
@@ -2204,7 +2239,7 @@ class MainWindow(QMainWindow):
             # the landed result is the current settings, whether or not the editor
             # that submitted it is still open.
             previous = self.config
-            self._settings_file = outcome.result.file
+            self._settings_files = outcome.result.files
             self.config = outcome.result.config
             self._unsaved_config_changes.clear()
             if not self._quit_bounded:
@@ -2468,12 +2503,17 @@ class MainWindow(QMainWindow):
             or (self._active_job_plan is not None and not self._job_plan_abandoned)
             or any(job.status in {"pending", "running"} for job in self.jobs)
         )
-        self.queue_selected_button.setEnabled(has_selected_image and has_selected_models)
+        # A number field without a value holds every queue button; the message
+        # under that field is the visible reason (number-field-conventions).
+        ready = self._parameters_complete()
+        self.queue_selected_button.setEnabled(ready and has_selected_image and has_selected_models)
         self.queue_selected_all_models_button.setEnabled(
-            has_selected_image and bool(UPSCALE_MODELS)
+            ready and has_selected_image and bool(UPSCALE_MODELS)
         )
-        self.queue_all_selected_models_button.setEnabled(has_images and has_selected_models)
-        self.queue_all_all_models_button.setEnabled(has_images and bool(UPSCALE_MODELS))
+        self.queue_all_selected_models_button.setEnabled(
+            ready and has_images and has_selected_models
+        )
+        self.queue_all_all_models_button.setEnabled(ready and has_images and bool(UPSCALE_MODELS))
         self.retry_button.setEnabled(has_failed)
         self.cancel_button.setEnabled(has_cancellable)
         self._refresh_queue_failure_result()
@@ -2542,6 +2582,19 @@ def _scale_label(scale: int) -> str:
 
 def _form_label(key: str) -> QLabel:
     return localize(QLabel(), text=key)
+
+
+def _add_required_row(form: QFormLayout, box: QAbstractSpinBox) -> QLabel:
+    """Add the hidden row under ``box`` that says it needs a value and what it accepts."""
+    required = Message.of(
+        "parameters.required", low=round(box.minimum()), high=round(box.maximum())
+    )
+    message = localize(QLabel(), text=required, accessible_name=required)
+    message.setProperty("severity", "error")
+    message.setWordWrap(True)
+    form.addRow("", message)
+    form.setRowVisible(message, False)
+    return message
 
 
 def _already_open(paths: list[Path], metrics: QFontMetrics) -> Message:

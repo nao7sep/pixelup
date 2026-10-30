@@ -229,3 +229,44 @@ def test_spin_box_text_starts_where_a_field_text_starts(qapp) -> None:
 
     for box in (NoWheelSpinBox(), NoWheelDoubleSpinBox()):
         assert box.lineEdit().textMargins().left() == BORDER_WIDTH + FIELD_TEXT_PADDING
+
+
+@pytest.mark.parametrize("typed", ["", "+"])
+def test_a_number_field_keeps_unfinished_text_when_focus_leaves_or_return_is_pressed(
+    qapp, typed: str
+) -> None:
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QLineEdit, QWidget
+
+    from pixelup.widgets import NoWheelDoubleSpinBox, NoWheelSpinBox
+
+    for box in (NoWheelSpinBox(), NoWheelDoubleSpinBox()):
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        box.setRange(0, 100)
+        box.setValue(80)
+        other = QLineEdit()
+        layout.addWidget(box)
+        layout.addWidget(other)
+        host.show()
+        try:
+            box.setFocus()
+            box.lineEdit().selectAll()
+            QTest.keyClick(box, Qt.Key.Key_Backspace)
+            QTest.keyClicks(box, typed)
+            assert box.text() == typed
+            assert not box.has_value()
+
+            QTest.keyClick(box, Qt.Key.Key_Return)
+            assert box.text() == typed
+            other.setFocus()
+            qapp.processEvents()
+            assert box.text() == typed
+            # The last valid value is still the box's own; the owner asks first.
+            assert box.value() == 80
+            assert not box.has_value()
+
+            box.setValue(80)
+            assert box.has_value()
+        finally:
+            host.deleteLater()

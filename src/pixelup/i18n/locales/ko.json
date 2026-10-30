@@ -211,6 +211,7 @@
   "parameters.outputFormat": "출력 형식",
   "parameters.profileDefault": "기본값",
   "parameters.quality": "품질",
+  "parameters.required": "필수: {low}–{high}",
   "parameters.reset": "재설정",
   "parameters.saveFailed": "PixelUp이 이 매개변수를 저장할 수 없습니다. 변경 내용은 그대로 표시됩니다. 다시 시도하십시오.",
   "parameters.scale": "배율",

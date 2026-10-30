@@ -251,6 +251,14 @@ def test_debug_is_emitted_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "job.progress" in [entry["message"] for entry in _records(database)]
 
 
+def test_a_working_database_leaves_no_logs_folder(tmp_path: Path) -> None:
+    configure_session_logging()
+    log.info("image.added", input="a.png")
+
+    flush_records()
+    assert not (tmp_path / "logs").exists()
+
+
 def test_an_unwritable_database_falls_back_to_a_text_file(tmp_path: Path) -> None:
     (tmp_path / RECORDS_FILE_NAME).mkdir()
 

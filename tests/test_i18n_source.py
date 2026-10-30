@@ -58,8 +58,9 @@ ALLOWED_LITERALS = frozenset({"", "PixelUp"})
 
 _KEY = re.compile(r"[a-z][a-zA-Z]*(\.[a-zA-Z0-9]+)+")
 # Strings shaped like a key that name something else: the records database's
-# file name shares the Records window's namespace.
-NOT_KEYS = frozenset({"records.sqlite3"})
+# file name shares the Records window's namespace, and the parameters file's the
+# Parameters panel's.
+NOT_KEYS = frozenset({"records.sqlite3", "parameters.json"})
 
 
 def _english_keys() -> set[str]:

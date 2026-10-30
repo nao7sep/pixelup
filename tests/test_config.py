@@ -88,9 +88,10 @@ def test_pixelup_home_relocates_root(
     root = tmp_path / "relocated"
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
     assert resolve_state_dir() == root.resolve()
-    # The root and its standard subdirectories are created on first use.
-    assert (root / "logs").is_dir()
+    # The root and its models folder are created on first use; logs/ waits for its
+    # first fallback entry.
     assert (root / "models").is_dir()
+    assert not (root / "logs").exists()
     assert not (root / "temp").exists()
 
 

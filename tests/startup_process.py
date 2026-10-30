@@ -58,7 +58,7 @@ class ProbeWindow:
         emit("writer_entered")
         self.runtime_dirs = runtime_dirs or resolve_runtime_dirs()
         loaded = load_app_config_result()
-        save_app_config(replace(loaded.config, font_family="Menlo"), loaded.config, loaded.file)
+        save_app_config(replace(loaded.config, font_family="Menlo"), loaded.config, loaded.files)
         state = gui.window_state()
         state.save("admission-probe", os.getpid())
         if mode == "startup_failure":

@@ -248,15 +248,16 @@ def test_the_language_setting_round_trips_and_an_unknown_value_means_system(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.json"
-    save_app_config(AppConfig(language="zh-Hans"), AppConfig(), load_app_config_result(path).file)
+    loaded = load_app_config_result(tmp_path)
+    save_app_config(AppConfig(language="zh-Hans"), AppConfig(), loaded.files)
     assert json.loads(path.read_text(encoding="utf-8"))["language"] == "zh-Hans"
-    assert load_app_config(path).language == "zh-Hans"
+    assert load_app_config(tmp_path).language == "zh-Hans"
     # Unknown to this build is not corruption: the rest of the settings survive.
     path.write_text(
         json.dumps({"format_version": 1, "language": "tlh", "font_family": "Menlo"}),
         encoding="utf-8",
     )
-    loaded = load_app_config(path)
+    loaded = load_app_config(tmp_path)
     assert (loaded.language, loaded.font_family) == ("system", "Menlo")
 
 

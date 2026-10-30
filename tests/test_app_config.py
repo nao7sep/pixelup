@@ -23,7 +23,7 @@ from pixelup.paths import OutputFormat
 
 def _save(candidate: AppConfig, previous: AppConfig, path: Path) -> ConfigSaveResult:
     """One save as a launch makes it: from the file state read at load."""
-    return save_app_config(candidate, previous, load_app_config_result(path).file)
+    return save_app_config(candidate, previous, load_app_config_result(path.parent).files)
 
 
 def test_app_config_round_trips_json(tmp_path: Path) -> None:
@@ -32,7 +32,7 @@ def test_app_config_round_trips_json(tmp_path: Path) -> None:
 
     _save(config, AppConfig(), path)
 
-    assert load_app_config(path) == config
+    assert load_app_config(path.parent) == config
 
 
 def test_app_config_round_trips_the_parameters_panel(tmp_path: Path) -> None:
@@ -55,7 +55,7 @@ def test_app_config_round_trips_the_parameters_panel(tmp_path: Path) -> None:
     config = AppConfig(parameters=parameters)
 
     _save(config, AppConfig(), path)
-    loaded = load_app_config(path)
+    loaded = load_app_config(path.parent)
 
     assert loaded.parameters == parameters
     assert loaded.parameters.scale == 2
@@ -69,19 +69,19 @@ def test_app_config_round_trips_a_non_default_tile(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     _save(AppConfig(parameters=JobSettings(tile=2048)), AppConfig(), path)
 
-    assert load_app_config(path).parameters.tile == 2048
+    assert load_app_config(path.parent).parameters.tile == 2048
 
 
 def test_fresh_config_carries_the_built_in_parameters(tmp_path: Path) -> None:
     # One source of the built-ins: a config with no parameters of its own is
     # JobSettings(), not a separately-written set of defaults.
     assert AppConfig().parameters == JobSettings()
-    assert load_app_config(tmp_path / "missing.json").parameters == JobSettings()
+    assert load_app_config(tmp_path).parameters == JobSettings()
 
 
 def test_missing_app_config_uses_defaults(tmp_path: Path) -> None:
     path = tmp_path / "missing.json"
-    assert load_app_config(path) == AppConfig()
+    assert load_app_config(path.parent) == AppConfig()
     assert not path.exists()
 
 
@@ -92,30 +92,162 @@ def test_unchanged_defaults_write_no_file(tmp_path: Path) -> None:
 
 
 def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
+    path = tmp_path / "parameters.json"
     candidate = AppConfig(parameters=JobSettings(quality=55))
     _save(candidate, AppConfig(), path)
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert set(stored) == {"format_version", "parameters"}
     assert stored["format_version"] == 1
     assert set(stored["parameters"]) == {item.name for item in fields(JobSettings)}
-    assert load_app_config(path) == candidate
+    assert not (tmp_path / "config.json").exists()
+    assert load_app_config(path.parent) == candidate
+
+
+def test_preferences_and_parameters_are_stored_in_their_own_files(tmp_path: Path) -> None:
+    candidate = AppConfig(language="ja", parameters=JobSettings(quality=55))
+    _save(candidate, AppConfig(), tmp_path / "config.json")
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "language": "ja",
+    }
+    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "parameters": _parameter_map(quality=55),
+    }
+    assert load_app_config(tmp_path) == candidate
+
+
+def test_each_save_writes_only_the_file_whose_sets_changed(tmp_path: Path) -> None:
+    # A Settings save leaves parameters.json alone and a Parameters save or reset
+    # leaves config.json alone, so each file's history follows its own editor.
+    opened = AppConfig(language="ja", parameters=JobSettings(quality=55))
+    first = _save(opened, AppConfig(), tmp_path / "config.json")
+    old = 1_000_000_000
+    for name in ("config.json", "parameters.json"):
+        os.utime(tmp_path / name, (old, old))
+
+    reset = replace(opened, parameters=JobSettings())
+    second = save_app_config(reset, opened, first.files)
+    assert (tmp_path / "config.json").stat().st_mtime == old
+    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
+        "format_version": 1
+    }
+
+    os.utime(tmp_path / "parameters.json", (old, old))
+    save_app_config(replace(reset, font_family="Menlo"), reset, second.files)
+    assert (tmp_path / "parameters.json").stat().st_mtime == old
+
+
+def test_parameters_stored_in_config_move_to_their_own_file_once(tmp_path: Path) -> None:
+    # An earlier PixelUp kept the panel in config.json: the first launch moves it,
+    # as stored, and config.json keeps everything else.
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps({
+            "format_version": 1,
+            "language": "ja",
+            "future": "kept",
+            "parameters": _parameter_map(quality=42),
+        }),
+        encoding="utf-8",
+    )
+
+    assert load_app_config(tmp_path) == AppConfig(
+        language="ja", parameters=JobSettings(quality=42)
+    )
+    assert json.loads(config.read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "language": "ja",
+        "future": "kept",
+    }
+    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "parameters": _parameter_map(quality=42),
+    }
+    moved_at = (tmp_path / "parameters.json").stat().st_mtime_ns
+    assert load_app_config(tmp_path).parameters == JobSettings(quality=42)
+    assert (tmp_path / "parameters.json").stat().st_mtime_ns == moved_at
+
+
+def test_a_moved_parameter_set_that_fails_its_check_is_kept_in_its_new_file(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.json"
+    config.write_text(
+        '{"format_version": 1, "parameters": {"quality": 250, "scale": 4.0}}', encoding="utf-8"
+    )
+
+    result = load_app_config_result(tmp_path)
+
+    assert result.rejected == ("parameters",)
+    assert result.config == AppConfig()
+    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "parameters": {"quality": 250, "scale": 4.0},
+    }
+    assert json.loads(config.read_text(encoding="utf-8")) == {"format_version": 1}
+
+
+def test_an_interrupted_move_keeps_the_parameters_file_that_was_written(tmp_path: Path) -> None:
+    # The move writes parameters.json first; if config.json still holds the old
+    # key afterwards, parameters.json is the copy kept and the old key is removed.
+    (tmp_path / "parameters.json").write_text(
+        json.dumps({"format_version": 1, "parameters": _parameter_map(quality=60)}),
+        encoding="utf-8",
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps({"format_version": 1, "parameters": _parameter_map(quality=42)}),
+        encoding="utf-8",
+    )
+
+    assert load_app_config(tmp_path).parameters == JobSettings(quality=60)
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8")) == {
+        "format_version": 1
+    }
+
+
+def test_the_move_records_both_files_in_the_backup_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        "pixelup.backup_store.record", lambda path, _data: recorded.append(path.name)
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps({"format_version": 1, "parameters": _parameter_map(quality=42)}),
+        encoding="utf-8",
+    )
+
+    load_app_config_result(tmp_path)
+
+    assert recorded == ["parameters.json", "config.json"]
+
+
+def test_a_config_this_build_cannot_read_keeps_its_parameters(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    text = json.dumps({"format_version": 2, "parameters": _parameter_map(quality=42)})
+    config.write_text(text, encoding="utf-8")
+
+    load_app_config_result(tmp_path)
+
+    assert config.read_text(encoding="utf-8") == text
+    assert not (tmp_path / "parameters.json").exists()
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS replacement modes")
 def test_a_changed_save_keeps_the_file_mode_with_a_fresh_modified_time(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "config.json"
+    path = tmp_path / "parameters.json"
     _save(AppConfig(parameters=JobSettings(quality=55)), AppConfig(), path)
     os.chmod(path, 0o640)
     old = 1_000_000_000
     os.utime(path, (old, old))
 
-    previous = load_app_config(path)
+    previous = load_app_config(path.parent)
     _save(replace(previous, parameters=JobSettings(quality=60)), previous, path)
 
-    assert load_app_config(path).parameters.quality == 60
+    assert load_app_config(path.parent).parameters.quality == 60
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
     assert os.stat(path).st_mtime > old
     assert list(tmp_path.glob("*.tmp")) == []
@@ -124,7 +256,7 @@ def test_a_changed_save_keeps_the_file_mode_with_a_fresh_modified_time(
 def test_one_stored_set_uses_built_ins_for_every_other_set(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text('{"format_version": 1, "font_family": "Menlo"}', encoding="utf-8")
-    assert load_app_config(path) == AppConfig(font_family="Menlo")
+    assert load_app_config(path.parent) == AppConfig(font_family="Menlo")
 
 
 def test_next_edit_keeps_unknown_keys_and_writes_the_format_version(tmp_path: Path) -> None:
@@ -135,7 +267,7 @@ def test_next_edit_keeps_unknown_keys_and_writes_the_format_version(tmp_path: Pa
         '{"format_version": 1, "version": 99, "future": {"a": [1, 2]}, "language": "ja"}',
         encoding="utf-8",
     )
-    previous = load_app_config(path)
+    previous = load_app_config(path.parent)
     _save(replace(previous, font_family="Menlo"), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
@@ -148,17 +280,15 @@ def test_next_edit_keeps_unknown_keys_and_writes_the_format_version(tmp_path: Pa
 
 def test_saving_a_set_equal_to_its_built_in_deletes_only_that_set(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    previous = AppConfig(language="ja", parameters=JobSettings(quality=55))
+    previous = AppConfig(language="ja", font_family="Menlo")
     _save(previous, AppConfig(), path)
-    reset = _save(
-        replace(previous, parameters=JobSettings()), previous, path
-    ).config
+    reset = _save(replace(previous, font_family=AppConfig().font_family), previous, path).config
     assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
     assert reset == AppConfig(language="ja")
 
 
 def test_the_last_set_back_at_its_built_in_leaves_an_empty_map(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
+    path = tmp_path / "parameters.json"
     previous = AppConfig(parameters=JobSettings(quality=55))
     _save(previous, AppConfig(), path)
     _save(AppConfig(), previous, path)
@@ -166,13 +296,14 @@ def test_the_last_set_back_at_its_built_in_leaves_an_empty_map(tmp_path: Path) -
 
 
 def test_any_save_drops_a_stored_copy_equal_to_its_built_in(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
+    path = tmp_path / "parameters.json"
     path.write_text(
         json.dumps({"format_version": 1, "parameters": _parameter_map()}), encoding="utf-8"
     )
-    previous = load_app_config(path)
-    _save(replace(previous, language="ja"), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
+    previous = load_app_config(path.parent)
+    _save(replace(previous, parameters=JobSettings(quality=60)), previous, path)
+    _save(replace(previous, parameters=JobSettings()), previous, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1}
 
 
 def test_an_unrelated_save_keeps_a_set_that_failed_its_check(tmp_path: Path) -> None:
@@ -180,52 +311,53 @@ def test_an_unrelated_save_keeps_a_set_that_failed_its_check(tmp_path: Path) -> 
     # stays in the file, unchanged, until the user saves that same set (developer
     # decision).
     path = tmp_path / "config.json"
-    rejected = _parameter_map(quality=250, scale=4)
     path.write_text(
-        json.dumps({"format_version": 1, "parameters": rejected, "future": "kept"}),
+        json.dumps({"format_version": 1, "language": "JA", "future": "kept"}),
         encoding="utf-8",
     )
-    loaded = load_app_config_result(path)
-    assert loaded.rejected == ("parameters",)
-    assert loaded.config.parameters == JobSettings()
+    loaded = load_app_config_result(path.parent)
+    assert loaded.rejected == ("language",)
+    assert loaded.config.language == "system"
 
-    first = save_app_config(replace(loaded.config, language="ja"), loaded.config, loaded.file)
+    first = save_app_config(
+        replace(loaded.config, display_zone="Asia/Tokyo"), loaded.config, loaded.files
+    )
     second = save_app_config(
-        replace(first.config, font_family="Menlo"), first.config, first.file
+        replace(first.config, font_family="Menlo"), first.config, first.files
     )
 
-    assert second.config.parameters == JobSettings()
+    assert second.config.language == "system"
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
-        "parameters": rejected,
+        "language": "JA",
         "future": "kept",
-        "language": "ja",
+        "display_zone": "Asia/Tokyo",
         "font_family": "Menlo",
     }
 
 
 def test_saving_a_set_that_failed_its_check_replaces_it(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
+    path = tmp_path / "parameters.json"
     path.write_text(
         json.dumps({"format_version": 1, "parameters": _parameter_map(quality=250)}),
         encoding="utf-8",
     )
-    loaded = load_app_config_result(path)
+    loaded = load_app_config_result(path.parent)
     edited = replace(loaded.config, parameters=JobSettings(quality=60))
 
-    result = save_app_config(edited, loaded.config, loaded.file)
+    result = save_app_config(edited, loaded.config, loaded.files)
 
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
         "parameters": _parameter_map(quality=60),
     }
-    assert result.file.unapplied == frozenset()
+    assert result.files.parameters.unapplied == frozenset()
     # The next unrelated save no longer has anything to carry for that set.
-    later = save_app_config(replace(edited, language="ja"), edited, result.file)
+    later = save_app_config(replace(edited, language="ja"), edited, result.files)
     assert json.loads(path.read_text(encoding="utf-8"))["parameters"] == _parameter_map(
         quality=60
     )
-    assert later.file.unapplied == frozenset()
+    assert later.files.parameters.unapplied == frozenset()
 
 
 def test_a_set_that_failed_its_check_is_kept_byte_for_byte_across_a_save(tmp_path: Path) -> None:
@@ -233,15 +365,15 @@ def test_a_set_that_failed_its_check_is_kept_byte_for_byte_across_a_save(tmp_pat
     # unknown members all survive, so nothing about the user's copy is reinterpreted.
     path = tmp_path / "config.json"
     path.write_text(
-        '{"format_version": 1, "parameters": {"quality": 250, "scale": 4.0, "z": null}}',
+        '{"format_version": 1, "display_zone": {"offset": 9.0, "z": null, "zone": "Asia/Tokyo"}}',
         encoding="utf-8",
     )
-    loaded = load_app_config_result(path)
+    loaded = load_app_config_result(path.parent)
 
-    save_app_config(replace(loaded.config, language="ja"), loaded.config, loaded.file)
+    save_app_config(replace(loaded.config, language="ja"), loaded.config, loaded.files)
 
     stored = json.loads(path.read_text(encoding="utf-8"))
-    assert json.dumps(stored["parameters"]) == '{"quality": 250, "scale": 4.0, "z": null}'
+    assert json.dumps(stored["display_zone"]) == '{"offset": 9.0, "z": null, "zone": "Asia/Tokyo"}'
 
 
 def test_a_save_replaces_hand_edits_made_after_load(tmp_path: Path) -> None:
@@ -250,10 +382,10 @@ def test_a_save_replaces_hand_edits_made_after_load(tmp_path: Path) -> None:
     # that broke it, is replaced by the user's current settings.
     path = tmp_path / "config.json"
     path.write_text('{"format_version": 1, "language": "ja"}', encoding="utf-8")
-    loaded = load_app_config_result(path)
+    loaded = load_app_config_result(path.parent)
     path.write_text("{ broken by hand", encoding="utf-8")
 
-    save_app_config(replace(loaded.config, font_family="Menlo"), loaded.config, loaded.file)
+    save_app_config(replace(loaded.config, font_family="Menlo"), loaded.config, loaded.files)
 
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
@@ -269,7 +401,7 @@ def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
 
     _save(config, AppConfig(), path)
 
-    assert load_app_config(path).font_family == "Courier New, monospace"
+    assert load_app_config(path.parent).font_family == "Courier New, monospace"
 
 
 def test_load_app_config_cleans_font_family_as_a_single_line(tmp_path: Path) -> None:
@@ -278,14 +410,14 @@ def test_load_app_config_cleans_font_family_as_a_single_line(tmp_path: Path) -> 
         json.dumps({"format_version": 1, "font_family": "  Arial,\n Menlo  "}), encoding="utf-8"
     )
 
-    assert load_app_config(path).font_family == "Arial, Menlo"
+    assert load_app_config(path.parent).font_family == "Arial, Menlo"
 
 
 def test_whitespace_font_family_reads_as_the_built_in(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"format_version": 1, "font_family": "   "}), encoding="utf-8")
 
-    assert load_app_config(path) == AppConfig()
+    assert load_app_config(path.parent) == AppConfig()
 
 
 def test_load_app_config_preserves_the_legacy_font_stack(tmp_path: Path) -> None:
@@ -295,17 +427,17 @@ def test_load_app_config_preserves_the_legacy_font_stack(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    assert load_app_config(path).font_family == "Helvetica Neue, Segoe UI, Roboto, Arial"
+    assert load_app_config(path.parent).font_family == "Helvetica Neue, Segoe UI, Roboto, Arial"
 
 
 def test_load_app_config_ignores_unusable_font_family(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"format_version": 1, "font_family": 42}), encoding="utf-8")
 
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
 
     assert result.config == AppConfig()
-    assert result.quarantined_to is None
+    assert result.quarantined == ()
     assert path.exists()
 
 
@@ -316,21 +448,21 @@ def test_corrupt_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) ->
     path = tmp_path / "config.json"
     path.write_text("{ this is not valid json", encoding="utf-8")
 
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
 
     # The built-ins were loaded, so the app can proceed.
     assert result.config == AppConfig()
     # The corrupt original was quarantined, not discarded: a <stem>-<ms-utc>.invalid
     # sibling now holds the exact original bytes, and config.json itself no longer does.
-    assert result.quarantined_to is not None
-    assert result.quarantined_to.parent == tmp_path
-    assert result.quarantined_to.name.startswith("config-")
-    assert result.quarantined_to.suffix == ".invalid"
-    assert result.quarantined_to.read_text(encoding="utf-8") == "{ this is not valid json"
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0].parent == tmp_path
+    assert result.quarantined[0].name.startswith("config-")
+    assert result.quarantined[0].suffix == ".invalid"
+    assert result.quarantined[0].read_text(encoding="utf-8") == "{ this is not valid json"
     # Recovery continues as a fresh install, without materializing defaults.
     assert not path.exists()
-    assert load_app_config_result(path).quarantined_to is None
-    assert load_app_config(path) == AppConfig()
+    assert load_app_config_result(path.parent).quarantined == ()
+    assert load_app_config(path.parent) == AppConfig()
 
 
 def test_non_object_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) -> None:
@@ -339,13 +471,13 @@ def test_non_object_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path)
     path = tmp_path / "config.json"
     path.write_text("[]\n", encoding="utf-8")
 
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
 
     assert result.config == AppConfig()
-    assert result.quarantined_to is not None
-    assert result.quarantined_to.suffix == ".invalid"
-    assert result.quarantined_to.read_text(encoding="utf-8") == "[]\n"
-    assert load_app_config(path) == AppConfig()
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0].suffix == ".invalid"
+    assert result.quarantined[0].read_text(encoding="utf-8") == "[]\n"
+    assert load_app_config(path.parent) == AppConfig()
 
 
 def test_a_failed_quarantine_propagates_and_leaves_the_file(
@@ -360,7 +492,7 @@ def test_a_failed_quarantine_propagates_and_leaves_the_file(
     monkeypatch.setattr("pixelup.app_config.quarantine_corrupt_file", _fail)
 
     with pytest.raises(OSError, match="rename failed"):
-        load_app_config_result(path)
+        load_app_config_result(path.parent)
     assert path.read_text(encoding="utf-8") == "{ this is not valid json"
 
 
@@ -369,10 +501,10 @@ def test_a_config_without_a_format_version_is_quarantined(tmp_path: Path) -> Non
     path = tmp_path / "config.json"
     text = '{"language": "ja"}'
     path.write_text(text, encoding="utf-8")
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
     assert result.config == AppConfig()
-    assert result.quarantined_to is not None
-    assert result.quarantined_to.read_text(encoding="utf-8") == text
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0].read_text(encoding="utf-8") == text
     assert not path.exists()
 
 
@@ -381,10 +513,10 @@ def test_a_format_version_that_is_not_a_version_is_quarantined(tmp_path: Path, m
     path = tmp_path / "config.json"
     text = f'{{"format_version": {marker}, "language": "ja"}}'
     path.write_text(text, encoding="utf-8")
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
     assert result.config == AppConfig()
-    assert result.quarantined_to is not None
-    assert result.quarantined_to.read_text(encoding="utf-8") == text
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0].read_text(encoding="utf-8") == text
 
 
 def test_a_newer_config_is_left_in_place_and_reads_as_built_ins(tmp_path: Path) -> None:
@@ -392,11 +524,11 @@ def test_a_newer_config_is_left_in_place_and_reads_as_built_ins(tmp_path: Path) 
     text = '{"format_version": 2, "language": "ja"}'
     path.write_text(text, encoding="utf-8")
 
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
 
     assert result.config == AppConfig()
-    assert result.file.newer_format == 2
-    assert result.quarantined_to is None
+    assert result.files.config.newer_format == 2
+    assert result.quarantined == ()
     assert path.read_text(encoding="utf-8") == text
     assert {item.name for item in tmp_path.iterdir()} == {"config.json"}
 
@@ -405,7 +537,7 @@ def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path
     path = tmp_path / "config.json"
     text = '{"format_version": 2, "future": {"anything": true}}'
     path.write_text(text, encoding="utf-8")
-    previous = load_app_config(path)
+    previous = load_app_config(path.parent)
 
     with pytest.raises(PixelupError) as raised:
         _save(replace(previous, language="ja"), previous, path)
@@ -417,10 +549,10 @@ def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path
 
 def test_missing_config_is_not_treated_as_corrupt(tmp_path: Path) -> None:
     # The normal first run: no file, defaults, and nothing quarantined.
-    result = load_app_config_result(tmp_path / "missing.json")
+    result = load_app_config_result(tmp_path)
 
     assert result.config == AppConfig()
-    assert result.quarantined_to is None
+    assert result.quarantined == ()
 
 
 def test_corrupt_config_lets_window_open(
@@ -453,14 +585,14 @@ def test_corrupt_config_lets_window_open(
     try:
         # The window opened on defaults instead of crashing on the corrupt file.
         assert window.config == AppConfig()
-        assert window._config_quarantined_to is not None
+        (quarantined_to,) = window._config_quarantined
         # The corrupt original was quarantined next to where config.json was.
-        assert window._config_quarantined_to.suffix == ".invalid"
-        assert window._config_quarantined_to.read_text(encoding="utf-8") == "{ broken"
+        assert quarantined_to.suffix == ".invalid"
+        assert quarantined_to.read_text(encoding="utf-8") == "{ broken"
         assert not (home / "config.json").exists()
         # The deferred non-fatal notice fires once the event loop turns.
         QApplication.processEvents()
-        assert notices == [window._config_quarantined_to]
+        assert notices == [quarantined_to]
     finally:
         window._is_session_shutdown = lambda: True
         window.close()
@@ -485,6 +617,7 @@ def _parameter_map(**updates: object) -> dict[str, object]:
 
 
 def _write(path: Path, **parameters: object) -> None:
+    path = path.with_name("parameters.json")
     path.write_text(
         json.dumps({"format_version": 1, "parameters": _parameter_map(**parameters)}),
         encoding="utf-8",
@@ -504,7 +637,7 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
     home.mkdir()
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     text = '{"format_version": 2, "language": "ja"}'
-    (home / "config.json").write_text(text, encoding="utf-8")
+    (home / "parameters.json").write_text(text, encoding="utf-8")
 
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     notices: list[str] = []
@@ -517,9 +650,9 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
     window = MainWindow()
     try:
         assert window.config == AppConfig()
-        assert window._config_quarantined_to is None
+        assert window._config_quarantined == ()
         QApplication.processEvents()
-        assert notices == [home / "config.json"]
+        assert notices == [home / "parameters.json"]
 
         window.quality.setValue(window.quality.value() - 1)
         saved = []
@@ -527,7 +660,8 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
         process_until(lambda: window._config_save is None, what="settings save")
         assert saved == [False]
         assert window.parameters_result.message == Message("error.configNewer")
-        assert (home / "config.json").read_text(encoding="utf-8") == text
+        assert (home / "parameters.json").read_text(encoding="utf-8") == text
+        assert not (home / "config.json").exists()
     finally:
         window._is_session_shutdown = lambda: True
         window.close()
@@ -539,12 +673,12 @@ def test_invalid_utf8_config_is_quarantined_and_reads_as_built_ins(tmp_path: Pat
     original = b'{"font_family": "\xff"}'
     path.write_bytes(original)
 
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
 
     assert result.config == AppConfig()
-    assert result.quarantined_to is not None
-    assert result.quarantined_to.read_bytes() == original
-    assert load_app_config(path) == AppConfig()
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0].read_bytes() == original
+    assert load_app_config(path.parent) == AppConfig()
 
 
 def test_config_read_oserror_propagates_without_touching_the_store(
@@ -560,7 +694,7 @@ def test_config_read_oserror_propagates_without_touching_the_store(
     monkeypatch.setattr(Path, "read_text", fail_read)
 
     with pytest.raises(OSError, match="read failed"):
-        load_app_config_result(path)
+        load_app_config_result(path.parent)
 
     assert path.read_bytes() == original
     assert not list(tmp_path.glob("*.invalid"))
@@ -594,14 +728,16 @@ def test_config_read_oserror_propagates_without_touching_the_store(
 def test_present_malformed_set_falls_back_without_costing_other_sets(
     tmp_path: Path, data: dict[str, object], caplog: pytest.LogCaptureFixture
 ) -> None:
-    path = tmp_path / "config.json"
-    path.write_text(
-        json.dumps({"format_version": 1, "font_family": "Menlo", **data}), encoding="utf-8"
+    (tmp_path / "config.json").write_text(
+        json.dumps({"format_version": 1, "font_family": "Menlo"}), encoding="utf-8"
     )
+    path = tmp_path / ("parameters.json" if "parameters" in data else "config.json")
+    stored = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    path.write_text(json.dumps({"format_version": 1, **stored, **data}), encoding="utf-8")
     original = path.read_bytes()
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
     assert result.config == AppConfig(font_family="Menlo")
-    assert result.quarantined_to is None
+    assert result.quarantined == ()
     assert result.rejected == (next(iter(data)),)
     assert path.read_bytes() == original
     warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
@@ -610,7 +746,7 @@ def test_present_malformed_set_falls_back_without_costing_other_sets(
 
 
 def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
+    path = tmp_path / "parameters.json"
     path.write_text(
         json.dumps(
             {
@@ -622,9 +758,9 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
         encoding="utf-8",
     )
 
-    result = load_app_config_result(path)
+    result = load_app_config_result(path.parent)
 
-    assert result.quarantined_to is None
+    assert result.quarantined == ()
     assert result.config.parameters.scale == 2
     assert result.config.parameters.quality == JobSettings().quality
 
@@ -643,7 +779,7 @@ def test_valid_parameter_boundaries_and_choices_are_preserved(tmp_path: Path) ->
         target_profile="adobergb",
     )
 
-    parameters = load_app_config(path).parameters
+    parameters = load_app_config(path.parent).parameters
 
     assert parameters.quality == 0
     assert parameters.denoise_strength == 1.0
@@ -659,7 +795,7 @@ def test_null_target_profile_is_a_valid_choice(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     _write(path, target_profile=None)
 
-    assert load_app_config(path).parameters.target_profile is None
+    assert load_app_config(path.parent).parameters.target_profile is None
 
 
 def test_a_save_that_changes_nothing_writes_nothing(tmp_path: Path) -> None:
@@ -668,7 +804,7 @@ def test_a_save_that_changes_nothing_writes_nothing(tmp_path: Path) -> None:
     first = _save(opened, AppConfig(), path)
     written_at = path.stat().st_mtime_ns
 
-    saved = save_app_config(opened, opened, first.file).config
+    saved = save_app_config(opened, opened, first.files).config
 
     assert saved == opened
     assert path.stat().st_mtime_ns == written_at
@@ -692,13 +828,14 @@ def test_partial_parameters_read_as_the_built_in_with_a_warning(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    path = tmp_path / "config.json"
-    path.write_text(
-        '{"format_version": 1, "language": "ja", "parameters": {"scale": 2}}', encoding="utf-8"
+    (tmp_path / "config.json").write_text(
+        '{"format_version": 1, "language": "ja"}', encoding="utf-8"
     )
-    result = load_app_config_result(path)
+    path = tmp_path / "parameters.json"
+    path.write_text('{"format_version": 1, "parameters": {"scale": 2}}', encoding="utf-8")
+    result = load_app_config_result(path.parent)
     assert result.config == AppConfig(language="ja")
-    assert result.quarantined_to is None
+    assert result.quarantined == ()
     assert result.rejected == ("parameters",)
     warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
     assert len(warnings) == 1
@@ -707,16 +844,29 @@ def test_partial_parameters_read_as_the_built_in_with_a_warning(
 
 def test_edit_writes_the_untouched_user_set_whole_from_memory(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"format_version": 1, "font_family": "  Arial,\n Menlo  "}), encoding="utf-8"
+    )
+    previous = load_app_config(path.parent)
+    _save(replace(previous, language="ja"), previous, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "format_version": 1,
+        "font_family": "Arial, Menlo",
+        "language": "ja",
+    }
+
+
+def test_a_parameters_save_writes_the_set_whole_from_memory(tmp_path: Path) -> None:
+    path = tmp_path / "parameters.json"
     stored_parameters = _parameter_map(quality=42, future_parameter="dropped")
     path.write_text(
         json.dumps({"format_version": 1, "parameters": stored_parameters}), encoding="utf-8"
     )
-    previous = load_app_config(path)
-    _save(replace(previous, language="ja"), previous, path)
+    previous = load_app_config(path.parent)
+    _save(replace(previous, parameters=JobSettings(quality=43)), previous, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "format_version": 1,
-        "parameters": _parameter_map(quality=42),
-        "language": "ja",
+        "parameters": _parameter_map(quality=43),
     }
 
 
@@ -726,16 +876,16 @@ def test_models_folder_is_saved_reset_and_preserved_when_rejected(tmp_path):
     from pixelup.app_config import AppConfig, load_app_config_result, save_app_config
 
     path = tmp_path / "config.json"
-    initial = load_app_config_result(path)
+    initial = load_app_config_result(path.parent)
     chosen = replace(initial.config, models_folder=str(tmp_path / "external models"))
-    saved = save_app_config(chosen, initial.config, initial.file)
-    assert load_app_config_result(path).config.models_folder == chosen.models_folder
-    save_app_config(AppConfig(), chosen, saved.file)
+    saved = save_app_config(chosen, initial.config, initial.files)
+    assert load_app_config_result(path.parent).config.models_folder == chosen.models_folder
+    save_app_config(AppConfig(), chosen, saved.files)
     assert "models_folder" not in json.loads(path.read_text())
     path.write_text(json.dumps({"format_version": 1, "models_folder": 123}))
-    rejected = load_app_config_result(path)
+    rejected = load_app_config_result(path.parent)
     assert rejected.rejected == ("models_folder",)
-    save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.file)
+    save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.files)
     assert json.loads(path.read_text())["models_folder"] == 123
 
 
@@ -743,28 +893,29 @@ def test_display_zone_is_saved_and_preserved_when_this_computer_lacks_it(tmp_pat
     from dataclasses import replace
 
     path = tmp_path / "config.json"
-    initial = load_app_config_result(path)
+    initial = load_app_config_result(path.parent)
     assert initial.config.display_zone == "system"
     chosen = replace(initial.config, display_zone="Asia/Tokyo")
-    save_app_config(chosen, initial.config, initial.file)
+    save_app_config(chosen, initial.config, initial.files)
     assert json.loads(path.read_text())["display_zone"] == "Asia/Tokyo"
-    assert load_app_config_result(path).config.display_zone == "Asia/Tokyo"
+    assert load_app_config_result(path.parent).config.display_zone == "Asia/Tokyo"
 
     path.write_text(json.dumps({"format_version": 1, "display_zone": "Mars/Olympus_Mons"}))
-    rejected = load_app_config_result(path)
+    rejected = load_app_config_result(path.parent)
     assert rejected.rejected == ("display_zone",)
     assert rejected.config.display_zone == "system"
-    save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.file)
+    save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.files)
     assert json.loads(path.read_text())["display_zone"] == "Mars/Olympus_Mons"
 
 
 def test_successful_save_returns_the_saved_state(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    initial = load_app_config_result(path)
+    initial = load_app_config_result(path.parent)
     candidate = replace(initial.config, language="ja")
 
-    saved = save_app_config(candidate, initial.config, initial.file)
+    saved = save_app_config(candidate, initial.config, initial.files)
 
     assert saved.config == candidate
-    assert saved.file.exists
-    assert load_app_config(path) == candidate
+    assert saved.files.config.exists
+    assert not saved.files.parameters.exists
+    assert load_app_config(path.parent) == candidate

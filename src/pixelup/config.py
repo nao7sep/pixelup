@@ -135,7 +135,11 @@ def _expand_override(raw: str, variable: str, env: Mapping[str, str]) -> Path:
 
 
 def _ensure_state_root(root: Path) -> Path:
-    """Create the storage root and its standard subdirectories on first use.
+    """Create the storage root and its models folder on first use.
+
+    ``logs/`` is not made here: it holds only the fallback lines written when the
+    records store cannot take an entry, and that writer creates it with the first
+    one, so an ordinary launch leaves no empty folder behind.
 
     Raises a clear startup error and stops if the root cannot be created or is
     not a usable directory, rather than relocating data somewhere the user did
@@ -150,8 +154,7 @@ def _ensure_state_root(root: Path) -> Path:
         # `_tighten_root_permissions` below only ever touches the root itself.
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         _tighten_root_permissions(root)
-        for path in (root / "logs", root / "models"):
-            path.mkdir(parents=True, exist_ok=True)
+        (root / "models").mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise PixelupError(
             ErrorCode.OUTPUT_UNWRITABLE,
@@ -200,7 +203,7 @@ def quarantine_corrupt_file(path: Path) -> Path:
     The one place PixelUp quarantines an unreadable managed file. The storage-path
     conventions forbid silently discarding a corrupt managed file: the load path may
     only halt or *quarantine-then-reset*, and either way the original bytes are
-    preserved. This is that quarantine step, used by the ``config.json`` load path,
+    preserved. This is that quarantine step, used by the settings files' load path,
     which then runs on the built-ins in memory and writes no replacement file.
 
     The quarantine name follows the derived-filename grammar
@@ -231,7 +234,7 @@ def quarantine_corrupt_file(path: Path) -> Path:
 def write_managed_text(path: Path, text: str) -> None:
     """The single managed-text atomic-write choke point for PixelUp.
 
-    Every durable text file the app owns, including ``config.json``, is written
+    Every durable text file the app owns, including the settings files, is written
     through here. A managed-text write that bypasses this helper is a silent backup
     gap; there is deliberately no second atomic-write path for managed text in the app.
 

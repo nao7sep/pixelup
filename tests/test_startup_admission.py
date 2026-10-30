@@ -112,7 +112,8 @@ def store_snapshot(root: Path) -> dict:
                 table: connection.execute(f'SELECT * FROM "{table}"').fetchall()
                 for (table,) in tables
             }
-    result["logs"] = tuple(path.name for path in (root / "logs").iterdir())
+    logs = root / "logs"
+    result["logs"] = tuple(path.name for path in logs.iterdir()) if logs.exists() else ()
     return result
 
 
