@@ -11,7 +11,14 @@ from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_man
 from pixelup.devices import DEVICE_VALUES
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY
-from pixelup.formats import CONFIG_FORMAT_VERSION, PARAMETERS_FORMAT_VERSION, format_version
+from pixelup.formats import (
+    CONFIG_FORMAT,
+    PARAMETERS_FORMAT,
+    Format,
+    NewerFormatError,
+    json_content,
+    json_text,
+)
 from pixelup.i18n.languages import SYSTEM, is_preference
 from pixelup.i18n.message import Message
 from pixelup.jobs import (
@@ -92,7 +99,8 @@ class SettingsFile:
     Hand edits made while
     PixelUp runs are replaced by its next save (developer decision).
 
-    ``data`` is the stored map as last read or written. ``unapplied`` names the keys
+    ``data`` is the stored content, without its header, as last read or written.
+    ``unapplied`` names the keys
     in it this build does not use: sets that failed validation and keys it does not
     know. Their stored values are written back unchanged until the user saves that
     same set, so loading alone never erases a saved setting (config-sets-conventions,
@@ -202,7 +210,7 @@ def save_app_config(
             continue
         data, kept = _file_data(candidate, previous, file, store)
         if data != file.data:
-            write_managed_text(file.path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+            write_managed_text(file.path, json_text(store.format, data))
             file = SettingsFile(
                 file.path,
                 exists=file.exists or bool(data),
@@ -232,16 +240,15 @@ def _load_settings_file(path: Path, store: _Store) -> _FileLoad:
     if not path.exists():
         return _FileLoad(SettingsFile(path))
     try:
-        data = _read_object(path)
-        version = format_version(data.get(_FORMAT_VERSION_KEY))
-    except ValueError:
-        return _FileLoad(SettingsFile(path), quarantined_to=quarantine_corrupt_file(path))
-    if version > store.version:
+        data = json_content(json.loads(path.read_text(encoding="utf-8")), store.format, path)
+    except NewerFormatError as newer:
         # Intact data this build cannot read: left exactly in place, and never
         # written (store-recovery-conventions).
-        return _FileLoad(SettingsFile(path, exists=True, newer_format=version))
+        return _FileLoad(SettingsFile(path, exists=True, newer_format=newer.version))
+    except ValueError:
+        return _FileLoad(SettingsFile(path), quarantined_to=quarantine_corrupt_file(path))
     sets, rejected = _decode_sets(data, path, store.decoders)
-    unknown = {key for key in data if key != _FORMAT_VERSION_KEY and key not in store.decoders}
+    unknown = {key for key in data if key not in store.decoders}
     return _FileLoad(
         SettingsFile(
             path,
@@ -254,17 +261,14 @@ def _load_settings_file(path: Path, store: _Store) -> _FileLoad:
     )
 
 
-def _read_object(path: Path) -> dict[str, Any]:
-    return _object(json.loads(path.read_text(encoding="utf-8")), path.stem)
-
-
 def _file_data(
     candidate: AppConfig,
     previous: AppConfig,
     file: SettingsFile,
     store: _Store,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """What one file holds after saving ``candidate``, and the unapplied keys kept.
+    """What one file's content holds after saving ``candidate``, and the unapplied
+    keys kept.
 
     Every set that differs from its built-in is written whole, and every other
     known set is left out (config-sets-conventions). A stored value this build did
@@ -277,17 +281,10 @@ def _file_data(
         if key not in store.decoders or getattr(candidate, key) == getattr(previous, key)
     }
     sets = {key: value for key, value in _stored_sets(candidate).items() if key in store.decoders}
-    # With no file and nothing to store, the absence already says every set is at
-    # its built-in, so nothing is written (config-sets-conventions).
-    data = (
-        {_FORMAT_VERSION_KEY: store.version, **kept, **sets}
-        if sets or kept or file.exists
-        else {}
-    )
-    return data, kept
-
-
-_FORMAT_VERSION_KEY = "format_version"
+    # Written only when it differs from the content last read or written, so with
+    # no file and nothing to store, the absence already says every set is at its
+    # built-in and nothing is written (config-sets-conventions).
+    return {**kept, **sets}, kept
 
 
 def _stored_sets(config: AppConfig) -> dict[str, Any]:
@@ -379,14 +376,14 @@ _PARAMETER_DECODERS: dict[str, Callable[[Any], Any]] = {
 
 @dataclass(frozen=True, slots=True)
 class _Store:
-    """One settings file's format version and the sets it holds."""
+    """One settings file's format and the sets it holds."""
 
-    version: int
+    format: Format
     decoders: Mapping[str, Callable[[Any], Any]]
 
 
-_CONFIG_STORE = _Store(CONFIG_FORMAT_VERSION, _CONFIG_DECODERS)
-_PARAMETERS_STORE = _Store(PARAMETERS_FORMAT_VERSION, _PARAMETER_DECODERS)
+_CONFIG_STORE = _Store(CONFIG_FORMAT, _CONFIG_DECODERS)
+_PARAMETERS_STORE = _Store(PARAMETERS_FORMAT, _PARAMETER_DECODERS)
 
 
 def _object(value: Any, name: str) -> dict[str, Any]:

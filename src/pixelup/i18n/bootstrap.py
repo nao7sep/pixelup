@@ -8,7 +8,7 @@ import sys
 
 from PySide6.QtCore import QLocale
 
-from pixelup.formats import CONFIG_FORMAT_VERSION, format_version
+from pixelup.formats import CONFIG_FORMAT, NewerFormatError, json_content
 from pixelup.i18n import languages, localizer
 
 # Settles the interface language before anything draws.
@@ -93,19 +93,14 @@ def saved_preference() -> str:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - any failure here simply means System.
         return languages.SYSTEM
-    if not isinstance(data, dict) or not _readable_config_version(data.get("format_version")):
-        return languages.SYSTEM
-    value = data.get("language")
-    return value if languages.is_preference(value) else languages.SYSTEM
-
-
-def _readable_config_version(value: object) -> bool:
-    """Whether this build reads a config.json with this marker; the window's
-    loader leaves a newer PixelUp's file on the built-ins, System among them."""
     try:
-        return format_version(value) <= CONFIG_FORMAT_VERSION
-    except ValueError:
-        return False
+        content = json_content(data, CONFIG_FORMAT, path)
+    except (ValueError, NewerFormatError):
+        # The window's loader leaves an unreadable or newer file on the built-ins,
+        # System among them.
+        return languages.SYSTEM
+    value = content.get("language")
+    return value if languages.is_preference(value) else languages.SYSTEM
 
 
 def align_appkit(tag: str) -> None:

@@ -355,9 +355,17 @@ def test_current_session_is_the_session_every_record_carries() -> None:
     assert {record["session"] for record in _records(database)} == {current_session()}
 
 
-def _existing_records(database: Path, version: int) -> bytes:
+def _existing_records(database: Path, version: int, kind: str | None = "records") -> bytes:
+    """An existing database with ``version``, and a header naming ``kind`` (none when
+    ``kind`` is None)."""
     connection = sqlite3.connect(database)
     connection.execute("CREATE TABLE logs (anything TEXT)")
+    if kind is not None:
+        connection.execute("CREATE TABLE file_header (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.executemany(
+            "INSERT INTO file_header VALUES (?, ?)",
+            [("format.owner", "pixelup"), ("format.kind", kind)],
+        )
     connection.execute(f"PRAGMA user_version = {version}")
     connection.commit()
     connection.close()
@@ -371,16 +379,27 @@ def test_the_records_database_is_stamped_at_creation(tmp_path: Path) -> None:
     connection = sqlite3.connect(database)
     try:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        rows = dict(connection.execute("SELECT key, value FROM file_header").fetchall())
+        assert (rows["format.owner"], rows["format.kind"]) == ("pixelup", "records")
+        assert rows["writer.name"] == "pixelup"
     finally:
         connection.close()
 
 
-@pytest.mark.parametrize(("version", "reason"), [(0, "no format version"), (2, "format version 2")])
-def test_unmarked_or_newer_records_are_left_untouched_and_lines_go_to_the_fallback_file(
-    tmp_path: Path, version: int, reason: str
+@pytest.mark.parametrize(
+    ("version", "kind", "reason"),
+    [
+        (0, "records", "no format version"),
+        (1, None, "no format header"),
+        (1, "backups", "not a pixelup records file"),
+        (2, "records", "format version 2"),
+    ],
+)
+def test_unreadable_or_newer_records_are_left_untouched_and_lines_go_to_the_fallback_file(
+    tmp_path: Path, version: int, kind: str | None, reason: str
 ) -> None:
     database = tmp_path / RECORDS_FILE_NAME
-    before = _existing_records(database, version)
+    before = _existing_records(database, version, kind)
 
     configure_session_logging()
     log.info("image.added", input="a.png")

@@ -6,8 +6,11 @@ from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
+from config_support import header as _header
 from config_support import load_app_config
+from config_support import stored_content as _content
 
+from pixelup import __version__
 from pixelup.app_config import (
     AppConfig,
     ConfigSaveResult,
@@ -95,9 +98,8 @@ def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
     path = tmp_path / "parameters.json"
     candidate = AppConfig(parameters=JobSettings(quality=55))
     _save(candidate, AppConfig(), path)
-    stored = json.loads(path.read_text(encoding="utf-8"))
-    assert set(stored) == {"format_version", "parameters"}
-    assert stored["format_version"] == 1
+    stored = _content(path)
+    assert set(stored) == {"parameters"}
     assert set(stored["parameters"]) == {item.name for item in fields(JobSettings)}
     assert not (tmp_path / "config.json").exists()
     assert load_app_config(path.parent) == candidate
@@ -106,12 +108,10 @@ def test_one_changed_set_writes_only_its_key(tmp_path: Path) -> None:
 def test_preferences_and_parameters_are_stored_in_their_own_files(tmp_path: Path) -> None:
     candidate = AppConfig(language="ja", parameters=JobSettings(quality=55))
     _save(candidate, AppConfig(), tmp_path / "config.json")
-    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8")) == {
-        "format_version": 1,
+    assert _content(tmp_path / "config.json") == {
         "language": "ja",
     }
-    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
-        "format_version": 1,
+    assert _content(tmp_path / "parameters.json") == {
         "parameters": _parameter_map(quality=55),
     }
     assert load_app_config(tmp_path) == candidate
@@ -129,9 +129,7 @@ def test_each_save_writes_only_the_file_whose_sets_changed(tmp_path: Path) -> No
     reset = replace(opened, parameters=JobSettings())
     second = save_app_config(reset, opened, first.files)
     assert (tmp_path / "config.json").stat().st_mtime == old
-    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
-        "format_version": 1
-    }
+    assert _content(tmp_path / "parameters.json") == {}
 
     os.utime(tmp_path / "parameters.json", (old, old))
     save_app_config(replace(reset, font_family="Menlo"), reset, second.files)
@@ -140,7 +138,7 @@ def test_each_save_writes_only_the_file_whose_sets_changed(tmp_path: Path) -> No
 
 def test_a_newer_parameters_file_only_refuses_saves_that_change_it(tmp_path: Path) -> None:
     parameters = tmp_path / "parameters.json"
-    text = '{"format_version": 2, "future": {"anything": true}}'
+    text = json.dumps({**_header("parameters", 2), "future": {"anything": True}})
     parameters.write_text(text, encoding="utf-8")
     loaded = load_app_config_result(tmp_path)
     assert loaded.files.parameters.newer_format == 2
@@ -152,7 +150,7 @@ def test_a_newer_parameters_file_only_refuses_saves_that_change_it(tmp_path: Pat
         )
 
     assert raised.value.code == ErrorCode.STORE_NEWER_FORMAT
-    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["language"] == "ja"
+    assert _content(tmp_path / "config.json")["language"] == "ja"
     assert parameters.read_text(encoding="utf-8") == text
 
 
@@ -177,22 +175,21 @@ def test_a_changed_save_keeps_the_file_mode_with_a_fresh_modified_time(
 
 def test_one_stored_set_uses_built_ins_for_every_other_set(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text('{"format_version": 1, "font_family": "Menlo"}', encoding="utf-8")
+    path.write_text(json.dumps({**_header("config"), "font_family": "Menlo"}), encoding="utf-8")
     assert load_app_config(path.parent) == AppConfig(font_family="Menlo")
 
 
-def test_next_edit_keeps_unknown_keys_and_writes_the_format_version(tmp_path: Path) -> None:
+def test_next_edit_keeps_unknown_keys_and_writes_the_header(tmp_path: Path) -> None:
     # A key this build does not know (an older one, or one a newer PixelUp added) is
     # not disposable: an unrelated save writes it back unchanged (developer decision).
     path = tmp_path / "config.json"
     path.write_text(
-        '{"format_version": 1, "version": 99, "future": {"a": [1, 2]}, "language": "ja"}',
+        json.dumps({**_header("config"), "version": 99, "future": {"a": [1, 2]}, "language": "ja"}),
         encoding="utf-8",
     )
     previous = load_app_config(path.parent)
     _save(replace(previous, font_family="Menlo"), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1,
+    assert _content(path) == {
         "version": 99,
         "future": {"a": [1, 2]},
         "language": "ja",
@@ -205,7 +202,7 @@ def test_saving_a_set_equal_to_its_built_in_deletes_only_that_set(tmp_path: Path
     previous = AppConfig(language="ja", font_family="Menlo")
     _save(previous, AppConfig(), path)
     reset = _save(replace(previous, font_family=AppConfig().font_family), previous, path).config
-    assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1, "language": "ja"}
+    assert _content(path) == {"language": "ja"}
     assert reset == AppConfig(language="ja")
 
 
@@ -214,18 +211,18 @@ def test_the_last_set_back_at_its_built_in_leaves_an_empty_map(tmp_path: Path) -
     previous = AppConfig(parameters=JobSettings(quality=55))
     _save(previous, AppConfig(), path)
     _save(AppConfig(), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1}
+    assert _content(path) == {}
 
 
 def test_any_save_drops_a_stored_copy_equal_to_its_built_in(tmp_path: Path) -> None:
     path = tmp_path / "parameters.json"
     path.write_text(
-        json.dumps({"format_version": 1, "parameters": _parameter_map()}), encoding="utf-8"
+        json.dumps({**_header("parameters"), "parameters": _parameter_map()}), encoding="utf-8"
     )
     previous = load_app_config(path.parent)
     _save(replace(previous, parameters=JobSettings(quality=60)), previous, path)
     _save(replace(previous, parameters=JobSettings()), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {"format_version": 1}
+    assert _content(path) == {}
 
 
 def test_an_unrelated_save_keeps_a_set_that_failed_its_check(tmp_path: Path) -> None:
@@ -234,7 +231,7 @@ def test_an_unrelated_save_keeps_a_set_that_failed_its_check(tmp_path: Path) -> 
     # decision).
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps({"format_version": 1, "language": "JA", "future": "kept"}),
+        json.dumps({**_header("config"), "language": "JA", "future": "kept"}),
         encoding="utf-8",
     )
     loaded = load_app_config_result(path.parent)
@@ -249,8 +246,7 @@ def test_an_unrelated_save_keeps_a_set_that_failed_its_check(tmp_path: Path) -> 
     )
 
     assert second.config.language == "system"
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1,
+    assert _content(path) == {
         "language": "JA",
         "future": "kept",
         "display_zone": "Asia/Tokyo",
@@ -261,7 +257,7 @@ def test_an_unrelated_save_keeps_a_set_that_failed_its_check(tmp_path: Path) -> 
 def test_saving_a_set_that_failed_its_check_replaces_it(tmp_path: Path) -> None:
     path = tmp_path / "parameters.json"
     path.write_text(
-        json.dumps({"format_version": 1, "parameters": _parameter_map(quality=250)}),
+        json.dumps({**_header("parameters"), "parameters": _parameter_map(quality=250)}),
         encoding="utf-8",
     )
     loaded = load_app_config_result(path.parent)
@@ -269,14 +265,13 @@ def test_saving_a_set_that_failed_its_check_replaces_it(tmp_path: Path) -> None:
 
     result = save_app_config(edited, loaded.config, loaded.files)
 
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1,
+    assert _content(path) == {
         "parameters": _parameter_map(quality=60),
     }
     assert result.files.parameters.unapplied == frozenset()
     # The next unrelated save no longer has anything to carry for that set.
     later = save_app_config(replace(edited, language="ja"), edited, result.files)
-    assert json.loads(path.read_text(encoding="utf-8"))["parameters"] == _parameter_map(
+    assert _content(path)["parameters"] == _parameter_map(
         quality=60
     )
     assert later.files.parameters.unapplied == frozenset()
@@ -287,14 +282,16 @@ def test_a_set_that_failed_its_check_is_kept_byte_for_byte_across_a_save(tmp_pat
     # unknown members all survive, so nothing about the user's copy is reinterpreted.
     path = tmp_path / "config.json"
     path.write_text(
-        '{"format_version": 1, "display_zone": {"offset": 9.0, "z": null, "zone": "Asia/Tokyo"}}',
+        json.dumps(
+            {**_header("config"), "display_zone": {"offset": 9.0, "z": None, "zone": "Asia/Tokyo"}}
+        ),
         encoding="utf-8",
     )
     loaded = load_app_config_result(path.parent)
 
     save_app_config(replace(loaded.config, language="ja"), loaded.config, loaded.files)
 
-    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored = _content(path)
     assert json.dumps(stored["display_zone"]) == '{"offset": 9.0, "z": null, "zone": "Asia/Tokyo"}'
 
 
@@ -303,14 +300,13 @@ def test_a_save_replaces_hand_edits_made_after_load(tmp_path: Path) -> None:
     # from the state read at launch, so an edit made to the file meanwhile, even one
     # that broke it, is replaced by the user's current settings.
     path = tmp_path / "config.json"
-    path.write_text('{"format_version": 1, "language": "ja"}', encoding="utf-8")
+    path.write_text(json.dumps({**_header("config"), "language": "ja"}), encoding="utf-8")
     loaded = load_app_config_result(path.parent)
     path.write_text("{ broken by hand", encoding="utf-8")
 
     save_app_config(replace(loaded.config, font_family="Menlo"), loaded.config, loaded.files)
 
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1,
+    assert _content(path) == {
         "language": "ja",
         "font_family": "Menlo",
     }
@@ -329,7 +325,7 @@ def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
 def test_load_app_config_cleans_font_family_as_a_single_line(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps({"format_version": 1, "font_family": "  Arial,\n Menlo  "}), encoding="utf-8"
+        json.dumps({**_header("config"), "font_family": "  Arial,\n Menlo  "}), encoding="utf-8"
     )
 
     assert load_app_config(path.parent).font_family == "Arial, Menlo"
@@ -337,7 +333,7 @@ def test_load_app_config_cleans_font_family_as_a_single_line(tmp_path: Path) -> 
 
 def test_whitespace_font_family_reads_as_the_built_in(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"format_version": 1, "font_family": "   "}), encoding="utf-8")
+    path.write_text(json.dumps({**_header("config"), "font_family": "   "}), encoding="utf-8")
 
     assert load_app_config(path.parent) == AppConfig()
 
@@ -345,7 +341,7 @@ def test_whitespace_font_family_reads_as_the_built_in(tmp_path: Path) -> None:
 def test_load_app_config_preserves_a_font_stack(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps({"format_version": 1, "font_family": "Helvetica Neue, Segoe UI, Roboto, Arial"}),
+        json.dumps({**_header("config"), "font_family": "Helvetica Neue, Segoe UI, Roboto, Arial"}),
         encoding="utf-8",
     )
 
@@ -354,7 +350,7 @@ def test_load_app_config_preserves_a_font_stack(tmp_path: Path) -> None:
 
 def test_load_app_config_ignores_unusable_font_family(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"format_version": 1, "font_family": 42}), encoding="utf-8")
+    path.write_text(json.dumps({**_header("config"), "font_family": 42}), encoding="utf-8")
 
     result = load_app_config_result(path.parent)
 
@@ -418,8 +414,8 @@ def test_a_failed_quarantine_propagates_and_leaves_the_file(
     assert path.read_text(encoding="utf-8") == "{ this is not valid json"
 
 
-def test_a_config_without_a_format_version_is_quarantined(tmp_path: Path) -> None:
-    # Nothing infers a version from the file's shape (store-recovery-conventions).
+def test_a_config_without_a_header_is_quarantined(tmp_path: Path) -> None:
+    # Nothing infers a format from the file's shape (file-identity-conventions).
     path = tmp_path / "config.json"
     text = '{"language": "ja"}'
     path.write_text(text, encoding="utf-8")
@@ -430,10 +426,28 @@ def test_a_config_without_a_format_version_is_quarantined(tmp_path: Path) -> Non
     assert not path.exists()
 
 
-@pytest.mark.parametrize("marker", ['"1"', "0", "-1", "1.5", "true", "null"])
-def test_a_format_version_that_is_not_a_version_is_quarantined(tmp_path: Path, marker: str) -> None:
+@pytest.mark.parametrize(
+    "header",
+    [
+        {"format": 1},
+        {"format": "pixelup.config"},
+        {"format": None},
+        {"format": {"owner": "pixelup", "kind": "config"}},
+        {"format": {"owner": "pixelup", "version": 1}},
+        {"format": {"kind": "config", "version": 1}},
+        {"format": {"owner": 7, "kind": "config", "version": 1}},
+        {"format_version": 1},
+        *(
+            {"format": {"owner": "pixelup", "kind": "config", "version": version}}
+            for version in ("1", 0, -1, 1.5, True, None)
+        ),
+    ],
+)
+def test_a_missing_or_malformed_header_is_quarantined(
+    tmp_path: Path, header: dict[str, object]
+) -> None:
     path = tmp_path / "config.json"
-    text = f'{{"format_version": {marker}, "language": "ja"}}'
+    text = json.dumps({**header, "language": "ja"})
     path.write_text(text, encoding="utf-8")
     result = load_app_config_result(path.parent)
     assert result.config == AppConfig()
@@ -441,9 +455,59 @@ def test_a_format_version_that_is_not_a_version_is_quarantined(tmp_path: Path, m
     assert result.quarantined[0].read_text(encoding="utf-8") == text
 
 
+@pytest.mark.parametrize(
+    ("name", "owner", "kind"),
+    [
+        ("config.json", "picpatch", "config"),
+        ("config.json", "pixelup", "parameters"),
+        ("parameters.json", "pixelup", "config"),
+        ("config.json", "Pixelup", "config"),
+    ],
+)
+def test_a_file_of_another_owner_or_kind_is_quarantined(
+    tmp_path: Path, name: str, owner: str, kind: str
+) -> None:
+    # Even when its version is newer: a file of another format is unreadable, not
+    # newer, whatever its shape.
+    path = tmp_path / name
+    header = {"format": {"owner": owner, "kind": kind, "version": 2}}
+    text = json.dumps({**header, "language": "ja", "parameters": _parameter_map(quality=1)})
+    path.write_text(text, encoding="utf-8")
+    result = load_app_config_result(tmp_path)
+    assert result.config == AppConfig()
+    assert result.files.holding("language").newer_format is None
+    assert result.files.holding("parameters").newer_format is None
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0].read_text(encoding="utf-8") == text
+
+
+@pytest.mark.parametrize("writer", [None, "anything", {"name": "picpatch", "version": 9}, 7])
+def test_the_writer_is_never_read(tmp_path: Path, writer: object) -> None:
+    path = tmp_path / "config.json"
+    data = {"format": {"owner": "pixelup", "kind": "config", "version": 1}, "language": "ja"}
+    if writer is not None:
+        data["writer"] = writer
+    path.write_text(json.dumps(data), encoding="utf-8")
+    result = load_app_config_result(tmp_path)
+    assert result.config == AppConfig(language="ja")
+    assert result.quarantined == ()
+    assert result.files.config.unapplied == frozenset()
+
+    save_app_config(replace(result.config, font_family="Menlo"), result.config, result.files)
+    assert json.loads(path.read_text(encoding="utf-8"))["writer"] == _header("config")["writer"]
+
+
+def test_a_saved_file_starts_with_its_header(tmp_path: Path) -> None:
+    _save(AppConfig(language="ja"), AppConfig(), tmp_path / "config.json")
+    stored = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert list(stored)[:2] == ["format", "writer"]
+    assert stored["format"] == {"owner": "pixelup", "kind": "config", "version": 1}
+    assert stored["writer"] == {"name": "pixelup", "version": __version__}
+
+
 def test_a_newer_config_is_left_in_place_and_reads_as_built_ins(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    text = '{"format_version": 2, "language": "ja"}'
+    text = json.dumps({**_header("config", 2), "language": "ja"})
     path.write_text(text, encoding="utf-8")
 
     result = load_app_config_result(path.parent)
@@ -457,7 +521,7 @@ def test_a_newer_config_is_left_in_place_and_reads_as_built_ins(tmp_path: Path) 
 
 def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    text = '{"format_version": 2, "future": {"anything": true}}'
+    text = json.dumps({**_header("config", 2), "future": {"anything": True}})
     path.write_text(text, encoding="utf-8")
     previous = load_app_config(path.parent)
 
@@ -541,7 +605,7 @@ def _parameter_map(**updates: object) -> dict[str, object]:
 def _write(path: Path, **parameters: object) -> None:
     path = path.with_name("parameters.json")
     path.write_text(
-        json.dumps({"format_version": 1, "parameters": _parameter_map(**parameters)}),
+        json.dumps({**_header("parameters"), "parameters": _parameter_map(**parameters)}),
         encoding="utf-8",
     )
 
@@ -558,7 +622,7 @@ def test_a_newer_config_lets_the_window_open_and_is_never_written(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
-    text = '{"format_version": 2, "language": "ja"}'
+    text = json.dumps({**_header("parameters", 2), "language": "ja"})
     (home / "parameters.json").write_text(text, encoding="utf-8")
 
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
@@ -651,11 +715,11 @@ def test_present_malformed_set_falls_back_without_costing_other_sets(
     tmp_path: Path, data: dict[str, object], caplog: pytest.LogCaptureFixture
 ) -> None:
     (tmp_path / "config.json").write_text(
-        json.dumps({"format_version": 1, "font_family": "Menlo"}), encoding="utf-8"
+        json.dumps({**_header("config"), "font_family": "Menlo"}), encoding="utf-8"
     )
     path = tmp_path / ("parameters.json" if "parameters" in data else "config.json")
-    stored = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    path.write_text(json.dumps({"format_version": 1, **stored, **data}), encoding="utf-8")
+    stored = _content(path) if path.exists() else {}
+    path.write_text(json.dumps({**_header(path.stem), **stored, **data}), encoding="utf-8")
     original = path.read_bytes()
     result = load_app_config_result(path.parent)
     assert result.config == AppConfig(font_family="Menlo")
@@ -672,7 +736,7 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
     path.write_text(
         json.dumps(
             {
-                "format_version": 1,
+                **_header("parameters"),
                 "future_setting": {"future": True},
                 "parameters": _parameter_map(scale=2, future_parameter="ignored"),
             }
@@ -751,10 +815,12 @@ def test_partial_parameters_read_as_the_built_in_with_a_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     (tmp_path / "config.json").write_text(
-        '{"format_version": 1, "language": "ja"}', encoding="utf-8"
+        json.dumps({**_header("config"), "language": "ja"}), encoding="utf-8"
     )
     path = tmp_path / "parameters.json"
-    path.write_text('{"format_version": 1, "parameters": {"scale": 2}}', encoding="utf-8")
+    path.write_text(
+        json.dumps({**_header("parameters"), "parameters": {"scale": 2}}), encoding="utf-8"
+    )
     result = load_app_config_result(path.parent)
     assert result.config == AppConfig(language="ja")
     assert result.quarantined == ()
@@ -767,12 +833,11 @@ def test_partial_parameters_read_as_the_built_in_with_a_warning(
 def test_edit_writes_the_untouched_user_set_whole_from_memory(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps({"format_version": 1, "font_family": "  Arial,\n Menlo  "}), encoding="utf-8"
+        json.dumps({**_header("config"), "font_family": "  Arial,\n Menlo  "}), encoding="utf-8"
     )
     previous = load_app_config(path.parent)
     _save(replace(previous, language="ja"), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1,
+    assert _content(path) == {
         "font_family": "Arial, Menlo",
         "language": "ja",
     }
@@ -782,12 +847,11 @@ def test_a_parameters_save_writes_the_set_whole_from_memory(tmp_path: Path) -> N
     path = tmp_path / "parameters.json"
     stored_parameters = _parameter_map(quality=42, future_parameter="dropped")
     path.write_text(
-        json.dumps({"format_version": 1, "parameters": stored_parameters}), encoding="utf-8"
+        json.dumps({**_header("parameters"), "parameters": stored_parameters}), encoding="utf-8"
     )
     previous = load_app_config(path.parent)
     _save(replace(previous, parameters=JobSettings(quality=43)), previous, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "format_version": 1,
+    assert _content(path) == {
         "parameters": _parameter_map(quality=43),
     }
 
@@ -803,12 +867,12 @@ def test_models_folder_is_saved_reset_and_preserved_when_rejected(tmp_path):
     saved = save_app_config(chosen, initial.config, initial.files)
     assert load_app_config_result(path.parent).config.models_folder == chosen.models_folder
     save_app_config(AppConfig(), chosen, saved.files)
-    assert "models_folder" not in json.loads(path.read_text())
-    path.write_text(json.dumps({"format_version": 1, "models_folder": 123}))
+    assert "models_folder" not in _content(path)
+    path.write_text(json.dumps({**_header("config"), "models_folder": 123}))
     rejected = load_app_config_result(path.parent)
     assert rejected.rejected == ("models_folder",)
     save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.files)
-    assert json.loads(path.read_text())["models_folder"] == 123
+    assert _content(path)["models_folder"] == 123
 
 
 def test_display_zone_is_saved_and_preserved_when_this_computer_lacks_it(tmp_path):
@@ -819,15 +883,15 @@ def test_display_zone_is_saved_and_preserved_when_this_computer_lacks_it(tmp_pat
     assert initial.config.display_zone == "system"
     chosen = replace(initial.config, display_zone="Asia/Tokyo")
     save_app_config(chosen, initial.config, initial.files)
-    assert json.loads(path.read_text())["display_zone"] == "Asia/Tokyo"
+    assert _content(path)["display_zone"] == "Asia/Tokyo"
     assert load_app_config_result(path.parent).config.display_zone == "Asia/Tokyo"
 
-    path.write_text(json.dumps({"format_version": 1, "display_zone": "Mars/Olympus_Mons"}))
+    path.write_text(json.dumps({**_header("config"), "display_zone": "Mars/Olympus_Mons"}))
     rejected = load_app_config_result(path.parent)
     assert rejected.rejected == ("display_zone",)
     assert rejected.config.display_zone == "system"
     save_app_config(replace(rejected.config, language="ja"), rejected.config, rejected.files)
-    assert json.loads(path.read_text())["display_zone"] == "Mars/Olympus_Mons"
+    assert _content(path)["display_zone"] == "Mars/Olympus_Mons"
 
 
 def test_successful_save_returns_the_saved_state(tmp_path: Path) -> None:

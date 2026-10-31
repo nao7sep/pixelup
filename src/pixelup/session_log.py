@@ -16,7 +16,7 @@ from typing import Any
 
 from pixelup.config import resolve_state_dir
 from pixelup.formats import (
-    RECORDS_FORMAT_VERSION,
+    RECORDS_FORMAT,
     open_sqlite_store,
     rollback_sqlite,
 )
@@ -128,7 +128,7 @@ def _entry(record: logging.LogRecord) -> dict[str, Any]:
 
 
 def _open_records(database: Path) -> sqlite3.Connection:
-    return open_sqlite_store(database, RECORDS_FORMAT_VERSION, _SCHEMA)
+    return open_sqlite_store(database, RECORDS_FORMAT, _SCHEMA)
 
 
 @dataclass(frozen=True, slots=True)

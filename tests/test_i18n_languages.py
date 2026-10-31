@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from config_support import load_app_config
+from config_support import header, load_app_config
 from localization_support import speaking
 from PySide6.QtCore import QLibraryInfo, QLocale
 
@@ -203,26 +203,28 @@ def test_system_is_resolved_once_from_the_list_read_at_launch() -> None:
 def test_the_saved_language_is_read_straight_from_config_json(tmp_path: Path) -> None:
     assert bootstrap.saved_preference() == "system"
     (tmp_path / "config.json").write_text(
-        json.dumps({"format_version": 1, "language": "it"}), encoding="utf-8"
+        json.dumps({**header("config"), "language": "it"}), encoding="utf-8"
     )
     assert bootstrap.saved_preference() == "it"
     (tmp_path / "config.json").write_text(
-        json.dumps({"format_version": 1, "language": "IT"}), encoding="utf-8"
+        json.dumps({**header("config"), "language": "IT"}), encoding="utf-8"
     )
     assert bootstrap.saved_preference() == "system"
     (tmp_path / "config.json").write_text("{not json", encoding="utf-8")
     assert bootstrap.saved_preference() == "system"
 
 
-def test_a_newer_or_unmarked_config_json_means_system_like_the_window_loader(
+def test_a_newer_or_unreadable_config_json_means_system_like_the_window_loader(
     tmp_path: Path,
 ) -> None:
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"format_version": 1, "language": "it"}), encoding="utf-8")
+    config.write_text(json.dumps({**header("config"), "language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "it"
-    config.write_text(json.dumps({"format_version": 2, "language": "it"}), encoding="utf-8")
+    config.write_text(json.dumps({**header("config", 2), "language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "system"
-    config.write_text(json.dumps({"format_version": "1", "language": "it"}), encoding="utf-8")
+    config.write_text(json.dumps({**header("parameters"), "language": "it"}), encoding="utf-8")
+    assert bootstrap.saved_preference() == "system"
+    config.write_text(json.dumps({"format_version": 1, "language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "system"
     config.write_text(json.dumps({"language": "it"}), encoding="utf-8")
     assert bootstrap.saved_preference() == "system"
@@ -237,7 +239,7 @@ def test_settle_language_speaks_the_saved_choice_before_the_app_exists(
     bootstrap.settle_language()
     assert localizer.language() == "es"
     (tmp_path / "config.json").write_text(
-        json.dumps({"format_version": 1, "language": "ru"}), encoding="utf-8"
+        json.dumps({**header("config"), "language": "ru"}), encoding="utf-8"
     )
     bootstrap.settle_language()
     assert localizer.language() == "ru"
@@ -254,7 +256,7 @@ def test_the_language_setting_round_trips_and_an_unknown_value_means_system(
     assert load_app_config(tmp_path).language == "zh-Hans"
     # Unknown to this build is not corruption: the rest of the settings survive.
     path.write_text(
-        json.dumps({"format_version": 1, "language": "tlh", "font_family": "Menlo"}),
+        json.dumps({**header("config"), "language": "tlh", "font_family": "Menlo"}),
         encoding="utf-8",
     )
     loaded = load_app_config(tmp_path)

@@ -34,7 +34,7 @@ from collections import deque
 from pathlib import Path
 
 from pixelup.config import resolve_state_dir
-from pixelup.formats import BACKUPS_FORMAT_VERSION, open_sqlite_store
+from pixelup.formats import BACKUPS_FORMAT, open_sqlite_store
 from pixelup.session_log import current_session, log
 from pixelup.timestamps import utc_now_iso_ms
 
@@ -71,7 +71,7 @@ def _store_file() -> Path:
 def _open_store() -> sqlite3.Connection:
     # not recorded: backups.sqlite3 is the store itself, written by this layer and
     # not through the managed-text path, so it never records itself.
-    return open_sqlite_store(_store_file(), BACKUPS_FORMAT_VERSION, _SCHEMA)
+    return open_sqlite_store(_store_file(), BACKUPS_FORMAT, _SCHEMA)
 
 
 def _sha256(data: bytes) -> str:

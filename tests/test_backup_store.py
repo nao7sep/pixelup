@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from pixelup import __version__
 from pixelup.backup_store import STORE_FILE_NAME, close_backup_store, drain_backups, record
 from pixelup.config import write_managed_text
 from pixelup.session_log import _error_object, configure_session_logging, flush_records
@@ -466,24 +467,44 @@ def _user_version(file: Path) -> int:
         connection.close()
 
 
-def test_a_new_store_records_its_format_version(
+def test_a_new_store_records_its_header(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _home(tmp_path, monkeypatch)
     record(home / "config.json", b"{}\n")
     close_backup_store()
     assert _user_version(_store_path(home)) == 1
+    connection = sqlite3.connect(_store_path(home))
+    try:
+        rows = dict(connection.execute("SELECT key, value FROM file_header").fetchall())
+    finally:
+        connection.close()
+    assert rows == {
+        "format.owner": "pixelup",
+        "format.kind": "backups",
+        "writer.name": "pixelup",
+        "writer.version": __version__,
+    }
 
 
-@pytest.mark.parametrize("version", [0, 2])
-def test_an_unmarked_or_newer_store_is_left_untouched_with_one_warn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: int
+@pytest.mark.parametrize(
+    ("version", "kind"), [(0, "backups"), (1, None), (1, "records"), (2, "backups")]
+)
+def test_an_unreadable_or_newer_store_is_left_untouched_with_one_warn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: int, kind: str | None
 ) -> None:
-    # A user_version of 0 on a database that has tables is a missing marker.
+    # A user_version of 0 on a database that has tables is a missing version; no
+    # file_header table, or one naming another kind, is not this store.
     home = _home(tmp_path, monkeypatch)
     store = _store_path(home)
     connection = sqlite3.connect(store)
     connection.execute("CREATE TABLE backups (anything TEXT)")
+    if kind is not None:
+        connection.execute("CREATE TABLE file_header (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.executemany(
+            "INSERT INTO file_header VALUES (?, ?)",
+            [("format.owner", "pixelup"), ("format.kind", kind)],
+        )
     connection.execute(f"PRAGMA user_version = {version}")
     connection.commit()
     connection.close()

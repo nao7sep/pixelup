@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from config_support import load_app_config
+from config_support import header, load_app_config, stored_content
 from event_wait import process_until
 from localization_support import speaking
 from PIL import Image, PngImagePlugin
@@ -2239,10 +2239,10 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.json").write_text(
-        json.dumps({"format_version": 1, "auto_download": True, "font_family": ""})
+        json.dumps({**header("config"), "auto_download": True, "font_family": ""})
     )
     (home / "parameters.json").write_text(
-        json.dumps({"format_version": 1, "parameters": {"tile": 9999}})
+        json.dumps({**header("parameters"), "parameters": {"tile": 9999}})
     )
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
@@ -2284,7 +2284,9 @@ def test_the_window_itself_takes_the_configured_font_at_launch(
     # setFont it kept the platform font, and anything inheriting from it did too.
     home = tmp_path / "home"
     home.mkdir()
-    (home / "config.json").write_text(json.dumps({"format_version": 1, "font_family": "Menlo"}))
+    (home / "config.json").write_text(
+        json.dumps({**header("config"), "font_family": "Menlo"})
+    )
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     original = qapp.font()
@@ -2338,7 +2340,7 @@ def test_failed_reset_retries_and_the_retry_removes_the_stored_set(
     assert parameters_path().read_bytes() == saved
     assert _flush(window) is True
     assert attempts == [JobSettings(), JobSettings()]
-    assert json.loads(parameters_path().read_text(encoding="utf-8")) == {"format_version": 1}
+    assert stored_content(parameters_path()) == {}
     assert not config_path().exists()
     assert window.config.parameters == JobSettings()
 

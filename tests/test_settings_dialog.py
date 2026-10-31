@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
+from config_support import stored_content
 from localization_support import speaking
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
@@ -186,10 +186,7 @@ def test_save_writes_only_the_changed_dialog_set(qapp: QApplication, tmp_path: P
     try:
         dialog.font_family.setText("Menlo")
         dialog.ok_button.click()
-        assert json.loads(path.read_text(encoding="utf-8")) == {
-            "format_version": 1,
-            "font_family": "Menlo",
-        }
+        assert stored_content(path) == {"font_family": "Menlo"}
     finally:
         dialog.deleteLater()
 

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Callable
 from pathlib import Path
 
-from pixelup import __version__
 from pixelup.errors import ErrorCode, PixelupError
-from pixelup.formats import SIDECAR_FORMAT_VERSION
+from pixelup.formats import SIDECAR_FORMAT, json_text
 from pixelup.i18n.localizer import english
 from pixelup.i18n.message import Message
 from pixelup.imaging import _temp_output_path, temp_file_guard
@@ -27,12 +25,7 @@ def write_sidecar(
     should_cancel: Callable[[], bool] | None = None,
 ) -> Path:
     sidecar_path = output_path.with_suffix(".json")
-    payload = {
-        "format_version": SIDECAR_FORMAT_VERSION,
-        "app": {
-            "name": "pixelup",
-            "version": __version__,
-        },
+    content = {
         "created_at_utc": utc_now_iso_ms(),
         "status": "success",
         "input": {
@@ -78,7 +71,7 @@ def write_sidecar(
     claim = None
     try:
         with temp_file_guard(stage_path) as (file, final_mode):
-            file.write((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+            file.write(json_text(SIDECAR_FORMAT, content).encode("utf-8"))
             file.flush()
             os.fsync(file.fileno())
             if os.name != "nt":

@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from pixelup import __version__
 from pixelup import sidecar as sidecar_module
 from pixelup.errors import PixelupError
+from pixelup.formats import SIDECAR_FORMAT, json_content
 from pixelup.paths import OutputFormat
 from pixelup.sidecar import write_sidecar
 from pixelup.upscale import UpscaleOptions
@@ -69,9 +71,13 @@ def test_sidecar_omits_private_paths(tmp_path: Path) -> None:
     assert str(tmp_path) not in serialized
 
 
-def test_sidecar_carries_its_format_version(tmp_path: Path) -> None:
-    _path, payload = _write_sample_sidecar(tmp_path)
-    assert payload["format_version"] == 1
+def test_sidecar_starts_with_its_identity_header(tmp_path: Path) -> None:
+    path, payload = _write_sample_sidecar(tmp_path)
+    assert list(payload)[:2] == ["format", "writer"]
+    assert payload["format"] == {"owner": "pixelup", "kind": "sidecar", "version": 1}
+    assert payload["writer"] == {"name": "pixelup", "version": __version__}
+    assert not {"format_version", "app"} & payload.keys()
+    assert json_content(payload, SIDECAR_FORMAT, path)["status"] == "success"
 
 
 def test_sidecar_records_the_input_facts_read_when_the_job_started(tmp_path: Path) -> None:
