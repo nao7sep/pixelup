@@ -23,6 +23,10 @@ Two absolute musts drive every line below:
   (the DB is locked, the disk is full, an insert throws) is logged once at ``warn``
   and recording stays disabled for this session.
 - It logs only failures. A successful record logs nothing.
+
+A store the launch check could not read is switched off before the first save
+(:func:`switch_off_backups`): it is never opened, so it stays byte-identical, and
+the window says so once (store-recovery-conventions).
 """
 
 from __future__ import annotations
@@ -130,11 +134,12 @@ class _Recorder:
         self._connection: sqlite3.Connection | None = None
         self._session: str | None = None
         self._disabled = False
+        self.off = False
 
     def submit(self, path: str, data: bytes) -> None:
         failure: Exception | None = None
         with self._condition:
-            if self._disabled:
+            if self._disabled or self.off:
                 return
             try:
                 self._pending.append((path, data))
@@ -186,6 +191,7 @@ class _Recorder:
             self._thread = None
             self._session = None
             self._disabled = False
+            self.off = False
 
     def _run(self) -> None:
         while True:
@@ -256,6 +262,16 @@ def record(absolute_path: Path, data: bytes) -> None:
     the file). It never raises and never waits on the store.
     """
     _recorder.submit(str(absolute_path), data)
+
+
+def switch_off_backups() -> None:
+    """Keep the backup store closed for this launch: the launch check could not read it."""
+    _recorder.off = True
+
+
+def backups_off() -> bool:
+    """Whether the backup store is off for this launch."""
+    return _recorder.off
 
 
 def drain_backups() -> None:

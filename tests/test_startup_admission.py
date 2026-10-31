@@ -235,12 +235,17 @@ def test_native_admission_failure_keeps_the_normal_shell_unmounted(
     # Opening a directory as the claim file fails natively on macOS and Windows.
     # It must reach the safe existing startup surface, with no log/window writer.
     (tmp_path / "writer.lock").mkdir()
-    monkeypatch.setattr(gui, "configure_session_logging", lambda: pytest.fail("opened logging"))
+    monkeypatch.setattr(
+        gui, "configure_session_logging", lambda **_: pytest.fail("opened logging")
+    )
     monkeypatch.setattr(gui, "MainWindow", lambda **_: pytest.fail("opened normal window"))
     shown = []
     monkeypatch.setattr(gui, "show_startup_failure", lambda detail, hint: shown.append(detail))
     assert gui.main() == 1
-    assert shown == [Message("startup.storageUnreadable")]
+    # The failure names the file it could not use.
+    assert shown == [
+        Message.of("startup.storageUnreadable", path=str(tmp_path.resolve() / "writer.lock"))
+    ]
 
 
 def test_native_contention_is_structured_and_keeps_its_cause(tmp_path, launch):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta, timezone
 
-from pixelup.timestamps import to_utc_iso_ms, utc_now_iso_ms, utc_now_stamp, utc_stamp
+from pixelup.timestamps import to_utc_iso_ms, utc_now_iso_ms, utc_stamp
 
 CANONICAL = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
 CANONICAL_STAMP = re.compile(r"\d{8}-\d{6}-utc")
@@ -51,6 +51,3 @@ def test_utc_stamp_treats_naive_as_utc() -> None:
     moment = datetime(2026, 5, 7, 5, 43, 21)
     assert utc_stamp(moment) == "20260507-054321-utc"
 
-
-def test_utc_now_stamp_matches_canonical_format() -> None:
-    assert CANONICAL_STAMP.fullmatch(utc_now_stamp())

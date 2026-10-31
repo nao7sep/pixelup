@@ -131,6 +131,14 @@ def _open_records(database: Path) -> sqlite3.Connection:
     return open_sqlite_store(database, RECORDS_FORMAT, _SCHEMA)
 
 
+class RecordsOffError(Exception):
+    """The records database is off for this launch: the launch check could not read it."""
+
+    def __init__(self, database: Path) -> None:
+        super().__init__(f"{database} could not be read; records are off for this launch")
+        self.database = database
+
+
 @dataclass(frozen=True, slots=True)
 class _Read:
     """A read of the records database, queued behind the lines before it."""
@@ -152,9 +160,15 @@ class RecordsHandler(logging.Handler):
     (rejected-mechanisms-conventions, Synchronous stores on the interface thread).
     """
 
-    def __init__(self, database: Path, *, session: str, fallback: Path) -> None:
+    def __init__(
+        self, database: Path, *, session: str, fallback: Path, off: bool = False
+    ) -> None:
         super().__init__()
         self._database = database
+        # A records database the launch check could not read stays untouched and
+        # off for the session: every line goes to the fallback file and every read
+        # fails, without opening it again (store-recovery-conventions).
+        self.off = off
         self.session = session
         self._fallback = fallback
         self._connection: sqlite3.Connection | None = None
@@ -227,6 +241,9 @@ class RecordsHandler(logging.Handler):
                     self._condition.notify_all()
 
     def _write(self, entry: dict[str, Any]) -> None:
+        if self.off:
+            self._fall_back(entry, RecordsOffError(self._database))
+            return
         try:
             self._insert(entry)
         except Exception as exc:  # noqa: BLE001 - logging never crashes the app.
@@ -243,6 +260,8 @@ class RecordsHandler(logging.Handler):
 
     def _read(self, read: _Read) -> None:
         try:
+            if self.off:
+                raise RecordsOffError(self._database)
             if self._connection is None:
                 self._connection = _open_records(self._database)
             result = read.run(self._connection)
@@ -382,6 +401,12 @@ def records_store() -> RecordsHandler | None:
     return _records_handler()
 
 
+def records_off() -> bool:
+    """Whether the records database is off for this launch."""
+    handler = _records_handler()
+    return handler is not None and handler.off
+
+
 def current_session() -> str | None:
     """This launch's session, as every record it writes carries, once logging is set up."""
     handler = _records_handler()
@@ -403,10 +428,12 @@ def debug_enabled(env: Mapping[str, str] | None = None) -> bool:
     return source.get(DEBUG_ENV, "").strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-def configure_session_logging() -> Path:
+def configure_session_logging(*, records_off: bool = False) -> Path:
     """Start this launch's session and route the app logger to the records database.
 
-    Debug is enabled only when PIXELUP_DEBUG is set. Returns the database path.
+    With ``records_off`` (the launch check could not read the database) every line
+    goes to the fallback file and the database is never opened. Debug is enabled
+    only when PIXELUP_DEBUG is set. Returns the database path.
     """
     started = datetime.now(UTC)
     root = resolve_state_dir()
@@ -424,6 +451,7 @@ def configure_session_logging() -> Path:
             database,
             session=to_utc_iso_ms(started),
             fallback=root / "logs" / f"{utc_stamp(started)}.log",
+            off=records_off,
         )
     )
 

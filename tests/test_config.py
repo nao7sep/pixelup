@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import stat
 import sys
 from pathlib import Path
@@ -10,7 +9,6 @@ import pytest
 from pixelup import config as config_module
 from pixelup.config import (
     RuntimeDirs,
-    quarantine_corrupt_file,
     resolve_models_dir,
     resolve_runtime_dirs,
     resolve_state_dir,
@@ -248,63 +246,6 @@ def test_pixelup_home_with_an_empty_or_absent_reference_is_a_reported_error(
     with pytest.raises(PixelupError) as exc_info:
         resolve_state_dir()
     assert exc_info.value.code == ErrorCode.OUTPUT_UNWRITABLE
-
-
-_QUARANTINE_NAME = re.compile(r"^config-\d{8}-\d{6}-utc\.invalid$")
-
-
-def test_quarantine_corrupt_file_moves_bytes_to_invalid_sibling(tmp_path: Path) -> None:
-    corrupt = tmp_path / "config.json"
-    corrupt.write_text("{ not valid json", encoding="utf-8")
-
-    quarantined = quarantine_corrupt_file(corrupt)
-
-    # The original is gone from its place; its bytes live on under the .invalid name.
-    assert not corrupt.exists()
-    assert quarantined.parent == tmp_path
-    assert quarantined.read_text(encoding="utf-8") == "{ not valid json"
-    # The name follows <stem>-<utc>.invalid: the role extension replaces .json (so a
-    # *.json scan can never pick the debris up), and the discriminator is the compact
-    # second UTC stamp.
-    assert _QUARANTINE_NAME.match(quarantined.name)
-    assert quarantined.suffix == ".invalid"
-
-
-def test_quarantine_never_replaces_an_earlier_quarantine(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Two corrupt versions quarantined in one second clash on the name: the
-    # second fails like any read failure and leaves
-    # both the earlier quarantine and its own original in place.
-    monkeypatch.setattr(config_module, "utc_now_stamp", lambda: "20260705-010203-utc")
-
-    first = tmp_path / "config.json"
-    first.write_text("first corrupt", encoding="utf-8")
-    quarantined_first = quarantine_corrupt_file(first)
-
-    second = tmp_path / "config.json"
-    second.write_text("second corrupt", encoding="utf-8")
-    with pytest.raises(FileExistsError):
-        quarantine_corrupt_file(second)
-
-    assert quarantined_first.read_text(encoding="utf-8") == "first corrupt"
-    assert second.read_text(encoding="utf-8") == "second corrupt"
-
-
-def test_a_failed_quarantine_move_releases_its_claimed_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    corrupt = tmp_path / "config.json"
-    corrupt.write_text("corrupt", encoding="utf-8")
-
-    def fail(_source: object, _target: object) -> None:
-        raise OSError("rename failed")
-
-    monkeypatch.setattr(config_module.os, "replace", fail)
-    with pytest.raises(OSError, match="rename failed"):
-        quarantine_corrupt_file(corrupt)
-
-    assert [item.name for item in tmp_path.iterdir()] == ["config.json"]
 
 
 def test_saved_model_folder_is_literal_home_relative_and_never_resolves_disk(

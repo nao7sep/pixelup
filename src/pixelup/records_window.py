@@ -83,7 +83,7 @@ from pixelup.records import (
     read_sessions,
     split_fields,
 )
-from pixelup.session_log import RecordsHandler, current_session, log
+from pixelup.session_log import RecordsHandler, RecordsOffError, current_session, log
 from pixelup.theme import accent_colours, danger_colours, surfaces, warning_text
 from pixelup.time_zones import display_zone
 from pixelup.ui_common import REGULAR_SPACING, bind_close_shortcut, use_regular_spacing
@@ -219,9 +219,12 @@ def stored_signal() -> SignalInstance:
 
 def load_failure_note(error: object) -> Message:
     """What the list says when the records cannot be read: records from a newer
-    PixelUp are named as such, since reading them again will not help."""
+    PixelUp, and records switched off for the launch, are named as such, since
+    reading them again will not help."""
     if isinstance(error, dict) and error.get("newer_format"):
         return Message("records.newerFormat")
+    if isinstance(error, dict) and error.get("records_off"):
+        return Message("records.off")
     return Message("records.loadFailed")
 
 
@@ -231,6 +234,7 @@ def _read_failure(error: Exception) -> dict[str, object]:
         "message": str(error),
         "traceback": "".join(traceback.format_exception(error)).rstrip(),
         "newer_format": isinstance(error, NewerFormatError),
+        "records_off": isinstance(error, RecordsOffError),
     }
 
 

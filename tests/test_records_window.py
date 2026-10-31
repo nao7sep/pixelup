@@ -620,6 +620,7 @@ def test_a_load_failure_names_records_from_a_newer_pixelup() -> None:
         "records.loadFailed"
     )
     assert records_window.load_failure_note(None) == Message("records.loadFailed")
+    assert records_window.load_failure_note({"records_off": True}) == Message("records.off")
 
 
 def test_a_saved_width_is_kept_within_the_list_panes_bounds() -> None:

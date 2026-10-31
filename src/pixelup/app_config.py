@@ -7,20 +7,20 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from pixelup.config import quarantine_corrupt_file, resolve_state_dir, write_managed_text
+from pixelup.config import resolve_state_dir, write_managed_text
 from pixelup.devices import DEVICE_VALUES
-from pixelup.errors import ErrorCode, PixelupError
 from pixelup.fonts import DEFAULT_UI_FONT_FAMILY
 from pixelup.formats import (
     CONFIG_FORMAT,
     PARAMETERS_FORMAT,
     Format,
     NewerFormatError,
+    RefusedFile,
+    RefusedFilesError,
     json_content,
     json_text,
 )
 from pixelup.i18n.languages import SYSTEM, is_preference
-from pixelup.i18n.message import Message
 from pixelup.jobs import (
     JobSettings,
     job_settings_log_payload,
@@ -104,15 +104,13 @@ class SettingsFile:
     in it this build does not use: sets that failed validation and keys it does not
     know. Their stored values are written back unchanged until the user saves that
     same set, so loading alone never erases a saved setting (config-sets-conventions,
-    developer decision). ``newer_format`` is the version of a file a newer PixelUp
-    wrote; such a file is never written.
+    developer decision).
     """
 
     path: Path
     exists: bool = False
     data: Mapping[str, Any] = field(default_factory=dict)
     unapplied: frozenset[str] = frozenset()
-    newer_format: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,18 +140,13 @@ class ConfigLoadResult:
     """The outcome of loading the settings files: the settings, the file state saves
     start from, and what the startup shell tells the user.
 
-    ``quarantined`` holds the path each unreadable original was moved aside to
-    (``<stem>-<utc>.invalid``). A file's ``newer_format`` is set when a newer
-    PixelUp wrote it. Either way that file's sets fall back to built-ins in memory.
     ``rejected`` names the sets whose stored values failed validation and run on
     their built-ins while their stored values stay in their file. The startup shell
-    surfaces a non-fatal notice for each case; the decision stays here, out of the
-    GUI.
+    surfaces a non-fatal notice for them; the decision stays here, out of the GUI.
     """
 
     config: AppConfig
     files: SettingsFiles = field(default_factory=SettingsFiles.absent)
-    quarantined: tuple[Path, ...] = ()
     rejected: tuple[str, ...] = ()
 
 
@@ -164,18 +157,28 @@ class ConfigSaveResult:
 
 
 def load_app_config_result(root: Path | None = None) -> ConfigLoadResult:
-    """Load effective sets from both files under ``root`` (the storage root by default)."""
+    """Load effective sets from both files under ``root`` (the storage root by default).
+
+    Raises ``RefusedFilesError`` naming each file that is unreadable or that a newer
+    PixelUp wrote: settings stop the launch, and neither file is changed
+    (store-recovery-conventions, What a refused file does).
+    """
     files = SettingsFiles.absent(root)
-    config_load = _load_settings_file(files.config.path, _CONFIG_STORE)
-    parameters_load = _load_settings_file(files.parameters.path, _PARAMETERS_STORE)
+    loads: list[_FileLoad] = []
+    refused: list[RefusedFile] = []
+    for file, store in ((files.config, _CONFIG_STORE), (files.parameters, _PARAMETERS_STORE)):
+        try:
+            loads.append(_load_settings_file(file.path, store))
+        except NewerFormatError:
+            refused.append(RefusedFile(file.path, newer=True))
+        except ValueError:
+            refused.append(RefusedFile(file.path, newer=False))
+    if refused:
+        raise RefusedFilesError(tuple(refused))
+    config_load, parameters_load = loads
     return ConfigLoadResult(
         AppConfig(**config_load.sets, **parameters_load.sets),
         SettingsFiles(config_load.file, parameters_load.file),
-        quarantined=tuple(
-            load.quarantined_to
-            for load in (config_load, parameters_load)
-            if load.quarantined_to is not None
-        ),
         rejected=config_load.rejected + parameters_load.rejected,
     )
 
@@ -189,25 +192,12 @@ def save_app_config(
 
     Each file is written only when what it would hold changed, so a Settings save
     leaves ``parameters.json`` alone and a Parameters save or reset leaves
-    ``config.json`` alone. A file a newer PixelUp wrote is never written: a save
-    that changes one of its sets is refused before either file is written, and
-    any other save leaves it as it is.
+    ``config.json`` alone. Both files passed their header check at launch, which a
+    refused file stops, so every file written here is one this build reads.
     """
     stores = ((files.config, _CONFIG_STORE), (files.parameters, _PARAMETERS_STORE))
-    for file, store in stores:
-        if file.newer_format is not None and any(
-            getattr(candidate, key) != getattr(previous, key) for key in store.decoders
-        ):
-            raise PixelupError(
-                ErrorCode.STORE_NEWER_FORMAT,
-                Message("error.configNewer"),
-                details={"path": str(file.path), "format_version": file.newer_format},
-            )
     saved = []
     for file, store in stores:
-        if file.newer_format is not None:
-            saved.append(file)
-            continue
         data, kept = _file_data(candidate, previous, file, store)
         if data != file.data:
             write_managed_text(file.path, json_text(store.format, data))
@@ -225,28 +215,21 @@ def save_app_config(
 class _FileLoad:
     file: SettingsFile
     sets: dict[str, Any] = field(default_factory=dict)
-    quarantined_to: Path | None = None
     rejected: tuple[str, ...] = ()
 
 
 def _load_settings_file(path: Path, store: _Store) -> _FileLoad:
-    """Load one file's sets, preserving unreadable JSON through quarantine.
+    """Load one file's sets.
 
-    Missing files and quarantined files both leave the store absent. A malformed
-    set falls back on its own; it does not cost the user the other settings, and
-    its stored value is kept. Access failures propagate without moving or
-    overwriting the file.
+    A missing file leaves the store absent. Raises ``NewerFormatError`` for a file
+    a newer PixelUp wrote and ``ValueError`` for one that cannot be read; access
+    failures propagate too, and none of them touches the file. A malformed set
+    falls back on its own; it does not cost the user the other settings, and its
+    stored value is kept.
     """
     if not path.exists():
         return _FileLoad(SettingsFile(path))
-    try:
-        data = json_content(json.loads(path.read_text(encoding="utf-8")), store.format, path)
-    except NewerFormatError as newer:
-        # Intact data this build cannot read: left exactly in place, and never
-        # written (store-recovery-conventions).
-        return _FileLoad(SettingsFile(path, exists=True, newer_format=newer.version))
-    except ValueError:
-        return _FileLoad(SettingsFile(path), quarantined_to=quarantine_corrupt_file(path))
+    data = json_content(json.loads(path.read_text(encoding="utf-8")), store.format, path)
     sets, rejected = _decode_sets(data, path, store.decoders)
     unknown = {key for key in data if key not in store.decoders}
     return _FileLoad(

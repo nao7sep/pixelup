@@ -21,7 +21,6 @@ class ErrorCode(StrEnum):
     INVALID_ARGUMENT = "invalid_argument"
     INTERNAL_ERROR = "internal_error"
     JOB_CANCELLED = "job_cancelled"
-    STORE_NEWER_FORMAT = "store_newer_format"
     APP_ALREADY_RUNNING = "app_already_running"
 
 

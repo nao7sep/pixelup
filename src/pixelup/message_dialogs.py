@@ -55,16 +55,12 @@ def _show_message(parent: QWidget | None, message: Message) -> None:
     MessageDialog("app.name", message, parent=parent).exec()
 
 
-def warn_config_reset(parent: QWidget | None, quarantined_to: Path) -> None:
-    _show_message(parent, Message.of("notice.configReset", path=str(quarantined_to)))
-
-
 def warn_config_rejected(parent: QWidget | None, settings: tuple[Message, ...], path: Path) -> None:
     _show_message(parent, Message.of("notice.configRejected", settings=settings, path=str(path)))
 
 
-def warn_config_newer(parent: QWidget | None, path: Path) -> None:
-    _show_message(parent, Message.of("notice.configNewer", path=str(path)))
+def warn_side_store_off(parent: QWidget | None, key: str, path: Path) -> None:
+    _show_message(parent, Message.of(key, path=str(path)))
 
 
 def warn_jobs_stopping(parent: QWidget | None) -> None:

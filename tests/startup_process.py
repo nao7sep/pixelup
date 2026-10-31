@@ -54,7 +54,7 @@ class ProbeWindow:
 
     _os_close_accepted = False
 
-    def __init__(self, *, runtime_dirs=None) -> None:
+    def __init__(self, *, runtime_dirs=None, settings=None) -> None:
         emit("writer_entered")
         self.runtime_dirs = runtime_dirs or resolve_runtime_dirs()
         loaded = load_app_config_result()

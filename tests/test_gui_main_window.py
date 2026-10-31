@@ -2095,6 +2095,7 @@ def test_main_surfaces_startup_storage_failure(
 def test_main_does_not_surface_an_unexpected_startup_exception(
     qapp: QApplication,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     shown: list[tuple[Message, Message | None]] = []
     diagnostic_sentinel = "EACCES Error invoking remote method /private/var/tmp/pixelup"
@@ -2107,8 +2108,10 @@ def test_main_does_not_surface_an_unexpected_startup_exception(
         lambda detail, hint: shown.append((detail, hint)),
     )
 
+    monkeypatch.setenv("PIXELUP_DATA_DIR", str(tmp_path))
     assert gui.main() == 1
-    assert shown == [(Message("startup.storageUnreadable"), None)]
+    # No file in the error: the failure names the data folder.
+    assert shown == [(Message.of("startup.storageUnreadable", path=str(tmp_path.resolve())), None)]
     assert diagnostic_sentinel not in english().of(shown[0][0])
 
 
@@ -2248,10 +2251,6 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
     notices: list[object] = []
     monkeypatch.setattr(
-        "pixelup.gui.warn_config_reset",
-        lambda _parent, _path: notices.append("reset"),
-    )
-    monkeypatch.setattr(
         "pixelup.gui.warn_config_rejected",
         lambda _parent, settings, path: notices.append((settings, path)),
     )
@@ -2259,7 +2258,6 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
 
     window = MainWindow()
     try:
-        assert window._config_quarantined == ()
         assert window.tile.currentIndex() != -1, "the combo blanked on an unknown tile"
         assert window.tile.currentData() is not None
         assert window.tile.currentData() == JobSettings().tile

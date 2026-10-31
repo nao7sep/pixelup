@@ -9,7 +9,7 @@ import pixelup.message_dialogs as message_dialogs
 from pixelup.message_dialogs import MessageDialog, StartupFailureDialog
 
 
-def test_config_reset_uses_an_icon_free_authored_dialog(
+def test_side_store_notice_uses_an_icon_free_authored_dialog(
     qapp: QApplication,
     monkeypatch,
 ) -> None:
@@ -20,8 +20,8 @@ def test_config_reset_uses_an_icon_free_authored_dialog(
         lambda dialog: shown.append(dialog),
     )
 
-    quarantined = Path.home() / ".pixelup" / "config-20261006-011652-123-utc.invalid"
-    message_dialogs.warn_config_reset(None, quarantined)
+    store = Path.home() / ".pixelup" / "records.sqlite3"
+    message_dialogs.warn_side_store_off(None, "notice.recordsOff", store)
 
     assert len(shown) == 1
     dialog = shown[0]
@@ -30,8 +30,9 @@ def test_config_reset_uses_an_icon_free_authored_dialog(
         assert dialog.windowTitle() == "PixelUp"
         assert dialog.findChildren(QMessageBox) == []
         assert text == (
-            "Your settings file was unreadable and has been reset to defaults.\n\n"
-            f"The unreadable file was kept as:\n{quarantined}"
+            "PixelUp can't read its records file, so Records is off until PixelUp restarts."
+            f" The file is left as it is:\n{store}\n\n"
+            "Repair or restore the file, or move it away to start fresh records."
         )
     finally:
         dialog.deleteLater()
@@ -101,8 +102,8 @@ def test_startup_failure_caps_only_the_body_for_long_copy(
 def test_recovery_path_is_always_plain_text(qapp: QApplication) -> None:
     from pixelup.i18n.message import Message
 
-    path = "<b>settings & capture</b>.invalid"
-    dialog = MessageDialog("app.name", Message.of("notice.configReset", path=path))
+    path = "<b>settings & capture</b>.sqlite3"
+    dialog = MessageDialog("app.name", Message.of("notice.recordsOff", path=path))
     try:
         assert dialog.message_label.textFormat() == Qt.TextFormat.PlainText
         assert path in dialog.message_label.text()

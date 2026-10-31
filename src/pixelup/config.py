@@ -12,7 +12,6 @@ from pathlib import Path
 
 from pixelup.errors import ErrorCode, PixelupError
 from pixelup.i18n.message import Message
-from pixelup.timestamps import utc_now_stamp
 
 APP_NAME = "pixelup"
 HOME_ENV = "PIXELUP_DATA_DIR"
@@ -195,40 +194,6 @@ def _tighten_root_permissions(root: Path) -> None:
             hint=Message.of("error.hintHomeWritableLocation", variable=HOME_ENV),
             details={"path": str(root), "reason": str(exc)},
         ) from exc
-
-
-def quarantine_corrupt_file(path: Path) -> Path:
-    """Move a corrupt managed file aside to ``<stem>-<utc>.invalid`` and return the new path.
-
-    The one place PixelUp quarantines an unreadable managed file. The storage-path
-    conventions forbid silently discarding a corrupt managed file: the load path may
-    only halt or *quarantine-then-reset*, and either way the original bytes are
-    preserved. This is that quarantine step, used by the settings files' load path,
-    which then runs on the built-ins in memory and writes no replacement file.
-
-    The quarantine name follows the derived-filename grammar
-    ``<stem>-<discriminator>.<role-extension>``: the discriminator is a second UTC
-    stamp because the moment of quarantine carries meaning, and the role extension
-    is ``.invalid`` — the file *is* now an invalid cast-off, so its original
-    extension is replaced rather than appended to, keeping the debris out of any
-    ``*.json`` scan. The name is claimed with exclusive creation before the move, so
-    an earlier quarantine is never replaced: another corrupt file arriving in the
-    same second clashes and fails like any other read failure, which
-    leaves the original in place. The move is an atomic same-directory rename onto
-    that claimed name, so no interruption can leave a half-copied ``.invalid`` file
-    next to a still-corrupt original.
-    """
-    target = path.with_name(f"{path.stem}-{utc_now_stamp()}.invalid")
-    os.close(os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
-    # not recorded: this is a move-aside of an already-unreadable managed file, not a
-    # managed-text write — no new content is produced here, and the corrupt bytes are
-    # not a version to preserve in the history (data-backup-conventions).
-    try:
-        os.replace(path, target)
-    except BaseException:
-        target.unlink(missing_ok=True)
-        raise
-    return target
 
 
 def write_managed_text(path: Path, text: str) -> None:

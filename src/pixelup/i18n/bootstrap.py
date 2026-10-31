@@ -76,10 +76,10 @@ def read_apple_languages() -> tuple[str, ...]:
 def saved_preference() -> str:
     """The language preference in config.json, or System when there is none to read.
 
-    The read is deliberately its own, and forgiving: the real loader quarantines a
-    file it cannot parse, and that decision belongs to the window's startup path,
-    not to a language lookup. A file that cannot be read here means System, and
-    a startup failure then speaks the computer's language, as the
+    The read is deliberately its own, and forgiving: the launch check refuses a
+    file it cannot use, and that decision belongs to the startup path, not to a
+    language lookup. A file that cannot be read here means System, and the
+    startup failure then speaks the computer's language, as the
     localization-conventions ask of it.
     """
     try:
@@ -96,8 +96,8 @@ def saved_preference() -> str:
     try:
         content = json_content(data, CONFIG_FORMAT, path)
     except (ValueError, NewerFormatError):
-        # The window's loader leaves an unreadable or newer file on the built-ins,
-        # System among them.
+        # The launch check stops on an unreadable or newer file, and its message
+        # speaks the computer's language.
         return languages.SYSTEM
     value = content.get("language")
     return value if languages.is_preference(value) else languages.SYSTEM

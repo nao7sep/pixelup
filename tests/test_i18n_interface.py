@@ -38,11 +38,13 @@ from PySide6.QtWidgets import (
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import AppConfig, ConfigLoadResult
 from pixelup.fonts import system_ui_font_family
+from pixelup.formats import RefusedFile
 from pixelup.gui import MainWindow
 from pixelup.i18n import localizer
 from pixelup.i18n.catalogue import locale_file
 from pixelup.i18n.languages import LANGUAGES, TAGS
 from pixelup.i18n.message import Message
+from pixelup.launch_files import refused_files_message
 from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.message_dialogs import MessageDialog, StartupFailureDialog
 from pixelup.model_management import GENERAL_DENOISE_MODEL, UPSCALE_MODELS
@@ -65,10 +67,12 @@ _KEY_SHAPE = re.compile(
 
 # Words that read the same in every language: names, standards, file formats,
 # key tokens, and the languages' own names in the picker.
-# A path is shown as it is: the settings file a recovery notice names.
-_QUARANTINED_CONFIG = "config-20261006-011652-123-utc.invalid"
+# A path is shown as it is: the files a launch stop or a store notice names.
+_REFUSED_CONFIG = "/data/config.json"
+_BACKUPS_FILE = "/data/backups.sqlite3"
 _LITERAL_WORDS = (
-    _QUARANTINED_CONFIG,
+    _REFUSED_CONFIG,
+    _BACKUPS_FILE,
     *sorted(UPSCALE_MODELS, key=len, reverse=True),
     "PIXELUP_DATA_DIR",
     "PixelUp",
@@ -279,7 +283,16 @@ def _dialogs(manager: ModelManager) -> list[QDialog]:
         QuitConfirmDialog(3),
         QuitSaveFailedDialog(),
         DiscardChangesDialog(),
-        MessageDialog("app.name", Message.of("notice.configReset", path=_QUARANTINED_CONFIG)),
+        MessageDialog("app.name", Message.of("notice.backupsOff", path=_BACKUPS_FILE)),
+        StartupFailureDialog(
+            refused_files_message(
+                (
+                    RefusedFile(Path(_REFUSED_CONFIG), newer=True),
+                    RefusedFile(Path(_REFUSED_CONFIG), newer=False),
+                )
+            ),
+            Message("startup.refusedHint"),
+        ),
         StartupFailureDialog(
             Message("error.storageCreateFailed"),
             Message.of("error.hintHomeWritableLocation", variable="PIXELUP_DATA_DIR"),

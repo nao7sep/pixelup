@@ -9,7 +9,7 @@ from pixelup.app_config import AppConfig, load_app_config_result
 
 
 def load_app_config(root: Path | None = None) -> AppConfig:
-    """Use the real load boundary, including preservation and quarantine behavior."""
+    """Use the real load boundary, which refuses an unreadable or newer file."""
     return load_app_config_result(root).config
 
 

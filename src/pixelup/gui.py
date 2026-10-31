@@ -74,16 +74,26 @@ from pixelup import __version__
 from pixelup.about_dialog import AboutDialog
 from pixelup.app_config import (
     AppConfig,
+    ConfigLoadResult,
     config_log_payload,
     load_app_config_result,
     save_app_config,
 )
-from pixelup.backup_store import drain_backups
-from pixelup.config import MODELS_ENV, RuntimeDirs, resolve_runtime_dirs, saved_models_dir
+from pixelup.backup_store import STORE_FILE_NAME as BACKUPS_FILE_NAME
+from pixelup.backup_store import backups_off, drain_backups, switch_off_backups
+from pixelup.config import (
+    HOME_ENV,
+    MODELS_ENV,
+    RuntimeDirs,
+    resolve_runtime_dirs,
+    resolve_state_dir,
+    saved_models_dir,
+)
 from pixelup.config_save import ConfigSave, ConfigSaveOutcome
 from pixelup.devices import DEVICE_CHOICES, resolve_device
 from pixelup.errors import ErrorCode, PixelupError, user_text
 from pixelup.fonts import apply_ui_font
+from pixelup.formats import RefusedFilesError
 from pixelup.i18n import localizer
 from pixelup.i18n.bootstrap import settle_language
 from pixelup.i18n.localized import localize, unlocalize
@@ -100,13 +110,13 @@ from pixelup.jobs import (
     job_status_summary,
     retry_failed_jobs,
 )
+from pixelup.launch_files import check_launch_files, refused_files_message
 from pixelup.managed_models_dialog import ManagedModelsDialog
 from pixelup.message_dialogs import (
     show_startup_failure,
-    warn_config_newer,
     warn_config_rejected,
-    warn_config_reset,
     warn_jobs_stopping,
+    warn_side_store_off,
 )
 from pixelup.model_management import (
     UPSCALE_MODELS,
@@ -135,8 +145,10 @@ from pixelup.records_window import RecordsReads, RecordsWindow, stored_signal
 from pixelup.runner import JobRunner
 from pixelup.session_end import os_session_ending
 from pixelup.session_log import (
+    RECORDS_FILE_NAME,
     configure_session_logging,
     log,
+    records_off,
     records_store,
     set_stored_listener,
 )
@@ -458,14 +470,18 @@ class ImagePreview(QLabel):
 class MainWindow(QMainWindow):
     _GEOMETRY_KEY = "mainWindow/geometry"
 
-    def __init__(self, *, runtime_dirs: RuntimeDirs | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        runtime_dirs: RuntimeDirs | None = None,
+        settings: ConfigLoadResult | None = None,
+    ) -> None:
         super().__init__()
-        # A corrupt settings file is quarantined, a newer PixelUp's is left alone, and
-        # a set that fails validation keeps its stored value while it runs on its
-        # built-in; either way the app starts rather than failing (store-recovery-
-        # conventions), and the notices below tell the user. They are surfaced only
-        # after the window is built, so the message box has a real parent.
-        load_result = load_app_config_result()
+        # The launch check passes the settings it read; a settings file it refused
+        # stopped the launch before this window. A set that fails validation keeps
+        # its stored value while it runs on its built-in, and the notice below tells
+        # the user, once the window is built so the message box has a real parent.
+        load_result = settings if settings is not None else load_app_config_result()
         self.config = load_result.config
         set_display_zone(self.config.display_zone)
         # What config.json and parameters.json hold; every save writes from them
@@ -479,10 +495,6 @@ class MainWindow(QMainWindow):
         self._unsaved_config_changes: dict[str, object] = {}
         self._parameter_edit_generation = 0
         self._saving_parameter_generation = 0
-        self._config_quarantined = load_result.quarantined
-        self._config_newer = tuple(
-            file for file in load_result.files if file.newer_format is not None
-        )
         self._config_rejected = load_result.rejected
         self._opens_pending = 0
         self._open_results = _Loaded(self)
@@ -602,22 +614,11 @@ class MainWindow(QMainWindow):
             paths=[str(file.path) for file in self._settings_files],
             values=config_log_payload(self.config),
         )
-        for quarantined_to in self._config_quarantined:
-            log.warning("config.corrupt_reset", quarantined_to=str(quarantined_to))
-        if self._config_quarantined:
-            # Deferred to the event loop so the notice appears over the shown window
-            # (build_app calls window.show() after __init__ returns) instead of
-            # blocking construction ahead of the first paint. Non-fatal: the app is
-            # already running on the built-ins; this only tells the user.
-            QTimer.singleShot(0, self._notify_config_reset)
-        for file in self._config_newer:
-            log.warning(
-                "config.newer_format",
-                path=str(file.path),
-                format_version=file.newer_format,
-            )
-        if self._config_newer:
-            QTimer.singleShot(0, self._notify_config_newer)
+        # Deferred to the event loop so each notice appears over the shown window
+        # (build_app calls window.show() after __init__ returns) instead of blocking
+        # construction ahead of the first paint.
+        if records_off() or backups_off():
+            QTimer.singleShot(0, self._notify_side_stores_off)
         if self._config_rejected:
             QTimer.singleShot(0, self._notify_config_rejected)
 
@@ -641,13 +642,14 @@ class MainWindow(QMainWindow):
         self.setLocale(QLocale())
         self._refresh_layout_metrics()
 
-    def _notify_config_reset(self) -> None:
-        for quarantined_to in self._config_quarantined:
-            warn_config_reset(self, quarantined_to)
-
-    def _notify_config_newer(self) -> None:
-        for file in self._config_newer:
-            warn_config_newer(self, file.path)
+    def _notify_side_stores_off(self) -> None:
+        # An unreadable records or backup database stays untouched and off for the
+        # launch, and the user is told once (store-recovery-conventions).
+        root = resolve_state_dir()
+        if records_off():
+            warn_side_store_off(self, "notice.recordsOff", root / RECORDS_FILE_NAME)
+        if backups_off():
+            warn_side_store_off(self, "notice.backupsOff", root / BACKUPS_FILE_NAME)
 
     def _notify_config_rejected(self) -> None:
         for file in self._settings_files:
@@ -2745,8 +2747,13 @@ def build_app(
     # Admission precedes every mutable store and stays held until process exit,
     # beyond Qt/worker/log shutdown.
     admit_data_root()
+    # Every file the launch opens is read before anything is written; one that
+    # stops the launch raises here, naming them all.
+    launch = check_launch_files()
     register_image_plugins()
-    log_file = configure_session_logging()
+    log_file = configure_session_logging(records_off=launch.records_off)
+    if launch.backups_off:
+        switch_off_backups()
     app = QApplication.instance() or QApplication(argv)
     localizer.sync_qt_translation()
     if "Fusion" in QStyleFactory.keys():
@@ -2768,7 +2775,7 @@ def build_app(
         icon_path = Path(__file__).parent / "resources" / "icon-win.png"
         if icon_path.is_file():
             app.setWindowIcon(QIcon(str(icon_path)))
-    window = MainWindow(runtime_dirs=runtime_dirs)
+    window = MainWindow(runtime_dirs=runtime_dirs, settings=launch.settings)
     log.info(
         "app.started",
         version=__version__,
@@ -2816,6 +2823,21 @@ def _selftest() -> int:
     return 0
 
 
+def _startup_failure_text(exc: Exception) -> tuple[Message, Message | None]:
+    """What the startup failure window says, naming the file or folder involved."""
+    if isinstance(exc, RefusedFilesError):
+        return refused_files_message(exc.files), Message("startup.refusedHint")
+    if isinstance(exc, PixelupError) and isinstance(exc.message, Message):
+        return exc.message, exc.hint
+    path = getattr(exc, "filename", None)
+    if path is None:
+        try:
+            path = resolve_state_dir()
+        except Exception:  # noqa: BLE001 - the root itself may be what failed.
+            path = os.environ.get(HOME_ENV) or Path.home() / ".pixelup"
+    return Message.of("startup.storageUnreadable", path=str(path)), None
+
+
 def main() -> int:
     if os.environ.get("PIXELUP_SELFTEST") == "1":
         return _selftest()
@@ -2824,17 +2846,15 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - windowed startup needs an owned visible failure.
         # Contention is an expected startup result. Before admission there is no
         # shared log writer; unexpected failures use the console fallback.
-        if not isinstance(exc, PixelupError) or exc.code != ErrorCode.APP_ALREADY_RUNNING:
+        if not isinstance(exc, RefusedFilesError) and (
+            not isinstance(exc, PixelupError) or exc.code != ErrorCode.APP_ALREADY_RUNNING
+        ):
             log.exception("app.startup_failed")
         app = QApplication.instance() or QApplication(sys.argv)
         app.setApplicationName("PixelUp")
         app.setApplicationDisplayName("PixelUp")
         localizer.sync_qt_translation()
-        if isinstance(exc, PixelupError) and isinstance(exc.message, Message):
-            detail, hint = exc.message, exc.hint
-        else:
-            detail, hint = Message("startup.storageUnreadable"), None
-        show_startup_failure(detail, hint)
+        show_startup_failure(*_startup_failure_text(exc))
         return 1
     try:
         code = app.exec()

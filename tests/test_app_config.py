@@ -18,8 +18,7 @@ from pixelup.app_config import (
     load_app_config_result,
     save_app_config,
 )
-from pixelup.errors import ErrorCode, PixelupError
-from pixelup.i18n.message import Message
+from pixelup.formats import RefusedFile, RefusedFilesError
 from pixelup.jobs import JobSettings, job_settings_log_payload
 from pixelup.paths import OutputFormat
 
@@ -136,22 +135,33 @@ def test_each_save_writes_only_the_file_whose_sets_changed(tmp_path: Path) -> No
     assert (tmp_path / "parameters.json").stat().st_mtime == old
 
 
-def test_a_newer_parameters_file_only_refuses_saves_that_change_it(tmp_path: Path) -> None:
-    parameters = tmp_path / "parameters.json"
-    text = json.dumps({**_header("parameters", 2), "future": {"anything": True}})
-    parameters.write_text(text, encoding="utf-8")
-    loaded = load_app_config_result(tmp_path)
-    assert loaded.files.parameters.newer_format == 2
+def _refused(root: Path) -> tuple[RefusedFile, ...]:
+    """Load ``root`` expecting a refusal, and check no settings file was changed."""
+    before = {path.name: path.read_bytes() for path in root.glob("*.json")}
+    with pytest.raises(RefusedFilesError) as raised:
+        load_app_config_result(root)
+    assert {path.name: path.read_bytes() for path in root.glob("*.json")} == before
+    return raised.value.files
 
-    saved = save_app_config(replace(loaded.config, language="ja"), loaded.config, loaded.files)
-    with pytest.raises(PixelupError) as raised:
-        save_app_config(
-            replace(saved.config, parameters=JobSettings(quality=42)), saved.config, saved.files
-        )
 
-    assert raised.value.code == ErrorCode.STORE_NEWER_FORMAT
-    assert _content(tmp_path / "config.json")["language"] == "ja"
-    assert parameters.read_text(encoding="utf-8") == text
+@pytest.mark.parametrize("name", ["config.json", "parameters.json"])
+def test_a_newer_settings_file_stops_the_launch_untouched(tmp_path: Path, name: str) -> None:
+    path = tmp_path / name
+    path.write_text(
+        json.dumps({**_header(path.stem, 2), "future": {"anything": True}}), encoding="utf-8"
+    )
+    assert _refused(tmp_path) == (RefusedFile(path, newer=True),)
+
+
+def test_every_refused_settings_file_is_named(tmp_path: Path) -> None:
+    (tmp_path / "config.json").write_text("{ broken", encoding="utf-8")
+    (tmp_path / "parameters.json").write_text(
+        json.dumps(_header("parameters", 2)), encoding="utf-8"
+    )
+    assert _refused(tmp_path) == (
+        RefusedFile(tmp_path / "config.json", newer=False),
+        RefusedFile(tmp_path / "parameters.json", newer=True),
+    )
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS replacement modes")
@@ -310,7 +320,7 @@ def test_a_save_replaces_hand_edits_made_after_load(tmp_path: Path) -> None:
         "language": "ja",
         "font_family": "Menlo",
     }
-    assert list(tmp_path.glob("*.invalid")) == []
+    assert [item.name for item in tmp_path.iterdir()] == ["config.json"]
 
 
 def test_app_config_round_trips_font_family(tmp_path: Path) -> None:
@@ -355,75 +365,21 @@ def test_load_app_config_ignores_unusable_font_family(tmp_path: Path) -> None:
     result = load_app_config_result(path.parent)
 
     assert result.config == AppConfig()
-    assert result.quarantined == ()
     assert path.exists()
 
 
-def test_corrupt_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) -> None:
-    # A present-but-corrupt config.json must never crash startup: the load path
-    # quarantines the unreadable file aside (bytes preserved) and runs on the built-ins,
-    # rather than raising or silently discarding the original (store-recovery-conventions).
+@pytest.mark.parametrize(
+    "text",
+    ["{ this is not valid json", "[]\n", '{"language": "ja"}'],
+    ids=["not-json", "not-an-object", "no-header"],
+)
+def test_an_unreadable_config_stops_the_launch_untouched(tmp_path: Path, text: str) -> None:
+    # Nothing infers a format from the file's shape (file-identity-conventions), and
+    # the file is neither set aside nor replaced (store-recovery-conventions).
     path = tmp_path / "config.json"
-    path.write_text("{ this is not valid json", encoding="utf-8")
-
-    result = load_app_config_result(path.parent)
-
-    # The built-ins were loaded, so the app can proceed.
-    assert result.config == AppConfig()
-    # The corrupt original was quarantined, not discarded: a <stem>-<ms-utc>.invalid
-    # sibling now holds the exact original bytes, and config.json itself no longer does.
-    assert len(result.quarantined) == 1
-    assert result.quarantined[0].parent == tmp_path
-    assert result.quarantined[0].name.startswith("config-")
-    assert result.quarantined[0].suffix == ".invalid"
-    assert result.quarantined[0].read_text(encoding="utf-8") == "{ this is not valid json"
-    # Recovery continues as a fresh install, without materializing defaults.
-    assert not path.exists()
-    assert load_app_config_result(path.parent).quarantined == ()
-    assert load_app_config(path.parent) == AppConfig()
-
-
-def test_non_object_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) -> None:
-    # A syntactically valid but wrong-shaped config (a JSON array, not an object) is
-    # corrupt just the same: quarantined, never raised.
-    path = tmp_path / "config.json"
-    path.write_text("[]\n", encoding="utf-8")
-
-    result = load_app_config_result(path.parent)
-
-    assert result.config == AppConfig()
-    assert len(result.quarantined) == 1
-    assert result.quarantined[0].suffix == ".invalid"
-    assert result.quarantined[0].read_text(encoding="utf-8") == "[]\n"
-    assert load_app_config(path.parent) == AppConfig()
-
-
-def test_a_failed_quarantine_propagates_and_leaves_the_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "config.json"
-    path.write_text("{ this is not valid json", encoding="utf-8")
-
-    def _fail(target: Path) -> Path:
-        raise OSError("rename failed")
-
-    monkeypatch.setattr("pixelup.app_config.quarantine_corrupt_file", _fail)
-
-    with pytest.raises(OSError, match="rename failed"):
-        load_app_config_result(path.parent)
-    assert path.read_text(encoding="utf-8") == "{ this is not valid json"
-
-
-def test_a_config_without_a_header_is_quarantined(tmp_path: Path) -> None:
-    # Nothing infers a format from the file's shape (file-identity-conventions).
-    path = tmp_path / "config.json"
-    text = '{"language": "ja"}'
     path.write_text(text, encoding="utf-8")
-    result = load_app_config_result(path.parent)
-    assert result.config == AppConfig()
-    assert len(result.quarantined) == 1
-    assert result.quarantined[0].read_text(encoding="utf-8") == text
-    assert not path.exists()
+    assert _refused(tmp_path) == (RefusedFile(path, newer=False),)
+    assert [item.name for item in tmp_path.iterdir()] == ["config.json"]
 
 
 @pytest.mark.parametrize(
@@ -443,16 +399,12 @@ def test_a_config_without_a_header_is_quarantined(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_a_missing_or_malformed_header_is_quarantined(
+def test_a_missing_or_malformed_header_is_unreadable(
     tmp_path: Path, header: dict[str, object]
 ) -> None:
     path = tmp_path / "config.json"
-    text = json.dumps({**header, "language": "ja"})
-    path.write_text(text, encoding="utf-8")
-    result = load_app_config_result(path.parent)
-    assert result.config == AppConfig()
-    assert len(result.quarantined) == 1
-    assert result.quarantined[0].read_text(encoding="utf-8") == text
+    path.write_text(json.dumps({**header, "language": "ja"}), encoding="utf-8")
+    assert _refused(tmp_path) == (RefusedFile(path, newer=False),)
 
 
 @pytest.mark.parametrize(
@@ -464,7 +416,7 @@ def test_a_missing_or_malformed_header_is_quarantined(
         ("config.json", "Pixelup", "config"),
     ],
 )
-def test_a_file_of_another_owner_or_kind_is_quarantined(
+def test_a_file_of_another_owner_or_kind_is_unreadable(
     tmp_path: Path, name: str, owner: str, kind: str
 ) -> None:
     # Even when its version is newer: a file of another format is unreadable, not
@@ -473,12 +425,7 @@ def test_a_file_of_another_owner_or_kind_is_quarantined(
     header = {"format": {"owner": owner, "kind": kind, "version": 2}}
     text = json.dumps({**header, "language": "ja", "parameters": _parameter_map(quality=1)})
     path.write_text(text, encoding="utf-8")
-    result = load_app_config_result(tmp_path)
-    assert result.config == AppConfig()
-    assert result.files.holding("language").newer_format is None
-    assert result.files.holding("parameters").newer_format is None
-    assert len(result.quarantined) == 1
-    assert result.quarantined[0].read_text(encoding="utf-8") == text
+    assert _refused(tmp_path) == (RefusedFile(path, newer=False),)
 
 
 @pytest.mark.parametrize("writer", [None, "anything", {"name": "picpatch", "version": 9}, 7])
@@ -490,7 +437,6 @@ def test_the_writer_is_never_read(tmp_path: Path, writer: object) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
     result = load_app_config_result(tmp_path)
     assert result.config == AppConfig(language="ja")
-    assert result.quarantined == ()
     assert result.files.config.unapplied == frozenset()
 
     save_app_config(replace(result.config, font_family="Menlo"), result.config, result.files)
@@ -505,85 +451,11 @@ def test_a_saved_file_starts_with_its_header(tmp_path: Path) -> None:
     assert stored["writer"] == {"name": "pixelup", "version": __version__}
 
 
-def test_a_newer_config_is_left_in_place_and_reads_as_built_ins(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    text = json.dumps({**_header("config", 2), "language": "ja"})
-    path.write_text(text, encoding="utf-8")
-
-    result = load_app_config_result(path.parent)
-
-    assert result.config == AppConfig()
-    assert result.files.config.newer_format == 2
-    assert result.quarantined == ()
-    assert path.read_text(encoding="utf-8") == text
-    assert {item.name for item in tmp_path.iterdir()} == {"config.json"}
-
-
-def test_a_save_over_a_newer_config_is_refused_and_writes_nothing(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    text = json.dumps({**_header("config", 2), "future": {"anything": True}})
-    path.write_text(text, encoding="utf-8")
-    previous = load_app_config(path.parent)
-
-    with pytest.raises(PixelupError) as raised:
-        _save(replace(previous, language="ja"), previous, path)
-
-    assert raised.value.code == ErrorCode.STORE_NEWER_FORMAT
-    assert raised.value.message.key == "error.configNewer"
-    assert path.read_text(encoding="utf-8") == text
-
-
 def test_missing_config_is_not_treated_as_corrupt(tmp_path: Path) -> None:
-    # The normal first run: no file, defaults, and nothing quarantined.
+    # The normal first run: no file, defaults, nothing refused.
     result = load_app_config_result(tmp_path)
 
     assert result.config == AppConfig()
-    assert result.quarantined == ()
-
-
-def test_corrupt_config_lets_window_open(
-    qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # End-to-end pin: a corrupt config.json under a redirected PIXELUP_DATA_DIR must let
-    # MainWindow construct (the frozen-app failure the finding is about was the window
-    # never opening), running on the built-ins and telling the user rather than
-    # crashing.
-    from PySide6.QtWidgets import QApplication
-
-    from pixelup.gui import MainWindow
-    from pixelup.runner import JobRunner
-    from pixelup.session_log import configure_session_logging
-
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
-    (home / "config.json").write_text("{ broken", encoding="utf-8")
-
-    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
-    notices: list[str] = []
-    monkeypatch.setattr(
-        "pixelup.gui.warn_config_reset",
-        lambda _parent, path: notices.append(path),
-    )
-    configure_session_logging()
-
-    window = MainWindow()
-    try:
-        # The window opened on defaults instead of crashing on the corrupt file.
-        assert window.config == AppConfig()
-        (quarantined_to,) = window._config_quarantined
-        # The corrupt original was quarantined next to where config.json was.
-        assert quarantined_to.suffix == ".invalid"
-        assert quarantined_to.read_text(encoding="utf-8") == "{ broken"
-        assert not (home / "config.json").exists()
-        # The deferred non-fatal notice fires once the event loop turns.
-        QApplication.processEvents()
-        assert notices == [quarantined_to]
-    finally:
-        window._is_session_shutdown = lambda: True
-        window.close()
-        window.deleteLater()
-        QApplication.processEvents()
 
 
 def _parameter_map(**updates: object) -> dict[str, object]:
@@ -610,61 +482,10 @@ def _write(path: Path, **parameters: object) -> None:
     )
 
 
-def test_a_newer_config_lets_the_window_open_and_is_never_written(
-    qapp: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_until
-) -> None:
-    from PySide6.QtWidgets import QApplication
-
-    from pixelup.gui import MainWindow
-    from pixelup.runner import JobRunner
-    from pixelup.session_log import configure_session_logging
-
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
-    text = json.dumps({**_header("parameters", 2), "language": "ja"})
-    (home / "parameters.json").write_text(text, encoding="utf-8")
-
-    monkeypatch.setattr(JobRunner, "schedule", lambda self: None)
-    notices: list[str] = []
-    monkeypatch.setattr("pixelup.gui.warn_config_newer", lambda _parent, path: notices.append(path))
-    monkeypatch.setattr(
-        "pixelup.gui.warn_config_reset", lambda _parent, path: notices.append("reset")
-    )
-    configure_session_logging()
-
-    window = MainWindow()
-    try:
-        assert window.config == AppConfig()
-        assert window._config_quarantined == ()
-        QApplication.processEvents()
-        assert notices == [home / "parameters.json"]
-
-        window.quality.setValue(window.quality.value() - 1)
-        saved = []
-        window._flush_parameters_save(finished=saved.append)
-        process_until(lambda: window._config_save is None, what="settings save")
-        assert saved == [False]
-        assert window.parameters_result.message == Message("error.configNewer")
-        assert (home / "parameters.json").read_text(encoding="utf-8") == text
-        assert not (home / "config.json").exists()
-    finally:
-        window._is_session_shutdown = lambda: True
-        window.close()
-        window.deleteLater()
-
-
-def test_invalid_utf8_config_is_quarantined_and_reads_as_built_ins(tmp_path: Path) -> None:
+def test_invalid_utf8_config_is_unreadable(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
-    original = b'{"font_family": "\xff"}'
-    path.write_bytes(original)
-
-    result = load_app_config_result(path.parent)
-
-    assert result.config == AppConfig()
-    assert len(result.quarantined) == 1
-    assert result.quarantined[0].read_bytes() == original
-    assert load_app_config(path.parent) == AppConfig()
+    path.write_bytes(b'{"font_family": "\xff"}')
+    assert _refused(tmp_path) == (RefusedFile(path, newer=False),)
 
 
 def test_config_read_oserror_propagates_without_touching_the_store(
@@ -683,7 +504,7 @@ def test_config_read_oserror_propagates_without_touching_the_store(
         load_app_config_result(path.parent)
 
     assert path.read_bytes() == original
-    assert not list(tmp_path.glob("*.invalid"))
+    assert [item.name for item in tmp_path.iterdir()] == ["config.json"]
 
 
 @pytest.mark.parametrize(
@@ -723,7 +544,6 @@ def test_present_malformed_set_falls_back_without_costing_other_sets(
     original = path.read_bytes()
     result = load_app_config_result(path.parent)
     assert result.config == AppConfig(font_family="Menlo")
-    assert result.quarantined == ()
     assert result.rejected == (next(iter(data)),)
     assert path.read_bytes() == original
     warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
@@ -746,7 +566,6 @@ def test_absent_and_unknown_fields_do_not_make_the_config_unreadable(tmp_path: P
 
     result = load_app_config_result(path.parent)
 
-    assert result.quarantined == ()
     assert result.config.parameters.scale == 2
     assert result.config.parameters.quality == JobSettings().quality
 
@@ -823,7 +642,6 @@ def test_partial_parameters_read_as_the_built_in_with_a_warning(
     )
     result = load_app_config_result(path.parent)
     assert result.config == AppConfig(language="ja")
-    assert result.quarantined == ()
     assert result.rejected == ("parameters",)
     warnings = [record for record in caplog.records if record.message == "config.invalid_set"]
     assert len(warnings) == 1

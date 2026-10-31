@@ -54,6 +54,23 @@ class NewerFormatError(Exception):
         self.version = version
 
 
+@dataclass(frozen=True, slots=True)
+class RefusedFile:
+    """A file this build will not use: written by a newer PixelUp, or unreadable."""
+
+    path: Path
+    newer: bool
+
+
+class RefusedFilesError(Exception):
+    """Files that stop the launch (store-recovery-conventions, What a refused file
+    does). Every refused file found is named, and none of them has been changed."""
+
+    def __init__(self, files: tuple[RefusedFile, ...]) -> None:
+        super().__init__(", ".join(str(file.path) for file in files))
+        self.files = files
+
+
 def _writer() -> dict[str, str]:
     return {"name": WRITER_NAME, "version": __version__}
 
@@ -136,6 +153,26 @@ def check_sqlite_format(connection: sqlite3.Connection, path: Path, expected: Fo
     )
     if stored > expected.version:
         raise NewerFormatError(path, stored)
+
+
+def probe_sqlite_store(path: Path, expected: Format) -> None:
+    """Check an existing store's header without writing to it.
+
+    A missing or empty file, or a database with no version and no schema, is a
+    store not yet created and passes. Otherwise raises as ``check_sqlite_format``
+    does, or ``sqlite3.DatabaseError`` for a file that is not a database. Only
+    reads are run, so a refused store stays byte-identical.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    connection = sqlite3.connect(path)
+    try:
+        stored = connection.execute("PRAGMA user_version").fetchone()[0]
+        empty = connection.execute("SELECT COUNT(*) FROM sqlite_schema").fetchone()[0] == 0
+        if not (stored == 0 and empty):
+            check_sqlite_format(connection, path, expected)
+    finally:
+        connection.close()
 
 
 def _write_writer_rows(connection: sqlite3.Connection) -> None:
