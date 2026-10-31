@@ -147,7 +147,7 @@ def test_filters_by_launch_level_and_search(database: Path, connection: sqlite3.
     )
 
     assert _messages(read_page(connection, RecordsQuery(session=OLD), None)) == ["app.started"]
-    assert _messages(read_page(connection, RecordsQuery(level="attention"), None)) == [
+    assert _messages(read_page(connection, RecordsQuery(level="warnings_and_errors"), None)) == [
         "job.failed",
         "open.ignored_directory",
     ]

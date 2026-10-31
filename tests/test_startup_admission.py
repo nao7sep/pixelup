@@ -22,7 +22,7 @@ class StartupProcess:
     def __init__(self, root: Path, mode: str, entry: str) -> None:
         env = os.environ.copy()
         env.update(PIXELUP_DATA_DIR=str(root), QT_QPA_PLATFORM="offscreen")
-        for name in ("PIXELUP_SELFTEST", "PIXELUP_MODELS_DIR", "PIXELUP_TEMP_DIR", "PIXELUP_DEBUG"):
+        for name in ("PIXELUP_SELFTEST", "PIXELUP_MODELS_DIR", "PIXELUP_DEBUG"):
             env.pop(name, None)
         self.process = subprocess.Popen(
             [sys.executable, str(PROBE), mode, entry],

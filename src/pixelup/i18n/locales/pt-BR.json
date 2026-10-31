@@ -297,7 +297,7 @@
   "records.job": "Tarefa",
   "records.launch": "Inicialização",
   "records.level": "Nível",
-  "records.levelAttention": "Avisos e erros",
+  "records.levelWarningsAndErrors": "Avisos e erros",
   "records.levelDebug": "Depuração",
   "records.levelError": "Erro",
   "records.levelInfo": "Informação",

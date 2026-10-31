@@ -2239,14 +2239,10 @@ def test_a_stray_persisted_tile_falls_back_before_the_panel_is_seeded(
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.json").write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "auto_download": True,
-                "font_family": "",
-                "parameters": {"tile": 9999},
-            }
-        )
+        json.dumps({"format_version": 1, "auto_download": True, "font_family": ""})
+    )
+    (home / "parameters.json").write_text(
+        json.dumps({"format_version": 1, "parameters": {"tile": 9999}})
     )
     monkeypatch.setenv("PIXELUP_DATA_DIR", str(home))
     monkeypatch.setattr(JobRunner, "schedule", lambda self: None)

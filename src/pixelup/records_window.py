@@ -120,7 +120,7 @@ LEVEL_LABELS = {
     "debug": "records.levelDebug",
 }
 LEVEL_FILTER_LABELS: dict[RecordLevelFilter, str] = {
-    "attention": "records.levelAttention",
+    "warnings_and_errors": "records.levelWarningsAndErrors",
     "error": "records.levelError",
     "warn": "records.levelWarn",
     "info": "records.levelInfo",

@@ -267,7 +267,7 @@
   "records.job": "ジョブ",
   "records.launch": "起動",
   "records.level": "レベル",
-  "records.levelAttention": "警告とエラー",
+  "records.levelWarningsAndErrors": "警告とエラー",
   "records.levelDebug": "デバッグ",
   "records.levelError": "エラー",
   "records.levelInfo": "情報",

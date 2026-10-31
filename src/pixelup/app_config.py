@@ -156,13 +156,8 @@ class ConfigSaveResult:
 
 
 def load_app_config_result(root: Path | None = None) -> ConfigLoadResult:
-    """Load effective sets from both files under ``root`` (the storage root by default).
-
-    Before reading, parameters an earlier PixelUp kept in ``config.json`` move to
-    ``parameters.json`` (see ``_move_parameters_out_of_config``).
-    """
+    """Load effective sets from both files under ``root`` (the storage root by default)."""
     files = SettingsFiles.absent(root)
-    _move_parameters_out_of_config(files.config.path, files.parameters.path)
     config_load = _load_settings_file(files.config.path, _CONFIG_STORE)
     parameters_load = _load_settings_file(files.parameters.path, _PARAMETERS_STORE)
     return ConfigLoadResult(
@@ -263,50 +258,6 @@ def _read_object(path: Path) -> dict[str, Any]:
     return _object(json.loads(path.read_text(encoding="utf-8")), path.stem)
 
 
-def _move_parameters_out_of_config(config_file: Path, parameters_file: Path) -> None:
-    """Move the ``parameters`` set an earlier PixelUp stored in ``config.json`` to
-    ``parameters.json``, once, so the panel's saved values are not lost.
-
-    The stored value moves as it is, valid or not, and is judged where it lands.
-    ``parameters.json`` is written first and ``config.json`` loses the key only
-    after, so an interruption leaves the value in at least one file. A
-    ``parameters.json`` that already exists and loads is the newer copy, and the
-    old key is then only removed; one that is unreadable or from a newer PixelUp
-    leaves the old key in place, so the values never rest only in a file that is
-    moved aside or cannot be read. A ``config.json`` this build cannot read is left
-    for the ordinary load to quarantine or keep. Writes go through the managed-text
-    path, so both files' backup histories record the move.
-    """
-    if not config_file.exists():
-        return
-    try:
-        data = _read_object(config_file)
-        version = format_version(data.get(_FORMAT_VERSION_KEY))
-    except ValueError:
-        return
-    if version > CONFIG_FORMAT_VERSION or _PARAMETERS_KEY not in data:
-        return
-    if parameters_file.exists():
-        try:
-            readable = (
-                format_version(_read_object(parameters_file).get(_FORMAT_VERSION_KEY))
-                <= PARAMETERS_FORMAT_VERSION
-            )
-        except ValueError:
-            readable = False
-        if not readable:
-            return
-    else:
-        moved = {
-            _FORMAT_VERSION_KEY: PARAMETERS_FORMAT_VERSION,
-            _PARAMETERS_KEY: data[_PARAMETERS_KEY],
-        }
-        write_managed_text(parameters_file, json.dumps(moved, indent=2, sort_keys=True) + "\n")
-    del data[_PARAMETERS_KEY]
-    write_managed_text(config_file, json.dumps(data, indent=2, sort_keys=True) + "\n")
-    log.info("config.parameters_moved", source=str(config_file), target=str(parameters_file))
-
-
 def _file_data(
     candidate: AppConfig,
     previous: AppConfig,
@@ -337,7 +288,6 @@ def _file_data(
 
 
 _FORMAT_VERSION_KEY = "format_version"
-_PARAMETERS_KEY = "parameters"
 
 
 def _stored_sets(config: AppConfig) -> dict[str, Any]:
@@ -423,7 +373,7 @@ _CONFIG_DECODERS: dict[str, Callable[[Any], Any]] = {
     "models_folder": _decode_models_folder,
 }
 _PARAMETER_DECODERS: dict[str, Callable[[Any], Any]] = {
-    _PARAMETERS_KEY: _decode_parameters,
+    "parameters": _decode_parameters,
 }
 
 

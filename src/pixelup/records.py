@@ -23,12 +23,12 @@ PAGE_SIZE = 100
 _SUMMARY_FIELDS_LENGTH = 400
 
 type RecordLevel = Literal["error", "warn", "info", "debug"]
-# What the level filter offers: a record's own level, or `attention`, every
+# What the level filter offers: a record's own level, or `warnings_and_errors`, every
 # record at `warn` or `error`.
-type RecordLevelFilter = Literal["attention", "error", "warn", "info", "debug"]
+type RecordLevelFilter = Literal["warnings_and_errors", "error", "warn", "info", "debug"]
 
 LEVELS: tuple[RecordLevel, ...] = ("error", "warn", "info", "debug")
-LEVEL_FILTERS: tuple[RecordLevelFilter, ...] = ("attention", *LEVELS)
+LEVEL_FILTERS: tuple[RecordLevelFilter, ...] = ("warnings_and_errors", *LEVELS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +93,7 @@ def read_page(
     if query.session is not None:
         where.append("session = ?")
         params.append(query.session)
-    if query.level == "attention":
+    if query.level == "warnings_and_errors":
         where.append("level IN ('warn', 'error')")
     elif query.level is not None:
         where.append("level = ?")

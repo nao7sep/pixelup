@@ -242,7 +242,7 @@ def test_the_selection_follows_the_arrow_keys(open_records, database: Path, proc
     assert window._detail.message == "m1"
 
 
-def test_offers_needs_attention_first_among_the_levels_with_every_filter_off(
+def test_offers_warnings_and_errors_first_among_the_levels_with_every_filter_off(
     open_records, database: Path, process_until
 ) -> None:
     _seed(database, [{"time": _time(1), "session": OLD}, {"time": _time(2)}])
@@ -274,7 +274,7 @@ def test_reads_again_with_each_filter_and_searches_once_typing_pauses(
     window = open_records(reader)
     _until(process_until, lambda: _loaded(window) and window.launch_filter.count() == 3, "open")
 
-    window.level_filter.setCurrentIndex(window.level_filter.findData("attention"))
+    window.level_filter.setCurrentIndex(window.level_filter.findData("warnings_and_errors"))
     _until(process_until, lambda: _loaded(window), "the level filter")
     assert _messages(window) == ["job.failed", "open.ignored_directory"]
 

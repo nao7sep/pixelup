@@ -138,157 +138,22 @@ def test_each_save_writes_only_the_file_whose_sets_changed(tmp_path: Path) -> No
     assert (tmp_path / "parameters.json").stat().st_mtime == old
 
 
-def test_parameters_stored_in_config_move_to_their_own_file_once(tmp_path: Path) -> None:
-    # An earlier PixelUp kept the panel in config.json: the first launch moves it,
-    # as stored, and config.json keeps everything else.
-    config = tmp_path / "config.json"
-    config.write_text(
-        json.dumps({
-            "format_version": 1,
-            "language": "ja",
-            "future": "kept",
-            "parameters": _parameter_map(quality=42),
-        }),
-        encoding="utf-8",
-    )
+def test_a_newer_parameters_file_only_refuses_saves_that_change_it(tmp_path: Path) -> None:
+    parameters = tmp_path / "parameters.json"
+    text = '{"format_version": 2, "future": {"anything": true}}'
+    parameters.write_text(text, encoding="utf-8")
+    loaded = load_app_config_result(tmp_path)
+    assert loaded.files.parameters.newer_format == 2
 
-    assert load_app_config(tmp_path) == AppConfig(
-        language="ja", parameters=JobSettings(quality=42)
-    )
-    assert json.loads(config.read_text(encoding="utf-8")) == {
-        "format_version": 1,
-        "language": "ja",
-        "future": "kept",
-    }
-    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
-        "format_version": 1,
-        "parameters": _parameter_map(quality=42),
-    }
-    moved_at = (tmp_path / "parameters.json").stat().st_mtime_ns
-    assert load_app_config(tmp_path).parameters == JobSettings(quality=42)
-    assert (tmp_path / "parameters.json").stat().st_mtime_ns == moved_at
-
-
-def test_a_moved_parameter_set_that_fails_its_check_is_kept_in_its_new_file(
-    tmp_path: Path,
-) -> None:
-    config = tmp_path / "config.json"
-    config.write_text(
-        '{"format_version": 1, "parameters": {"quality": 250, "scale": 4.0}}', encoding="utf-8"
-    )
-
-    result = load_app_config_result(tmp_path)
-
-    assert result.rejected == ("parameters",)
-    assert result.config == AppConfig()
-    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
-        "format_version": 1,
-        "parameters": {"quality": 250, "scale": 4.0},
-    }
-    assert json.loads(config.read_text(encoding="utf-8")) == {"format_version": 1}
-
-
-def test_an_interrupted_move_keeps_the_parameters_file_that_was_written(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The move writes parameters.json first; when the config.json write then
-    # fails, the next launch keeps parameters.json and only removes the old key.
-    from pixelup import app_config
-
-    config = tmp_path / "config.json"
-    original = json.dumps({"format_version": 1, "parameters": _parameter_map(quality=42)})
-    config.write_text(original, encoding="utf-8")
-    write = app_config.write_managed_text
-
-    def fail_config(path: Path, text: str) -> None:
-        if path.name == "config.json":
-            raise OSError("disk full")
-        write(path, text)
-
-    monkeypatch.setattr(app_config, "write_managed_text", fail_config)
-    with pytest.raises(OSError, match="disk full"):
-        load_app_config_result(tmp_path)
-    assert config.read_text(encoding="utf-8") == original
-    assert json.loads((tmp_path / "parameters.json").read_text(encoding="utf-8")) == {
-        "format_version": 1,
-        "parameters": _parameter_map(quality=42),
-    }
-
-    monkeypatch.setattr(app_config, "write_managed_text", write)
-    assert load_app_config(tmp_path).parameters == JobSettings(quality=42)
-    assert json.loads(config.read_text(encoding="utf-8")) == {"format_version": 1}
-
-
-def test_an_existing_parameters_file_wins_over_an_old_key(tmp_path: Path) -> None:
-    (tmp_path / "parameters.json").write_text(
-        json.dumps({"format_version": 1, "parameters": _parameter_map(quality=60)}),
-        encoding="utf-8",
-    )
-    (tmp_path / "config.json").write_text(
-        json.dumps({"format_version": 1, "parameters": _parameter_map(quality=42)}),
-        encoding="utf-8",
-    )
-
-    assert load_app_config(tmp_path).parameters == JobSettings(quality=60)
-    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8")) == {
-        "format_version": 1
-    }
-
-
-@pytest.mark.parametrize("stored", ["{ broken", '{"format_version": 2}'])
-def test_an_old_key_stays_while_the_parameters_file_cannot_be_read(
-    tmp_path: Path, stored: str
-) -> None:
-    # The values never rest only in a file that is moved aside or cannot be read:
-    # the old key stays in config.json, and moves once parameters.json is gone.
-    config = tmp_path / "config.json"
-    original = json.dumps({"format_version": 1, "parameters": _parameter_map(quality=42)})
-    config.write_text(original, encoding="utf-8")
-    (tmp_path / "parameters.json").write_text(stored, encoding="utf-8")
-
-    first = load_app_config_result(tmp_path)
-
-    assert config.read_text(encoding="utf-8") == original
-    assert first.config.parameters == JobSettings()
-    if stored == "{ broken":
-        assert len(first.quarantined) == 1
-        assert load_app_config(tmp_path).parameters == JobSettings(quality=42)
-        assert json.loads(config.read_text(encoding="utf-8")) == {"format_version": 1}
-    else:
-        assert first.files.parameters.newer_format == 2
-        # A later save keeps the old key in config.json as a value it does not use.
-        save_app_config(replace(first.config, language="ja"), first.config, first.files)
-        assert json.loads(config.read_text(encoding="utf-8"))["parameters"] == (
-            _parameter_map(quality=42)
+    saved = save_app_config(replace(loaded.config, language="ja"), loaded.config, loaded.files)
+    with pytest.raises(PixelupError) as raised:
+        save_app_config(
+            replace(saved.config, parameters=JobSettings(quality=42)), saved.config, saved.files
         )
 
-
-def test_the_move_records_both_files_in_the_backup_history(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    recorded: list[str] = []
-    monkeypatch.setattr(
-        "pixelup.backup_store.record", lambda path, _data: recorded.append(path.name)
-    )
-    (tmp_path / "config.json").write_text(
-        json.dumps({"format_version": 1, "parameters": _parameter_map(quality=42)}),
-        encoding="utf-8",
-    )
-
-    load_app_config_result(tmp_path)
-
-    assert recorded == ["parameters.json", "config.json"]
-
-
-def test_a_config_this_build_cannot_read_keeps_its_parameters(tmp_path: Path) -> None:
-    config = tmp_path / "config.json"
-    text = json.dumps({"format_version": 2, "parameters": _parameter_map(quality=42)})
-    config.write_text(text, encoding="utf-8")
-
-    load_app_config_result(tmp_path)
-
-    assert config.read_text(encoding="utf-8") == text
-    assert not (tmp_path / "parameters.json").exists()
+    assert raised.value.code == ErrorCode.STORE_NEWER_FORMAT
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["language"] == "ja"
+    assert parameters.read_text(encoding="utf-8") == text
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS replacement modes")
@@ -477,7 +342,7 @@ def test_whitespace_font_family_reads_as_the_built_in(tmp_path: Path) -> None:
     assert load_app_config(path.parent) == AppConfig()
 
 
-def test_load_app_config_preserves_the_legacy_font_stack(tmp_path: Path) -> None:
+def test_load_app_config_preserves_a_font_stack(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(
         json.dumps({"format_version": 1, "font_family": "Helvetica Neue, Segoe UI, Roboto, Arial"}),

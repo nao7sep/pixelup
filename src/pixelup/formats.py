@@ -1,13 +1,12 @@
 """The format version of every store PixelUp versions, one integer per format
 (store-recovery-conventions).
 
-Saved settings (``config.json`` and ``parameters.json``) and the records history
-(``records.sqlite3``) are durable: they survive PixelUp updates (developer
-decision), so a change to any of these formats converts existing data with a
-small targeted conversion rather than resetting it. The backup history reads
-only its current format: any other store is left in place and recording stays
-off for that session. The output sidecar is a published format. ``window.ini``
-holds only disposable window state and carries no marker.
+App-owned data is disposable during development (developer decision), so every
+store reads only its current format: a format change uses the new format
+directly, with no conversion of earlier data. The backup history leaves any other
+store in place and recording stays off for that session. The output sidecar is a
+published format. ``window.ini`` holds only disposable window state and carries
+no marker.
 """
 
 from __future__ import annotations

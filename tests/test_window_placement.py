@@ -25,20 +25,6 @@ def test_no_file_reads_as_nothing_saved(tmp_path: Path) -> None:
     assert not path.exists()
 
 
-def test_a_file_with_an_old_marker_is_still_read_and_saved(tmp_path: Path) -> None:
-    # Files written while window.ini carried a marker keep working; the inert key
-    # is left alone rather than cleaned up.
-    path = tmp_path / "window.ini"
-    path.write_text("[General]\nformatVersion=1\n\n[recordsWindow]\nlistWidth=320\n")
-
-    state = WindowState(path)
-    assert int(state.value("recordsWindow/listWidth")) == 320
-    state.save("mainWindow/geometry", QByteArray(b"geometry"))
-
-    assert WindowState(path).value("mainWindow/geometry") == QByteArray(b"geometry")
-    assert int(WindowState(path).value("recordsWindow/listWidth")) == 320
-
-
 def test_two_states_on_one_file_keep_each_others_keys(tmp_path: Path) -> None:
     # The main window and the Records window each hold a WindowState on the same
     # file; a save through one never drops what the other saved.

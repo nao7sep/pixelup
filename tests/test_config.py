@@ -323,18 +323,6 @@ def test_saved_model_folder_is_literal_home_relative_and_never_resolves_disk(
     assert saved_models_dir(str(literal), default) == literal
 
 
-def test_retired_temp_override_is_ignored(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = tmp_path / "root"
-    unused = tmp_path / "retired"
-    monkeypatch.setenv("PIXELUP_DATA_DIR", str(root))
-    monkeypatch.setenv("PIXELUP_TEMP_DIR", str(unused))
-    assert resolve_runtime_dirs() == RuntimeDirs(models_dir=root / "models")
-    assert not unused.exists()
-    assert not (root / "temp").exists()
-
-
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission model")
 @pytest.mark.parametrize("initial_mode", [0o500, 0o750, 0o770, 0o1700])
 def test_root_establishes_exact_owner_access(
