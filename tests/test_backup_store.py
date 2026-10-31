@@ -472,11 +472,11 @@ def test_a_new_store_records_its_format_version(
     home = _home(tmp_path, monkeypatch)
     record(home / "config.json", b"{}\n")
     close_backup_store()
-    assert _user_version(_store_path(home)) == 2
+    assert _user_version(_store_path(home)) == 1
 
 
-@pytest.mark.parametrize("version", [0, 1, 3])
-def test_an_unmarked_older_or_newer_store_is_left_untouched_with_one_warn(
+@pytest.mark.parametrize("version", [0, 2])
+def test_an_unmarked_or_newer_store_is_left_untouched_with_one_warn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: int
 ) -> None:
     # A user_version of 0 on a database that has tables is a missing marker.

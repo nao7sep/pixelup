@@ -17,7 +17,7 @@ from pathlib import Path
 CONFIG_FORMAT_VERSION = 1  # config.json
 PARAMETERS_FORMAT_VERSION = 1  # parameters.json
 RECORDS_FORMAT_VERSION = 1  # records.sqlite3
-BACKUPS_FORMAT_VERSION = 2  # backups.sqlite3 (2: one row per file per session)
+BACKUPS_FORMAT_VERSION = 1  # backups.sqlite3
 SIDECAR_FORMAT_VERSION = 1  # the .json sidecar written beside an output image
 
 
@@ -48,8 +48,6 @@ def check_sqlite_format(connection: sqlite3.Connection, path: Path, supported: i
     stored = connection.execute("PRAGMA user_version").fetchone()[0]
     if stored < 1:
         raise ValueError(f"{path} has no format version")
-    if stored < supported:
-        raise ValueError(f"{path} has format version {stored}, older than this build reads")
     if stored > supported:
         raise NewerFormatError(path, stored)
 
