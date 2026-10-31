@@ -54,7 +54,8 @@ markers = [
   "heavy: downloads the managed Real-ESRGAN weights and runs real inference; only the full gate runs it",
 ]
 # The default deselects heavy tests; the full gate selects everything with
-# `uv run pytest -m "heavy or not heavy"`.
+# `uv run pytest -m "heavy or not heavy"`. Not `-m ""`: Windows PowerShell 5.1 drops
+# an empty argument, so `-m` would swallow the next one.
 addopts = "-m 'not heavy'"
 # A test still running after this many seconds prints every thread's stack, so a
 # stalled run names the wait it is stuck in. Far above the slowest real test.
